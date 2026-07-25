@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "sntp.h"
+#include "airtime/sntp.h"
 #include "test_framework.h"
 
 using namespace airtime;

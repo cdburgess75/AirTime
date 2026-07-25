@@ -1,6 +1,6 @@
 #include <cstdint>
 
-#include "disciplined_clock.h"
+#include "airtime/disciplined_clock.h"
 #include "test_framework.h"
 
 using airtime::DisciplinedClock;

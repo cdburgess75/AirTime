@@ -1,4 +1,4 @@
-#include "station_vote.h"
+#include "airtime/station_vote.h"
 #include "test_framework.h"
 
 using airtime::CtReport;

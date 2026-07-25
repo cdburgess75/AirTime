@@ -1,6 +1,6 @@
 #include <cstring>
 
-#include "display.h"
+#include "airtime/display.h"
 #include "test_framework.h"
 
 using namespace airtime;

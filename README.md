@@ -100,18 +100,20 @@ AirTime/
 ├── platformio.ini         Host test env only (device build uses Arduino CLI)
 ├── lib/
 │   └── airtime_core/         Platform-independent core (no Arduino/ESP-IDF)
-│       ├── goertzel.*        1000 Hz WWV tone detector
-│       ├── rds_ct.*          RDS group 4A clock-time decode
-│       ├── station_vote.*    Multi-station CT voting
-│       ├── wwv_marker.*      WWV minute-marker gate (duration + noise floor)
-│       ├── disciplined_clock.*  Slew/rate-steered internal clock
-│       ├── drift.*           Crystal drift learning
-│       ├── arbiter.*         Multi-source arbiter (the heart, §4)
-│       ├── sntp.*            NTP server packets + client counting
-│       ├── scheduler.*       Acquisition, listen windows, band stepping
-│       ├── hal.h             The hardware seam (interfaces)
-│       ├── display.*         The §5 display lines
-│       └── app.*             AirTimeApp — wires it all to the seam
+│       ├── library.properties   Arduino library manifest
+│       └── src/airtime/        headers are <airtime/…> to avoid collisions
+│           ├── goertzel.*        1000 Hz WWV tone detector
+│           ├── rds_ct.*          RDS group 4A clock-time decode
+│           ├── station_vote.*    Multi-station CT voting
+│           ├── wwv_marker.*      WWV minute-marker gate (duration + noise floor)
+│           ├── disciplined_clock.*  Slew/rate-steered internal clock
+│           ├── drift.*           Crystal drift learning
+│           ├── arbiter.*         Multi-source arbiter (the heart, §4)
+│           ├── sntp.*            NTP server packets + client counting
+│           ├── scheduler.*       Acquisition, listen windows, band stepping
+│           ├── hal.h             The hardware seam (interfaces)
+│           ├── display.*         The §5 display lines
+│           └── app.*             AirTimeApp — wires it all to the seam
 ├── test/                     Unit tests (81 cases) + fakes.h, a simulated ATS Mini
 ├── tools/
 │   └── inspect_flash.py   Validate / compare ESP32 flash images (Milestone 0)

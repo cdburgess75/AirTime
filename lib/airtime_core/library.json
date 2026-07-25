@@ -1,10 +1,11 @@
 {
   "name": "airtime_core",
   "version": "0.1.0",
-  "description": "Platform-independent core logic for AirTime: RDS group 4A clock-time decode, multi-station voting, Goertzel WWV tone detection, and (forthcoming) the disciplined clock, drift learning, and multi-source time arbiter. No Arduino/ESP-IDF dependencies; host-unit-tested.",
+  "description": "Platform-independent core logic for AirTime: RDS group 4A clock-time decode and multi-station voting, Goertzel WWV tone detection and minute-marker gating, a slew-disciplined clock with crystal drift learning, the multi-source time arbiter, an NTP/SNTP server packet layer, and the acquisition/listen scheduler. No Arduino/ESP-IDF dependencies; host-unit-tested. Headers are under an airtime/ prefix.",
   "keywords": ["rds", "wwv", "ntp", "time", "esp32", "si4732", "ft8"],
   "license": "MIT",
   "frameworks": "*",
+  "headers": "airtime/app.h",
   "platforms": "*",
   "build": {
     "flags": ["-std=c++17"]

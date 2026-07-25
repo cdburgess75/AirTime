@@ -25,7 +25,7 @@ written or verified. The hardware is pushed to the very edges.
 
 ## Two halves
 
-**`lib/airtime_core/` — pure, portable, tested on the host.**
+**`lib/airtime_core/src/airtime/` — pure, portable, tested on the host.**
 No Arduino/ESP-IDF includes. Deterministic: time enters as explicit monotonic
 timestamps; no module reads a wall clock or allocates in a hot path. This is
 where the arbiter, the RDS decode/voting, the Goertzel/WWV detection, and the

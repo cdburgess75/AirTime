@@ -1,6 +1,6 @@
 #include <cstdint>
 
-#include "rds_ct.h"
+#include "airtime/rds_ct.h"
 #include "test_framework.h"
 
 using airtime::civilToMjd;

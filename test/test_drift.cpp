@@ -1,7 +1,7 @@
 #include <cmath>
 #include <cstdint>
 
-#include "drift.h"
+#include "airtime/drift.h"
 #include "test_framework.h"
 
 using airtime::DriftEstimator;

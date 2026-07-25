@@ -9,6 +9,21 @@ See [`../../docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md) for how this core
 connects to the hardware, and [`../../docs/PLAN.md`](../../docs/PLAN.md) for the
 product spec.
 
+## Layout
+
+Sources live in `src/airtime/`, so every include carries an `airtime/` prefix:
+
+```cpp
+#include <airtime/app.h>
+```
+
+That prefix is not decoration. A flat layout would put `sntp.h` and `types.h` on the
+include path, and **lwIP already ships an `sntp.h`** that the ESP32 Arduino core exposes
+— the collision would surface as a baffling compile error deep in a device build. The
+directory is also what makes this a valid Arduino 1.5-format library
+(`library.properties` at the root, recursive compilation under `src/`), so the same tree
+serves the host tests and the firmware unchanged.
+
 ## Modules
 
 | File | Purpose | Plan ref |
@@ -32,8 +47,40 @@ product spec.
 From the repository root:
 
 ```sh
-make test      # builds with g++ and runs the full suite (no PlatformIO needed)
+make test
 ```
+
+Builds with plain `g++` and runs the full suite — no PlatformIO, no network.
+
+Every translation unit is also checked against the constraints the device build imposes:
+
+```sh
+g++ -std=gnu++17 -Os -fno-exceptions -fno-rtti -Wall -Wextra -Wshadow -Werror \
+    -Ilib/airtime_core/src -c lib/airtime_core/src/airtime/*.cpp
+```
+
+## Using it from the ats-mini sketch
+
+`arduino-cli` is pointed at this directory as an extra library search path:
+
+```sh
+cd firmware/ats-mini
+arduino-cli compile --clean -e --libraries ../../lib -p "$PORT" -u ats-mini
+```
+
+The library is only compiled in once the sketch actually includes `<airtime/app.h>`.
+
+## Footprint
+
+Measured with `-Os`: `AirTimeApp` is **1,896 bytes** of RAM in total (arbiter 256,
+scheduler 184, station voter 776, client counter 200, config 216), and the compiled core
+is roughly **13 KB** of code. Against 512 KB of SRAM and a 3 MB app partition, it is
+close to free.
+
+`double` is used in the drift estimator and in `DisciplinedClock::utcAt()`. On the
+ESP32-S3 that is software-emulated, but `utcAt()` runs at display/NTP rates rather than
+in any hot loop, and the drift math runs once per fix — minutes apart. The DSP path is
+single-precision (`real`) precisely because it is the part that runs continuously.
 
 Tests live in [`../../test/`](../../test/) and use a tiny dependency-free harness
 (`test_framework.h`).

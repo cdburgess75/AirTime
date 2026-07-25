@@ -12,10 +12,11 @@
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wshadow -g
 CORE_DIR := lib/airtime_core
+CORE_SRC_DIR := lib/airtime_core/src
 TEST_DIR := test
-INCLUDES := -I$(CORE_DIR) -I$(TEST_DIR)
+INCLUDES := -I$(CORE_SRC_DIR) -I$(TEST_DIR)
 
-CORE_SRC := $(wildcard $(CORE_DIR)/*.cpp)
+CORE_SRC := $(wildcard $(CORE_SRC_DIR)/airtime/*.cpp)
 TEST_SRC := $(wildcard $(TEST_DIR)/*.cpp)
 
 BUILD := build
@@ -25,7 +26,7 @@ BIN   := $(BUILD)/airtime_tests
 
 all: test
 
-$(BIN): $(CORE_SRC) $(TEST_SRC) $(wildcard $(CORE_DIR)/*.h) $(wildcard $(TEST_DIR)/*.h)
+$(BIN): $(CORE_SRC) $(TEST_SRC) $(wildcard $(CORE_SRC_DIR)/airtime/*.h) $(wildcard $(TEST_DIR)/*.h)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(CORE_SRC) $(TEST_SRC) -o $(BIN)
 

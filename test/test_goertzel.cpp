@@ -1,7 +1,7 @@
 #include <cmath>
 #include <vector>
 
-#include "goertzel.h"
+#include "airtime/goertzel.h"
 #include "test_framework.h"
 
 using airtime::Goertzel;

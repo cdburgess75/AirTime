@@ -17,9 +17,9 @@
 #include <deque>
 #include <vector>
 
-#include "app.h"
-#include "hal.h"
-#include "rds_ct.h"
+#include "airtime/app.h"
+#include "airtime/hal.h"
+#include "airtime/rds_ct.h"
 
 namespace airtime_fake {
 

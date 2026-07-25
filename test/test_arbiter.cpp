@@ -1,7 +1,7 @@
 #include <cmath>
 #include <cstdint>
 
-#include "arbiter.h"
+#include "airtime/arbiter.h"
 #include "test_framework.h"
 
 using airtime::Action;

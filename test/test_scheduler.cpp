@@ -1,6 +1,6 @@
 #include <cstdint>
 
-#include "scheduler.h"
+#include "airtime/scheduler.h"
 #include "test_framework.h"
 
 using namespace airtime;
