@@ -6,10 +6,12 @@ This milestone exists because the owner has bricked a device before. Work throug
 in order. Nothing here is exploratory — every step is either a backup, a rehearsal of
 recovery, or a measurement that retires an assumption.
 
-> **Status (2026-07-25): §1–§4 complete. The recovery drill has PASSED.** The device was
-> erased and restored deliberately, and boots to stock. A verified 16 MB backup exists
-> both in this repo and on the owner's machine. **§5 (stock `ats-mini` build) and §6
-> (IO11 verification) remain.** Outcomes are recorded in [§7](#7-record-the-results).
+> **Status (2026-07-25): §1–§5 essentially complete. The recovery drill has PASSED.**
+> The device was erased and restored deliberately; stock `ats-mini` then built and
+> flashed first try (v2.35). A verified 16 MB backup exists **on the owner's machine
+> only — never in this repo**, because a full flash image contains the `settings` NVS
+> partition and therefore live WiFi credentials. **§5d verification and §6 (IO11)
+> remain.** Outcomes are recorded in [§7](#7-record-the-results).
 
 ---
 
@@ -169,9 +171,11 @@ Now read the partition table, which tells you whether anything lives above 2 MB:
 
 ```sh
 python3 -m esptool --chip esp32s3 --port "$PORT" read_flash 0x8000 0xc00 partitions.bin
-
-python "$IDF_PATH/components/partition_table/gen_esp32part.py" partitions.bin
 ```
+
+Decode it with no ESP-IDF needed — `tools/inspect_flash.py` does this automatically for
+a full image, and the partition table alone can be read with a short script (see the
+decoded result for this unit in [§7](#7-record-the-results)).
 
 Note the highest offset+size any partition reaches. **If anything extends past
 0x200000, a 2 MB backup would not fully restore this device** — which is exactly why
