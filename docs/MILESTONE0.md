@@ -27,14 +27,19 @@ while everything is still working.
 | | |
 |---|---|
 | Hardware | ATS Mini V4, USB-C data cable (**not** charge-only), charged battery |
-| Software | `esptool` ≥ 4.0, PlatformIO, Python 3 |
+| Software | Python 3 and `esptool` ≥ 4.0 (PlatformIO is not needed until §5) |
 | Time | ~45 min, unhurried |
 | Optional | HF antenna on the SMA port (needed for §6; evening is best) |
 
+Install instructions are per-platform below. Verify with:
+
 ```sh
-pip install --upgrade esptool
-esptool version
+python3 -m esptool version
 ```
+
+> **This runbook invokes esptool as `python3 -m esptool`** throughout. A `--user`
+> install often puts the console script somewhere not on `PATH`, and the module form
+> sidesteps that entirely. If plain `esptool` works for you, either is fine.
 
 > **esptool v5** renamed commands to hyphenated forms (`read-flash`). The underscore
 > forms below (`read_flash`) still work as aliases in v5 and are the only form in v4.
@@ -55,7 +60,7 @@ USB-serial bridge instead shows as `cu.SLAB_USBtoUART` or `cu.wchusbserial…`).
 > dead board. This is the most common way to waste an hour on a Mac.
 
 ```sh
-export PORT=/dev/cu.usbmodem101      # substitute what you actually saw
+export PORT=/dev/cu.usbmodem101
 ```
 
 macOS does not gate serial access by group — no `dialout`, nothing to add
@@ -119,10 +124,26 @@ export PORT=/dev/ttyACM0
 Permission denied? Add yourself to the serial group, then log out and back in:
 
 ```sh
-sudo usermod -aG dialout "$USER"     # 'uucp' on Arch
+sudo usermod -aG dialout "$USER"
 ```
 
 ### Rules for this session
+
+> ### ⚠️ Paste one command at a time in §4
+>
+> **Interactive zsh (the macOS default) does not accept `#` comments**, and it expands
+> `~4` as a *directory stack* reference. A comment containing something like "~4 min"
+> raises `not enough directory stack entries`, and that expansion error **flushes the
+> rest of the pasted buffer**.
+>
+> This happened during a real run of §4: a two-command paste executed the **erase** and
+> silently dropped the **restore**, leaving the device blank with no follow-up command.
+> Recoverable — that is the whole point of §4 — but do not rely on it.
+>
+> In §4, paste and run each command **individually**, and confirm each one's output
+> before the next. The code blocks below deliberately contain no comments and no
+> line continuations. (`setopt interactivecomments` fixes the comment half if you
+> want it, but one-at-a-time is the rule that actually protects you.)
 
 - **Never** interrupt a `write_flash` mid-run. Reads are always safe; writes are not.
 - Keep the battery charged and the cable seated. A brownout during a write is the one
@@ -134,7 +155,7 @@ sudo usermod -aG dialout "$USER"     # 'uucp' on Arch
 ## 1. Identify the chip and its partition layout
 
 ```sh
-esptool --chip esp32s3 --port "$PORT" flash_id
+python3 -m esptool --chip esp32s3 --port "$PORT" flash_id
 ```
 
 Expected: `ESP32-S3`, flash size **16MB**. Record what you actually see.
@@ -145,9 +166,8 @@ If this command fails, do not proceed — get communication working first
 Now read the partition table, which tells you whether anything lives above 2 MB:
 
 ```sh
-esptool --chip esp32s3 --port "$PORT" read_flash 0x8000 0xc00 partitions.bin
+python3 -m esptool --chip esp32s3 --port "$PORT" read_flash 0x8000 0xc00 partitions.bin
 
-# Decode it (ships with ESP-IDF; skip if not installed — §2 backs up everything anyway)
 python "$IDF_PATH/components/partition_table/gen_esp32part.py" partitions.bin
 ```
 
@@ -197,19 +217,23 @@ re-run — the never-interrupt rule applies to `write_flash` in §4c.
 
 macOS has `shasum`, not `sha256sum`:
 
+macOS:
+
 ```sh
-shasum -a 256 stock-full-16mb.bin | tee SHA256SUMS     # macOS
-# sha256sum stock-full-16mb.bin | tee SHA256SUMS       # Linux
+shasum -a 256 stock-full-16mb.bin | tee SHA256SUMS
 ```
 
-**Where the `.bin` itself goes** depends on whether this repo is public:
+Linux:
 
-- **Private repo** → commit the `.bin` files. One-time 18 MB, always cloned with the
-  repo, offsite and versioned. Best availability when you actually need it.
-- **Public repo** → **do not commit them.** Stock firmware is AMNVOLT's copyrighted
-  binary. Keep the images in local + cloud backup and commit only `SHA256SUMS`.
+```sh
+sha256sum stock-full-16mb.bin | tee SHA256SUMS
+```
 
-Either way `SHA256SUMS` belongs in the repo, so any future copy can be verified.
+**Where the `.bin` itself goes — owner decision (2026-07-25): committed to this repo.**
+See [`STATUS.md`](STATUS.md#setup-decisions) for the storage rationale and the
+copyright caveat that applies if the repository is ever made public.
+
+`SHA256SUMS` belongs in the repo regardless, so any future copy can be verified.
 
 ---
 
@@ -219,8 +243,8 @@ A truncated or all-`0xFF` image looks like a file and restores like a disaster.
 
 ```sh
 cd ~/airtime-backup
-ls -l stock-full-16mb.bin                       # expect exactly 16777216 bytes
-shasum -a 256 -c SHA256SUMS                     # expect: OK   (macOS)
+ls -l stock-full-16mb.bin
+shasum -a 256 -c SHA256SUMS
 ```
 
 **If you have this repo checked out**, one command does the rest — it decodes the
@@ -277,29 +301,43 @@ worked. The manual method is your fallback for when auto-reset fails:
    record where it is in §7).
 2. While holding BOOT, power-cycle: tap **RESET**, or unplug/replug USB.
 3. Release BOOT.
-4. Confirm the chip is listening: `esptool --chip esp32s3 --port "$PORT" chip_id`
+4. Confirm the chip is listening: `python3 -m esptool --chip esp32s3 --port "$PORT" chip_id`
 
 Practice this **before** the erase. If your unit has no reachable BOOT button, note that
 in §7 and rely on auto-reset — it works fine; you just have one fewer fallback.
 
+> **Have the §4c restore command on screen before you run §4b.** Once the erase
+> completes the device is dark, and you do not want to be composing the next command
+> then. Paste these one at a time.
+
 ### 4b. Erase
 
 ```sh
-esptool --chip esp32s3 --port "$PORT" erase_flash
+python3 -m esptool --chip esp32s3 --port "$PORT" erase_flash
 ```
 
-The device is now blank and will not boot. **This is expected.** Confirm it: the screen
-stays dark or the radio does nothing. Sit with it for a second — this is the state you
-were afraid of, and you are about to walk straight back out of it.
+Expect `Chip erase completed successfully` in a few seconds. The device is now blank and
+will not boot. **This is expected.** Confirm it: the screen stays dark or the radio does
+nothing. Sit with it for a second — this is the state you were afraid of, and you are
+about to walk straight back out of it.
 
 ### 4c. Restore
 
+Run this as a **single line**, on its own:
+
 ```sh
-esptool --chip esp32s3 --port "$PORT" --baud 921600 \
-        write_flash 0x0 firmware/backup/stock-full-16mb.bin
+python3 -m esptool --chip esp32s3 --port "$PORT" --baud 921600 write_flash 0x0 stock-full-16mb.bin
 ```
 
-~4 min. **Do not interrupt.**
+Run it from the directory holding the image (`~/airtime-backup`). Two to four minutes —
+the mostly-erased upper half compresses away, so the write is faster than the read.
+**Do not interrupt.**
+
+If `$PORT` has been lost from the shell, set it again first, on its own line:
+
+```sh
+export PORT=/dev/cu.usbmodem14401
+```
 
 ### 4d. Confirm
 
