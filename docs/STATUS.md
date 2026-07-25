@@ -28,10 +28,10 @@ NTP to a simulated laptop — all with WiFi and ADC2 never live together.
 📖 **Full step-by-step runbook: [`MILESTONE0.md`](MILESTONE0.md)** — copy-pasteable commands,
 the recovery drill, the IO11 beat test, a results table to fill in, and troubleshooting.
 
-- [ ] Identify chip + partition layout (does anything live above 0x200000?)
-- [ ] Back up stock firmware — **full 16 MB** (see amendment below), checksum it, verify it
-- [ ] **Recovery drill** — rehearse forced download mode, then erase and restore on purpose
-- [ ] Build **stock** `ats-mini` (correct PSRAM variant), flash, confirm normal radio operation
+- [x] Identify chip + partition layout ✅ ESP32-S3 rev v0.2, 16 MB flash, 8 MB PSRAM; partitions reach 0x800000
+- [x] Back up stock firmware ✅ full 16 MB, verified, committed to `firmware/backup/`
+- [x] **Recovery drill** ✅ **PASSED** — erased and restored on purpose; boots to stock
+- [ ] Build **stock** `ats-mini` (**try OSPI first** — 8 MB PSRAM ⇒ octal), flash, confirm normal radio operation
 - [ ] IO11 verification — HJBerndt binary, 9999.000 kHz USB beat, backlight flicker = tap confirmed
       - [ ] If no flicker at any volume → original‑V4 pads → one jumper wire (amp pin 8 → IO11), retest
 - [ ] Record outcomes in the [`MILESTONE0.md §7`](MILESTONE0.md#7-record-the-results) table and commit

@@ -6,8 +6,10 @@ This milestone exists because the owner has bricked a device before. Work throug
 in order. Nothing here is exploratory — every step is either a backup, a rehearsal of
 recovery, or a measurement that retires an assumption.
 
-> **Status: not yet run.** Record outcomes in [§7](#7-record-the-results) as you go and
-> commit the file — later sessions read it to know what the hardware actually is.
+> **Status (2026-07-25): §1–§4 complete. The recovery drill has PASSED.** The device was
+> erased and restored deliberately, and boots to stock. A verified 16 MB backup exists
+> both in this repo and on the owner's machine. **§5 (stock `ats-mini` build) and §6
+> (IO11 verification) remain.** Outcomes are recorded in [§7](#7-record-the-results).
 
 ---
 
@@ -530,9 +532,9 @@ Conclusions worth carrying forward:
 | Highest partition offset | **0x800000 (8 MB)** ✅ | nothing above it; `settings` at 0x7e0000 is 28.7% populated ⇒ **2 MB backup would lose it** |
 | **Full backup SHA-256** | `aeb512fea414b0ecb077c1564ca5298ac18a0e960c2b7342ac29c415a384db89` ✅ | 16777216 bytes, verified 2026-07-25; read in 227.8 s @ 921600 |
 | Backup stored where | **`firmware/backup/stock-full-16mb.bin` in this repo** ✅ + owner's Mac | committed 2026-07-25; checksum re-verified against the recorded SHA-256 after push, and `tools/inspect_flash.py` re-validated the stored copy structurally |
-| BOOT button location | | accessible without opening case? |
-| Forced download mode | ⬜ rehearsed | method that worked |
-| **Recovery drill (§4)** | ⬜ **passed** | erased and restored successfully |
+| BOOT button location | not located / not needed | auto-reset worked every time; case never opened |
+| Forced download mode | **automatic** ✅ | esptool DTR/RTS auto-reset over USB-Serial/JTAG; manual BOOT method never required |
+| **Recovery drill (§4)** | ✅ **PASSED 2026-07-25** | `erase_flash` (3.1 s) → full 16 MB `write_flash` → boots to stock, confirmed by the owner |
 | PSRAM variant | | OSPI / QSPI — the one showing non-zero PSRAM |
 | PSRAM reported in About | | must be non-zero |
 | Stock radio operation | ⬜ confirmed | FM + HF tune, audio out |
