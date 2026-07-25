@@ -1,0 +1,70 @@
+# AirTime Architecture — the hardware seam
+
+AirTime is being built **core-first, host-tested**. The bet (and the reason we
+can safely develop without touching the brickable device) is that essentially
+all of the interesting behavior is *pure logic* that never needs an ESP32 to be
+written or verified. The hardware is pushed to the very edges.
+
+```
+   ┌──────────────────────── firmware (device-only, thin) ────────────────────────┐
+   │                                                                               │
+   │  SI4732 RDS regs ──► RdsSource ──┐                                            │
+   │                                  │  uint16 blocks                             │
+   │  ADC IO11 (core 2) ──► Sampler ──┼──► ┌───────────────────────────────┐      │
+   │                                  │    │        airtime_core           │      │
+   │  esp_timer ──► MonotonicClock ───┼──► │  (platform-independent, pure) │──►   │  Display
+   │                                  │    │                               │      │  (UTC + ±unc)
+   │  NVS ──► DriftStore / TimeStore ─┘    │  goertzel   rds_ct            │      │
+   │                                       │  station_vote  wwv_marker*    │──►   │  NTP responder
+   │  WiFi/SoftAP control ◄────────────────│  disciplined_clock*  arbiter* │      │  (SoftAP)
+   │                                       └───────────────────────────────┘      │
+   │                                          (* = batch 2, forthcoming)          │
+   └───────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Two halves
+
+**`lib/airtime_core/` — pure, portable, tested on the host.**
+No Arduino/ESP-IDF includes. Deterministic: time enters as explicit monotonic
+timestamps; no module reads a wall clock or allocates in a hot path. This is
+where the arbiter, the RDS decode/voting, the Goertzel/WWV detection, and the
+drift model live. `make test` exercises all of it with a g++ build.
+
+**Firmware adapters — thin, device-only, added after Milestone 0.**
+Each is a small shim that turns a hardware fact into a value the core consumes,
+or a core decision into a hardware action. Anticipated seam:
+
+| Adapter | Wraps | Feeds / driven by core |
+|---|---|---|
+| `RdsSource` | SI4732 RDS group registers | → `decodeRdsClockTime()` → `StationVoter` |
+| `Sampler` | ADC2_CH0 on IO11 (core 2, WiFi down) | → `Goertzel` → `wwv_marker` |
+| `MonotonicClock` | `esp_timer` µs counter | → `disciplined_clock` / `arbiter` |
+| `DriftStore` / `TimeStore` | NVS | ↔ learned ppm, last-known date/time |
+| `NtpResponder` | lwIP UDP/123 over SoftAP | ← served time + uncertainty/stratum |
+| `WiFiControl` | SoftAP up / teardown | ← arbiter's listen-window scheduling |
+| `Ui` | TFT + encoder | ← display state; → manual set / operator confirm |
+
+## Why this ordering
+
+- The **ADC2-under-WiFi silicon constraint** (PLAN.md §2) is a *scheduling*
+  decision the arbiter makes — pure logic. Only the `WiFiControl`/`Sampler`
+  adapters touch the constraint directly.
+- The **arbiter** (the heart, §4) is a state machine over `(monotonic_time,
+  correction, source, uncertainty)`. Zero hardware. It is the highest-value,
+  highest-risk logic, so it gets the most host-side testing before it ever runs
+  on the device.
+- The **calibration constant** (§4) is the one genuinely hardware-dependent
+  number (DSP group delay + amp + ADC latency). It is a single injected offset,
+  measured once on-device — not something the core logic can know a priori, and
+  deliberately isolated so nothing else depends on hardware timing.
+
+## Testing philosophy
+
+Every core module ships with unit tests that pin its contract:
+- `goertzel` — tone detection, amplitude scaling, off-frequency rejection.
+- `rds_ct` — the RDS-standard MJD anchor (1982-08-06 = MJD 45187), field
+  packing, date round-trips, and rejection of malformed groups.
+- `station_vote` — consensus, outlier rejection, single-source handling, dedup.
+
+Batch 2 adds property-style tests for the clock (monotonicity, bounded slew) and
+the arbiter (slew-vs-step thresholds, two-source gate, uncertainty growth).

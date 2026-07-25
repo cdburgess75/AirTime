@@ -4,7 +4,7 @@
 
 AirTime runs entirely on an *unmodified* [AMNVOLT ATS Mini V4](docs/PLAN.md#2-target-hardware-owned-verified) pocket receiver. When internet and GPS are gone, time still arrives over the air — **FM RDS** and **WWV** — and AirTime arbitrates those sources into a drift-disciplined internal clock, then serves it to your laptop as **NTP**.
 
-> Status: **pre‑Milestone 0.** No firmware has been written yet. The repository currently holds the v1 specification and project scaffolding. See [`docs/STATUS.md`](docs/STATUS.md).
+> Status: **core-first development.** The platform-independent core (RDS 4A clock-time decode, multi-station voting, Goertzel WWV detection) is written and unit-tested on the host — `make test` → 16 tests, 78 checks passing. No code is flashed to hardware yet: the Milestone 0 safety steps remain a **pre-flash** gate. See [`docs/STATUS.md`](docs/STATUS.md).
 
 ---
 
@@ -56,11 +56,11 @@ No GPS module · no external RTC (DS3231) · no WWV date/timecode decode (phase 
 
 | Milestone | Deliverable | State |
 |---|---|---|
-| **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | ⛔ **Gate — hardware, owner‑run.** No AirTime code before this is green. |
-| **1 — RDS clock** | Self‑setting clock from broadcast FM | ⬜ Not started |
+| **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | ⛔ **Pre-flash gate — hardware, owner‑run.** No *flashing* before this is green. |
+| **1 — RDS clock** | Self‑setting clock from broadcast FM | 🟡 Decode + voting done (host) |
 | **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | ⬜ Not started |
-| **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | ⬜ Not started |
-| **4 — Arbiter + confidence** | Full AirTime runtime behavior | ⬜ Not started |
+| **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | 🟡 Goertzel done (host) |
+| **4 — Arbiter + confidence** | Full AirTime runtime behavior | ⬜ Next (batch 2) |
 | **5 — Field acceptance** | Cold start → laptop synced → WSJT‑X DT ≈ 0 all evening | ⬜ Not started |
 
 Detailed milestone contents live in [`docs/PLAN.md §7`](docs/PLAN.md#7-milestones) and are tracked in [`docs/STATUS.md`](docs/STATUS.md).
@@ -95,14 +95,24 @@ Confirm success in WSJT‑X: the **DT column** should cluster near zero.
 
 ```
 AirTime/
-├── README.md          You are here
-├── docs/
-│   ├── PLAN.md        The canonical v1 specification and build plan
-│   └── STATUS.md      Live milestone / task tracker
-└── .gitignore         PlatformIO / ESP32 build artifacts
+├── README.md              You are here
+├── Makefile               Host build + unit tests (make test)
+├── platformio.ini         PlatformIO envs (native now; device env in M1)
+├── lib/
+│   └── airtime_core/      Platform-independent core (no Arduino/ESP-IDF)
+│       ├── goertzel.*     1000 Hz WWV tone detector
+│       ├── rds_ct.*       RDS group 4A clock-time decode
+│       └── station_vote.* Multi-station CT voting
+├── test/                  Dependency-free unit tests
+└── docs/
+    ├── PLAN.md            The canonical v1 specification and build plan
+    ├── ARCHITECTURE.md    The core ↔ hardware seam
+    └── STATUS.md          Live milestone / task tracker
 ```
 
-Firmware sources will be added once Milestone 0 is green.
+Device firmware (the thin hardware adapters that feed the core) is added starting
+in Milestone 1; it consumes `lib/airtime_core` unchanged and is only *flashed*
+once the Milestone 0 safety steps are done.
 
 ## References
 
