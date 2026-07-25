@@ -159,31 +159,34 @@ Note the highest offset+size any partition reaches. **If anything extends past
 
 ## 2. Back up the stock firmware
 
-**Take the full 16 MB.** The plan's `0x0`/`0x200000` read covers the app region, but this
-is a 16 MB part and stock firmware may keep SPIFFS/NVS/calibration data higher up.
-Three extra minutes removes all doubt.
+**Take the full 16 MB — this is now measured, not precautionary.** The §1 partition
+table on this unit reaches **0x800000 (8 MB)**, and `app0` alone spans 3 MB
+(0x10000–0x310000). PLAN.md §7's `0x0`+`0x200000` read would stop *inside app0*,
+producing an image with a truncated application and no `littlefs` (1.8 MB) and no
+`settings` partition at all.
+
+> **Do not take a 2 MB image as a "fast restore" option.** It is not restorable.
+> An image that looks like a backup but silently truncates a partition is worse
+> than no backup, because you will reach for it during a failure. One image, full
+> chip, no ambiguity.
 
 ```sh
-mkdir -p firmware/backup && cd firmware/backup
+mkdir -p ~/airtime-backup && cd ~/airtime-backup
 
-esptool --chip esp32s3 --port "$PORT" --baud 921600 \
+python3 -m esptool --chip esp32s3 --port "$PORT" --baud 921600 \
         read_flash 0x0 0x1000000 stock-full-16mb.bin
 ```
 
-Takes ~3 min at 921600 baud. If the read errors out, drop to `--baud 460800`.
+Over USB-Serial/JTAG this runs at USB speed regardless of the nominal baud. If the
+read errors out, drop to `--baud 460800`.
 
-Also take the plan's 2 MB app-region image as a fast-restore option:
+### Checksum it, and commit the checksum
 
-```sh
-esptool --chip esp32s3 --port "$PORT" --baud 921600 \
-        read_flash 0x0 0x200000 stock-app-2mb.bin
-```
-
-### Checksum both, and commit the checksums
+macOS has `shasum`, not `sha256sum`:
 
 ```sh
-sha256sum stock-full-16mb.bin stock-app-2mb.bin | tee SHA256SUMS
-cd ../..
+shasum -a 256 stock-full-16mb.bin | tee SHA256SUMS     # macOS
+# sha256sum stock-full-16mb.bin | tee SHA256SUMS       # Linux
 ```
 
 **Where the `.bin` itself goes** depends on whether this repo is public:
@@ -202,25 +205,36 @@ Either way `SHA256SUMS` belongs in the repo, so any future copy can be verified.
 A truncated or all-`0xFF` image looks like a file and restores like a disaster.
 
 ```sh
-cd firmware/backup
+cd ~/airtime-backup
 ls -l stock-full-16mb.bin                       # expect exactly 16777216 bytes
-sha256sum -c SHA256SUMS                         # expect: OK
+shasum -a 256 -c SHA256SUMS                     # expect: OK   (macOS)
+```
 
-# Sanity: the image should NOT be one giant run of erased flash
+Then confirm it contains an actual firmware image rather than erased flash, and that
+the partitions we know about are really in there:
+
+```sh
 python3 - <<'PY'
 d = open('stock-full-16mb.bin','rb').read()
-print('size      :', len(d))
-print('0xFF bytes: {:.1%}'.format(d.count(b'\xff')/len(d)))
-print('magic 0xE9:', hex(d[0]), '(0xe9 = valid ESP image header)')
+print('size        :', len(d), '(expect 16777216)')
+print('0xFF bytes  : {:.1%}'.format(d.count(b'\xff')/len(d)))
+print('bootloader  :', hex(d[0]), '(0xe9 = valid ESP image header)')
+print('ptable magic:', hex(d[0x8000]), hex(d[0x8001]), '(expect 0xaa 0x50)')
+# app0 lives at 0x10000 and must also start with an image header
+print('app0 header :', hex(d[0x10000]), '(0xe9)')
+# the region the 2 MB read would have missed entirely
+print('littlefs@0x610000 non-erased bytes: {:.1%}'.format(
+      1 - d[0x610000:0x7e0000].count(b'\xff')/(0x7e0000-0x610000)))
 PY
 ```
 
-Expect `magic 0xE9` and a 0xFF fraction well under 100% (a 16 MB image of a small app is
-*mostly* erased — that's fine and normal; what you're ruling out is 100%).
+Expect `0xe9` for both headers, `0xaa 0x50` at the partition table, and a non-zero
+fraction of real data in the littlefs region. The whole-image 0xFF fraction will be
+high — roughly half the chip is unpartitioned — and that is normal; what you are
+ruling out is a read that returned nothing but erased flash.
 
 ```sh
-esptool --chip esp32s3 image_info stock-app-2mb.bin   # should parse as an ESP32-S3 image
-cd ../..
+cd ~
 ```
 
 ---
@@ -378,7 +392,33 @@ Flash type set in eFuse: quad (4 data lines)
 Flash voltage set by eFuse to 3.3V
 ```
 
-Two conclusions worth carrying forward:
+Decoded partition table:
+
+```
+label            type  subtype     offset      size       end
+nvs              data  0x2         0x9000    0x5000    0xe000
+otadata          data  0x0         0xe000    0x2000   0x10000
+app0             app   0x10       0x10000  0x300000  0x310000
+app1             app   0x11      0x310000  0x300000  0x610000
+littlefs         data  0x83      0x610000  0x1d0000  0x7e0000
+settings         data  0x2       0x7e0000   0x10000  0x7f0000
+coredump         data  0x3       0x7f0000   0x10000  0x800000
+
+highest end offset: 0x800000 (8.00 MB)
+```
+
+Conclusions worth carrying forward:
+
+- **The 2 MB backup in PLAN.md §7 would not have been restorable.** `app0` spans
+  0x10000–0x310000 (3 MB), so a 2 MB read stops inside it, and `littlefs` (1.8 MB)
+  and `settings` are missed entirely. Full-chip backup is now measured as necessary,
+  not merely prudent. §2 takes one 16 MB image and no partial alternative.
+- **`app0` is 3 MB — that is the size budget for AirTime firmware.** Comfortable.
+- **There is a dual-OTA layout (`app0`/`app1` + `otadata`) and a separate 64 KB
+  `settings` NVS partition**, which on this radio is the likely home of per-unit
+  calibration. If the `ats-mini` fork ships a *different* partition table, flashing
+  it will rewrite this layout and orphan stock `littlefs`/`settings` data. That is
+  recoverable from the §2 image — which is precisely why §2 comes first.
 
 - **8 MB PSRAM ⇒ the `R8` part ⇒ octal PSRAM ⇒ try the OSPI build first** (§5b).
   Confirm the usual way — non-zero PSRAM in Settings→About — but this should save
@@ -397,7 +437,7 @@ Two conclusions worth carrying forward:
 | PSRAM detected | **8 MB (AP_3v3)** ✅ | ⇒ OSPI build variant expected |
 | USB mode | **USB-Serial/JTAG** | auto-reset into download mode works |
 | MAC | `20:6e:f1:b5:90:30` | unit identity; also predicts the SoftAP BSSID |
-| Highest partition offset | | does anything live above 0x200000? |
+| Highest partition offset | **0x800000 (8 MB)** ✅ | app0 alone is 3 MB ⇒ **2 MB backup is NOT restorable**; full-chip required |
 | Full backup SHA-256 | | from `firmware/backup/SHA256SUMS` |
 | Backup stored where | | in-repo (private) / external (public) |
 | BOOT button location | | accessible without opening case? |

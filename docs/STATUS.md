@@ -136,7 +136,11 @@ fork decision below.
    public, keep the images out of git (local + cloud backup) and commit only the SHA-256.
    `SHA256SUMS` goes in the repo either way. No Git LFS — 2 MB doesn't warrant it.
 
-   **Amendment to PLAN.md §7:** back up the **full 16 MB**, not `0x0`+`0x200000`. This is a
-   16 MB part (N16R8); if stock firmware keeps SPIFFS/NVS/calibration data above 2 MB, a
-   2 MB image would not fully restore it. Costs ~3 extra minutes. The 2 MB app-region
-   image is still taken as a fast-restore option.
+   **Amendment to PLAN.md §7 — now CONFIRMED by measurement (2026-07-25).** Back up the
+   **full 16 MB**, not `0x0`+`0x200000`. The partition table read from the owner's unit
+   reaches 0x800000, and `app0` alone spans 3 MB (0x10000–0x310000): a 2 MB read stops
+   *inside the application* and misses `littlefs` (1.8 MB) and the `settings` NVS
+   partition entirely. The 2 MB image is not a valid fast-restore option and is no longer
+   taken at all — an image that looks like a backup but truncates a partition is worse
+   than none, because it gets reached for during a failure. See
+   [`MILESTONE0.md §7`](MILESTONE0.md#1-identification--recorded-2026-07-25).
