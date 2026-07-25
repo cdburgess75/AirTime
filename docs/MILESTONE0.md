@@ -177,8 +177,9 @@ python3 -m esptool --chip esp32s3 --port "$PORT" --baud 921600 \
         read_flash 0x0 0x1000000 stock-full-16mb.bin
 ```
 
-Over USB-Serial/JTAG this runs at USB speed regardless of the nominal baud. If the
-read errors out, drop to `--baud 460800`.
+Measured on the owner's unit: **227.8 s (~4 min) at 589 kbit/s** with `--baud 921600`.
+If the read errors out, drop to `--baud 460800`. A read is safe to interrupt and
+re-run — the never-interrupt rule applies to `write_flash` in §4c.
 
 ### Checksum it, and commit the checksum
 
@@ -228,10 +229,13 @@ print('littlefs@0x610000 non-erased bytes: {:.1%}'.format(
 PY
 ```
 
-Expect `0xe9` for both headers, `0xaa 0x50` at the partition table, and a non-zero
-fraction of real data in the littlefs region. The whole-image 0xFF fraction will be
-high — roughly half the chip is unpartitioned — and that is normal; what you are
-ruling out is a read that returned nothing but erased flash.
+Expect `0xe9` for both headers and `0xaa 0x50` at the partition table. A high overall
+0xFF fraction is normal — half the chip is unpartitioned.
+
+> **On the owner's unit `littlefs` reads 0.0% — entirely erased.** That is a property
+> of the device (the partition is declared but never formatted), not a bad read. Do
+> not treat an empty littlefs as a failed backup. The checks that actually prove the
+> image is good are the three magic bytes and the exact 16777216-byte size.
 
 ```sh
 cd ~
@@ -438,8 +442,8 @@ Conclusions worth carrying forward:
 | USB mode | **USB-Serial/JTAG** | auto-reset into download mode works |
 | MAC | `20:6e:f1:b5:90:30` | unit identity; also predicts the SoftAP BSSID |
 | Highest partition offset | **0x800000 (8 MB)** ✅ | app0 alone is 3 MB ⇒ **2 MB backup is NOT restorable**; full-chip required |
-| Full backup SHA-256 | | from `firmware/backup/SHA256SUMS` |
-| Backup stored where | | in-repo (private) / external (public) |
+| **Full backup SHA-256** | `aeb512fea414b0ecb077c1564ca5298ac18a0e960c2b7342ac29c415a384db89` ✅ | 16777216 bytes, verified 2026-07-25; read in 227.8 s @ 921600 |
+| Backup stored where | `~/airtime-backup/stock-full-16mb.bin` on the owner's Mac | in-repo vs external pending the public/private answer |
 | BOOT button location | | accessible without opening case? |
 | Forced download mode | ⬜ rehearsed | method that worked |
 | **Recovery drill (§4)** | ⬜ **passed** | erased and restored successfully |
