@@ -397,6 +397,13 @@ To take upstream changes later:
 git subtree pull --prefix=firmware/ats-mini https://github.com/esp32-si4732/ats-mini main --squash
 ```
 
+> **Do not keep this repository in iCloud Drive, Dropbox, or OneDrive.** On macOS with
+> "Desktop & Documents" syncing enabled, `~/Documents` is iCloud-backed and files get
+> evicted to the cloud — git operations on evicted objects stall or fail, sync races
+> against `.git` index writes can corrupt the repo, and the Arduino build drops a
+> `build/` directory of several hundred MB straight into the synced folder. Clone to a
+> plain local path such as `~/AirTime`.
+
 ### 5b. Install Arduino CLI
 
 Upstream's [documented method](https://arduino.github.io/arduino-cli/1.2/installation/):
