@@ -16,4 +16,9 @@ namespace airtime {
 // Goertzel detector runs in real time on core 2, so this matters.
 using real = float;
 
+// Where a time fix came from (PLAN.md §4 tiers). Shared vocabulary: the arbiter
+// consumes it, the SNTP server maps it to a reference identifier, and the
+// scheduler reports which source it is currently hunting.
+enum class Source { None, Rds, Wwv, Manual };
+
 }  // namespace airtime

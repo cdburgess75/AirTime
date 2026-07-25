@@ -4,7 +4,7 @@
 
 AirTime runs entirely on an *unmodified* [AMNVOLT ATS Mini V4](docs/PLAN.md#2-target-hardware-owned-verified) pocket receiver. When internet and GPS are gone, time still arrives over the air — **FM RDS** and **WWV** — and AirTime arbitrates those sources into a drift-disciplined internal clock, then serves it to your laptop as **NTP**.
 
-> Status: **core-first development.** The whole platform-independent core — RDS 4A clock-time decode, multi-station voting, Goertzel WWV detection, the disciplined clock, drift learning, the WWV minute-marker detector, and the arbiter — is written and unit-tested on the host: `make test` → **38 tests, 123 checks passing**, including a closed-loop simulation that learns a 25 ppm-slow crystal. No code is flashed to hardware yet: the Milestone 0 safety steps remain a **pre-flash** gate. See [`docs/STATUS.md`](docs/STATUS.md).
+> Status: **core-first development — the core is logically complete.** RDS 4A clock-time decode, multi-station voting, Goertzel WWV detection, the minute-marker gate, the disciplined clock, drift learning, the arbiter, the SNTP responder, and the acquisition/listen scheduler are all written and unit-tested on the host: `make test` → **58 tests, 1903 checks passing**. What remains is the thin firmware adapters and the on-device calibration constant. No code is flashed to hardware yet: the Milestone 0 safety steps remain a **pre-flash** gate. See [`docs/STATUS.md`](docs/STATUS.md).
 
 ---
 
@@ -58,9 +58,9 @@ No GPS module · no external RTC (DS3231) · no WWV date/timecode decode (phase 
 |---|---|---|
 | **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | ⛔ **Pre-flash gate — hardware, owner‑run.** No *flashing* before this is green. |
 | **1 — RDS clock** | Self‑setting clock from broadcast FM | 🟡 Decode + voting done (host) |
-| **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | ⬜ Not started |
-| **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | 🟡 Goertzel done (host) |
-| **4 — Arbiter + confidence** | Full AirTime runtime behavior | 🟡 Arbiter, clock, drift, uncertainty done (host) |
+| **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | 🟡 SNTP + client counting + unsynced flagging done (host) |
+| **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | 🟡 Goertzel, marker gate, band stepping done (host) |
+| **4 — Arbiter + confidence** | Full AirTime runtime behavior | 🟡 Arbiter, clock, drift, uncertainty, scheduler done (host) |
 | **5 — Field acceptance** | Cold start → laptop synced → WSJT‑X DT ≈ 0 all evening | ⬜ Not started |
 
 Detailed milestone contents live in [`docs/PLAN.md §7`](docs/PLAN.md#7-milestones) and are tracked in [`docs/STATUS.md`](docs/STATUS.md).
@@ -106,8 +106,10 @@ AirTime/
 │       ├── wwv_marker.*      WWV minute-marker gate (duration + noise floor)
 │       ├── disciplined_clock.*  Slew/rate-steered internal clock
 │       ├── drift.*           Crystal drift learning
-│       └── arbiter.*         Multi-source arbiter (the heart, §4)
-├── test/                     Dependency-free unit tests (38 checks-heavy cases)
+│       ├── arbiter.*         Multi-source arbiter (the heart, §4)
+│       ├── sntp.*            NTP server packets + client counting
+│       └── scheduler.*       Acquisition, listen windows, band stepping
+├── test/                     Dependency-free unit tests (58 cases)
 └── docs/
     ├── PLAN.md            The canonical v1 specification and build plan
     ├── ARCHITECTURE.md    The core ↔ hardware seam

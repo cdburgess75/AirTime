@@ -19,10 +19,9 @@
 
 #include "disciplined_clock.h"
 #include "drift.h"
+#include "types.h"
 
 namespace airtime {
-
-enum class Source { None, Rds, Wwv, Manual };
 
 enum class Action {
   Seeded,       // cold seed of an unset clock

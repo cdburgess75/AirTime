@@ -21,6 +21,8 @@ product spec.
 | `disciplined_clock.{h,cpp}` | The internal clock: rate + phase steering, slew-not-step | §4 rule 1, M4 |
 | `drift.{h,cpp}` | Crystal drift learning (residual-frequency integrator) | §4 rule 4, M4 |
 | `arbiter.{h,cpp}` | Multi-source arbiter — slew/step rules, two-source gate, uncertainty (the heart) | §4, M4 |
+| `sntp.{h,cpp}` | NTP/SNTP server packets, honest stratum/leap flagging, client counting | §4 rule 5, M2 |
+| `scheduler.{h,cpp}` | Boot acquisition, hourly listen windows, WWV band stepping; enforces the WiFi↔ADC2 invariant | §5, §4, M3/M4 |
 
 ## Testing
 

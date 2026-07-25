@@ -15,10 +15,11 @@ written or verified. The hardware is pushed to the very edges.
    │  esp_timer ──► MonotonicClock ───┼──► │  (platform-independent, pure) │──►   │  Display
    │                                  │    │                               │      │  (UTC + ±unc)
    │  NVS ──► DriftStore / TimeStore ─┘    │  goertzel  rds_ct  wwv_marker │      │
-   │                                       │  station_vote  drift          │──►   │  NTP responder
+   │                                       │  station_vote  drift  sntp    │──►   │  NTP responder
    │  WiFi/SoftAP control ◄────────────────│  disciplined_clock  arbiter   │      │  (SoftAP)
-   │                                       └───────────────────────────────┘      │
-   │                                       (all core modules host-tested)         │
+   │           ▲                           │  scheduler                    │      │
+   │           └───────────────────────────┴───────────────────────────────┘      │
+   │              scheduler owns WiFi up/down — it enforces the ADC2 rule          │
    └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -47,8 +48,11 @@ or a core decision into a hardware action. Anticipated seam:
 ## Why this ordering
 
 - The **ADC2-under-WiFi silicon constraint** (PLAN.md §2) is a *scheduling*
-  decision the arbiter makes — pure logic. Only the `WiFiControl`/`Sampler`
-  adapters touch the constraint directly.
+  decision, so it lives in `scheduler` as pure logic: `Directive.wifi_up` and
+  `Directive.wwv_listening` are never both true, and a test sweeps 8 simulated
+  hours of fixes and operator overrides asserting exactly that. The
+  `WiFiControl`/`Sampler` adapters just obey the directive. A constraint that
+  would otherwise show up as a baffling on-device failure is a unit test instead.
 - The **arbiter** (the heart, §4) is a state machine over `(monotonic_time,
   correction, source, uncertainty)`. Zero hardware. It is the highest-value,
   highest-risk logic, so it gets the most host-side testing before it ever runs
@@ -60,8 +64,8 @@ or a core decision into a hardware action. Anticipated seam:
 
 ## Testing philosophy
 
-Every core module ships with unit tests that pin its contract (38 cases,
-123 checks; `make test`):
+Every core module ships with unit tests that pin its contract (58 cases,
+1903 checks; `make test`):
 - `goertzel` — tone detection, amplitude scaling, off-frequency rejection.
 - `wwv_marker` — 800 ms detection + leading-edge timestamp; short/long/low-power
   rejection (the duration gate).
@@ -74,3 +78,9 @@ Every core module ships with unit tests that pin its contract (38 cases,
 - `arbiter` — slew-vs-step thresholds, two-source gate (support / corroboration /
   operator confirm), uncertainty growth, and a **closed-loop** test where a
   25 ppm-slow crystal is learned and the per-fix offset collapses to < 20 ms/hour.
+- `sntp` — the NTP epoch anchor, timestamp round-trips, request validation,
+  synced (LI 0 / stratum 1 / refid) vs unsynced (LI 3 / stratum 16) responses,
+  and bounded client counting.
+- `scheduler` — boot acquisition, fix-or-timeout promotion, hourly windows,
+  operator overrides, band stepping and learned band preference, plus the
+  **WiFi↔ADC2 invariant sweep**.

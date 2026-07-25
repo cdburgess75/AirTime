@@ -3,11 +3,11 @@
 Live checklist for the build. Milestone contents come from [`PLAN.md §7`](PLAN.md#7-milestones).
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked/gate
 
-Last updated: batch 2 of the host-tested core is green — the disciplined clock,
-drift learning, WWV minute-marker detector, and the arbiter now join batch 1
-(**38 tests / 123 checks** passing via `make test`), including a closed-loop
-simulation where a 25 ppm-slow crystal is learned and the per-fix offset
-collapses to < 20 ms/hour.
+Last updated: batch 3 adds the SNTP responder and the acquisition/listen
+scheduler. The core is now feature-complete against the spec's *logic*:
+**58 tests / 1903 checks** passing via `make test`, including a closed-loop
+simulation where a 25 ppm-slow crystal is learned (offset → < 20 ms/hour) and an
+8-hour sweep proving WiFi and ADC2 are never enabled together (§2).
 
 > **Owner decision (2026-07-25): the Milestone 0 hardware gate is dropped for
 > host-side development.** Because of the bricking risk, we build and unit-test
@@ -41,14 +41,14 @@ collapses to < 20 ms/hour.
 - [ ] Timezone config
 - [ ] Persist last‑known date/time to NVS *(needs `TimeStore` adapter)*
 
-## ⬜ Milestone 2 — Serve
+## 🟡 Milestone 2 — Serve
 **Deliverable: laptop runs FT8 synced to the radio, no internet.**
 
-- [ ] SoftAP up
-- [ ] NTP/SNTP responder
-- [ ] Client counting
-- [ ] Unsynchronized flagging (stratum / leap‑indicator semantics)
-- [ ] OS client setup documented (done in README; revisit after real testing)
+- [ ] SoftAP up *(WiFi adapter — device)*
+- [x] NTP/SNTP responder — `sntp` ✅ host-tested (packet layer; UDP socket is the adapter)
+- [x] Client counting — `sntp::ClientCounter` ✅ host-tested
+- [x] Unsynchronized flagging (LI=3 / stratum 16; uncertainty published as root dispersion) — `sntp` ✅
+- [x] OS client setup documented (README; revisit after real testing)
 
 ## 🟡 Milestone 3 — WWV phase lock
 **Deliverable: clock disciplines itself from HF with FM absent.**
@@ -56,9 +56,9 @@ collapses to < 20 ms/hour.
 - [x] Goertzel 1000 Hz detector — `goertzel` ✅ host-tested (core‑2/IO11 wiring is the `Sampler` adapter)
 - [x] Minute‑marker detection: duration gate (700–900 ms) + noise‑floor threshold + leading‑edge timestamp — `wwv_marker` ✅ host-tested
 - [ ] Leading‑edge timestamp (`esp_timer`, µs)
-- [ ] WiFi‑down listen windows (NTP clients coast through)
-- [ ] Band stepping 5/10/15 MHz with per‑band success + SNR logging
-- [ ] Calibration constant (measure once; validate via WSJT‑X DT)
+- [x] WiFi‑down listen windows (NTP clients coast through) — `scheduler` ✅ host-tested
+- [x] Band stepping 5/10/15 MHz with per‑band success + SNR logging and learned band preference — `scheduler` ✅
+- [ ] Calibration constant *(genuinely hardware-dependent: measure once on-device, validate via WSJT‑X DT)*
 
 ## 🟡 Milestone 4 — Arbiter + confidence
 **Deliverable: the full AirTime runtime behavior of §5.**
@@ -67,8 +67,8 @@ collapses to < 20 ms/hour.
 - [x] Two‑source requirement for large corrections (own support ≥2, cross-source corroboration, or operator confirm) — `arbiter` ✅
 - [x] Drift learning (residual-frequency integrator w/ injected-slew compensation) — `drift` + `arbiter` ✅ (NVS *persistence* still needs `DriftStore` adapter)
 - [x] Uncertainty computation (±(elapsed × drift + source unc); sync flag) — `arbiter` ✅ (display is the `Ui` adapter)
-- [ ] Boot‑time parallel acquisition (RDS vote + WWV band‑step, WiFi down) *(runtime orchestration — needs adapters)*
-- [ ] Hourly listen scheduler *(runtime orchestration — needs adapters)*
+- [x] Boot‑time parallel acquisition (RDS vote + WWV band‑step, WiFi down) — `scheduler` ✅ host-tested
+- [x] Hourly listen scheduler + operator "listen now"/"serve now" overrides — `scheduler` ✅ host-tested
 
 ## ⬜ Milestone 5 — Field acceptance
 **Deliverable: cold start → laptop synced → WSJT‑X DT ≈ 0 across an evening.**
@@ -78,6 +78,23 @@ collapses to < 20 ms/hour.
 - [ ] Multi‑day soak validates drift learning
 
 ---
+
+## What is left (the core logic is done)
+
+Every remaining item needs either the physical device or a decision from the
+owner. The pure logic of the spec is written and host-tested.
+
+**Firmware adapters** (thin shims; see [`ARCHITECTURE.md`](ARCHITECTURE.md)) —
+`RdsSource` (SI4732 RDS registers), `Sampler` (ADC2_CH0 on IO11, core 2),
+`MonotonicClock` (`esp_timer`), `DriftStore`/`TimeStore` (NVS), `NtpResponder`
+(lwIP UDP/123), `WiFiControl` (SoftAP up/down), `Ui` (TFT + encoder).
+
+**Genuinely hardware-dependent** — the calibration constant (§4: SI4732 DSP group
+delay + amp + ADC latency, est. 10–40 ms), the local FM station survey (M1), and
+all of Milestone 5 field acceptance.
+
+**Blocked on the fork** — the device PlatformIO env, which needs the `ats-mini`
+fork decision below.
 
 ## Open setup questions (need an owner decision)
 
