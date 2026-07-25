@@ -41,13 +41,35 @@ esptool version
 
 ### Find the port
 
+**macOS**
+
 ```sh
-ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
+ls /dev/cu.*
 ```
 
-The ESP32-S3 has native USB, so this is usually `/dev/ttyACM0`. Set it once:
+The ESP32-S3 has native USB, so look for `/dev/cu.usbmodem…` (a board with a
+USB-serial bridge instead shows as `cu.SLAB_USBtoUART` or `cu.wchusbserial…`).
+
+> **Use `cu.*`, never `tty.*`.** Both appear for the same device. Opening a
+> `tty.*` device blocks waiting for carrier detect, which looks exactly like a
+> dead board. This is the most common way to waste an hour on a Mac.
 
 ```sh
+export PORT=/dev/cu.usbmodem101      # substitute what you actually saw
+```
+
+macOS does not gate serial access by group — no `dialout`, nothing to add
+yourself to. If the port simply isn't there, it's the cable or the driver
+(see [§8](#8-if-something-goes-wrong)).
+
+Installing esptool on macOS: `brew install esptool` is the least friction.
+(`pip3 install esptool` also works, but Homebrew's Python will refuse with
+`externally-managed-environment` unless you use `pipx install esptool`.)
+
+**Linux**
+
+```sh
+ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
 export PORT=/dev/ttyACM0
 ```
 
@@ -322,8 +344,9 @@ Fill this in and commit it. Future sessions read this table instead of guessing.
 
 **esptool can't see the device**
 - Cable is charge-only → swap it. This is the single most common cause.
-- Wrong port → re-run `ls /dev/ttyACM* /dev/ttyUSB*` with the device unplugged, then plugged.
-- Permissions → `dialout` group (see §0), and log out/in.
+- Wrong port → re-run the listing with the device unplugged, then plugged, and
+  diff the two. On macOS make sure you picked `cu.*`, not `tty.*`.
+- Permissions (Linux only) → `dialout` group (see §0), and log out/in.
 - Something else holds the port → close serial monitors, PlatformIO, Arduino IDE.
 - Force download mode manually (§4a), then retry.
 
