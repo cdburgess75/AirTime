@@ -577,7 +577,8 @@ Conclusions worth carrying forward:
 | **Recovery drill (§4)** | ✅ **PASSED 2026-07-25** | `erase_flash` (3.1 s) → full 16 MB `write_flash` → boots to stock, confirmed by the owner |
 | PSRAM variant | **esp32s3-ospi** (expected) | 8 MB AP_3v3 ⇒ octal; also upstream's `default_profile`. Confirm via About |
 | PSRAM reported in About | | must be non-zero |
-| Stock radio operation | ⬜ confirmed | FM + HF tune, audio out |
+| Stock radio operation | 🟡 boots — **v2.35 Jul 25 2026** | flashed first try via arduino-cli `esp32s3-ospi`; FM/HF/audio check outstanding |
+| Previous firmware on unit | **ats-mini, built Sep 22 2025** | extracted from the backup's app0 — the radio already ran ats-mini |
 | **IO11 tap (§6)** | ⬜ confirmed / ⬜ jumpered | flicker seen? at what volume? |
 | V4 sub-revision concluded | | V4 (pads) or V4a (routed) |
 

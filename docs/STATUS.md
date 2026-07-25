@@ -29,9 +29,10 @@ NTP to a simulated laptop — all with WiFi and ADC2 never live together.
 the recovery drill, the IO11 beat test, a results table to fill in, and troubleshooting.
 
 - [x] Identify chip + partition layout ✅ ESP32-S3 rev v0.2, 16 MB flash, 8 MB PSRAM; partitions reach 0x800000
-- [x] Back up stock firmware ✅ full 16 MB, verified, committed to `firmware/backup/`
+- [x] Back up stock firmware ✅ full 16 MB, verified (`aeb512fe…`). **Kept local only — NOT in the repo**; see decision 2
 - [x] **Recovery drill** ✅ **PASSED** — erased and restored on purpose; boots to stock
-- [ ] Build **stock** `ats-mini` via **Arduino CLI** (profile `esp32s3-ospi`, upstream's default — 8 MB PSRAM ⇒ octal), flash, confirm normal radio operation
+- [x] Build **stock** `ats-mini` via **Arduino CLI** ✅ built + flashed first try (`esp32s3-ospi`); device boots **ATS-Mini F/W v2.35 Jul 25 2026**
+      - [ ] §5d verification outstanding: **PSRAM non-zero in Settings→About**, plus FM/HF tune and audio
 - [ ] IO11 verification — HJBerndt binary, 9999.000 kHz USB beat, backlight flicker = tap confirmed
       - [ ] If no flicker at any volume → original‑V4 pads → one jumper wire (amp pin 8 → IO11), retest
 - [ ] Record outcomes in the [`MILESTONE0.md §7`](MILESTONE0.md#7-record-the-results) table and commit
@@ -134,22 +135,17 @@ into an Arduino sketch build is a Milestone 1 task.
    it is an Arduino sketch built with Arduino CLI, configured by `ats-mini/sketch.yaml`.
    Integration will instead place the core's sources where the sketch build sees them.*
 
-2. **Stock‑firmware backup → in‑repo if this repo is private; checksum-only if public.**
-   A write-once binary is the benign case for git, and the file's whole value is being
-   *available* during a failure — in-repo means offsite, versioned, and auto-cloned into
-   every future session. **Caveat:** it is AMNVOLT's copyrighted binary, so if the repo is
-   public, keep the images out of git (local + cloud backup) and commit only the SHA-256.
-   `SHA256SUMS` goes in the repo either way. No Git LFS — 2 MB doesn't warrant it.
+2. **Stock‑firmware backup → NEVER committed. Local + private backup only; checksum in repo.**
 
-   **Amendment to PLAN.md §7 — CONFIRMED by measurement (2026-07-25).** Back up the
-   **full 16 MB**, not `0x0`+`0x200000`. On the owner's unit the `settings` partition at
-   0x7e0000 is **28.7% populated** with real per-unit configuration; a 2 MB read cannot
-   reach it, and an `erase_flash` followed by a 2 MB restore would wipe it permanently.
-   No partial image is taken at all — a file that looks like a backup but omits a
-   populated partition is worse than none, because it is what gets reached for during a
-   failure.
+   **Reversed 2026-07-25 after inspecting the image.** It was briefly committed here, then
+   removed and purged from history. The `settings` NVS partition inside a full flash image
+   holds **live WiFi credentials** — on this unit `wifissid1` (8 chars) and `wifipass1`
+   (10 chars) were populated — and this repository is **public**. Publishing the image
+   published those credentials. (The vendor-copyright concern flagged originally was the
+   lesser issue; this was the real one.)
 
-   *(An earlier version of this entry argued the 2 MB read would truncate `app0`.
-   Occupancy measurement refuted that — `app0` holds ~1.5 MB and fits below 0x200000.
-   Conclusion unchanged, reasoning corrected; see the note in
-   [`MILESTONE0.md §2`](MILESTONE0.md#2-back-up-the-stock-firmware).)*
+   `.gitignore` now blocks `firmware/backup/*.bin`. Only `SHA256SUMS` and an explanatory
+   README live there. The lesson generalises: **a full device flash image is credential
+   material**, because NVS holds whatever the firmware stored — treat it like a secret,
+   not like a build artifact.
+
