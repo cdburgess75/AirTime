@@ -529,7 +529,7 @@ Conclusions worth carrying forward:
 | MAC | `20:6e:f1:b5:90:30` | unit identity; also predicts the SoftAP BSSID |
 | Highest partition offset | **0x800000 (8 MB)** ✅ | nothing above it; `settings` at 0x7e0000 is 28.7% populated ⇒ **2 MB backup would lose it** |
 | **Full backup SHA-256** | `aeb512fea414b0ecb077c1564ca5298ac18a0e960c2b7342ac29c415a384db89` ✅ | 16777216 bytes, verified 2026-07-25; read in 227.8 s @ 921600 |
-| Backup stored where | `~/airtime-backup/stock-full-16mb.bin` on the owner's Mac | in-repo vs external pending the public/private answer |
+| Backup stored where | **`firmware/backup/stock-full-16mb.bin` in this repo** ✅ + owner's Mac | committed 2026-07-25; checksum re-verified against the recorded SHA-256 after push, and `tools/inspect_flash.py` re-validated the stored copy structurally |
 | BOOT button location | | accessible without opening case? |
 | Forced download mode | ⬜ rehearsed | method that worked |
 | **Recovery drill (§4)** | ⬜ **passed** | erased and restored successfully |
