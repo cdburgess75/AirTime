@@ -159,16 +159,28 @@ Note the highest offset+size any partition reaches. **If anything extends past
 
 ## 2. Back up the stock firmware
 
-**Take the full 16 MB — this is now measured, not precautionary.** The §1 partition
-table on this unit reaches **0x800000 (8 MB)**, and `app0` alone spans 3 MB
-(0x10000–0x310000). PLAN.md §7's `0x0`+`0x200000` read would stop *inside app0*,
-producing an image with a truncated application and no `littlefs` (1.8 MB) and no
-`settings` partition at all.
+**Take the full 16 MB.** Measured on this unit: the `settings` partition at
+**0x7e0000 is 28.7% populated** — real per-unit configuration living four times past
+the 2 MB mark. PLAN.md §7's `0x0`+`0x200000` read cannot capture it, and an
+`erase_flash` followed by a 2 MB restore would wipe it permanently.
 
-> **Do not take a 2 MB image as a "fast restore" option.** It is not restorable.
-> An image that looks like a backup but silently truncates a partition is worse
-> than no backup, because you will reach for it during a failure. One image, full
-> chip, no ambiguity.
+> **Correction to an earlier version of this document.** It claimed a 2 MB read would
+> stop *inside* `app0` and truncate the application. Occupancy measurement refutes
+> that: `app0`'s partition spans 3 MB but holds only ~1.5 MB of image, which fits
+> below 0x200000 — the application would have survived. `settings` is the partition
+> actually lost. The conclusion (full-chip backup) is unchanged; the reason is not.
+> Recorded because a safety document that argues from an assumed layout instead of a
+> measured one is the kind of thing that gets trusted and then fails.
+
+Nothing on this unit lives above 0x800000 (the top 8 MB reads 0.0% used), so an 8 MB
+image would in fact suffice *today*. Full-chip is still the instruction: it costs a
+couple of extra minutes and does not depend on that staying true — notably after §5
+flashes a build whose partition table may differ.
+
+> **Do not take a partial image as a "fast restore" option.** One image, full chip,
+> no ambiguity. A file that looks like a backup but silently omits a populated
+> partition is worse than no backup, because it is what gets reached for during a
+> failure.
 
 ```sh
 mkdir -p ~/airtime-backup && cd ~/airtime-backup
@@ -433,18 +445,32 @@ coredump         data  0x3       0x7f0000   0x10000  0x800000
 highest end offset: 0x800000 (8.00 MB)
 ```
 
+Per-partition occupancy of the backup image (fraction of non-erased bytes):
+
+```
+partition     used  first bytes
+nvs          52.3%  feffffff05000000     real NVS data
+otadata       0.1%  01000000ffffffff     OTA select entry -> boots app0
+app0         49.6%  e906023f8c613740     0xe9 image header; ~1.5 MB of firmware
+app1          0.0%  ffffffffffffffff     empty — no second OTA slot in use
+littlefs      0.0%  01000000f00ffff7     formatted (superblock) but no files
+settings     28.7%  fcffffff00000000     real per-unit configuration
+coredump      0.0%  ffffffffffffffff     no crashes recorded
+
+unpartitioned above 0x800000: 0.0% used
+```
+
 Conclusions worth carrying forward:
 
-- **The 2 MB backup in PLAN.md §7 would not have been restorable.** `app0` spans
-  0x10000–0x310000 (3 MB), so a 2 MB read stops inside it, and `littlefs` (1.8 MB)
-  and `settings` are missed entirely. Full-chip backup is now measured as necessary,
-  not merely prudent. §2 takes one 16 MB image and no partial alternative.
-- **`app0` is 3 MB — that is the size budget for AirTime firmware.** Comfortable.
-- **There is a dual-OTA layout (`app0`/`app1` + `otadata`) and a separate 64 KB
-  `settings` NVS partition**, which on this radio is the likely home of per-unit
-  calibration. If the `ats-mini` fork ships a *different* partition table, flashing
-  it will rewrite this layout and orphan stock `littlefs`/`settings` data. That is
-  recoverable from the §2 image — which is precisely why §2 comes first.
+- **`settings` (0x7e0000, 28.7% used) is why the full backup matters.** It is real
+  per-unit configuration sitting far past the 2 MB mark. `app0`'s content, contrary
+  to an earlier assumption here, fits under 2 MB — see the correction in §2.
+- **`app0` is a 3 MB partition holding ~1.5 MB today**, so AirTime has a comfortable
+  firmware size budget.
+- **`app1` is empty and `otadata` selects app0** — a single active image, with the
+  second OTA slot free.
+- **A different partition table from the `ats-mini` fork would orphan stock
+  `settings`.** Recoverable from the §2 image, which is precisely why §2 comes first.
 
 - **8 MB PSRAM ⇒ the `R8` part ⇒ octal PSRAM ⇒ try the OSPI build first** (§5b).
   Confirm the usual way — non-zero PSRAM in Settings→About — but this should save
@@ -463,7 +489,7 @@ Conclusions worth carrying forward:
 | PSRAM detected | **8 MB (AP_3v3)** ✅ | ⇒ OSPI build variant expected |
 | USB mode | **USB-Serial/JTAG** | auto-reset into download mode works |
 | MAC | `20:6e:f1:b5:90:30` | unit identity; also predicts the SoftAP BSSID |
-| Highest partition offset | **0x800000 (8 MB)** ✅ | app0 alone is 3 MB ⇒ **2 MB backup is NOT restorable**; full-chip required |
+| Highest partition offset | **0x800000 (8 MB)** ✅ | nothing above it; `settings` at 0x7e0000 is 28.7% populated ⇒ **2 MB backup would lose it** |
 | **Full backup SHA-256** | `aeb512fea414b0ecb077c1564ca5298ac18a0e960c2b7342ac29c415a384db89` ✅ | 16777216 bytes, verified 2026-07-25; read in 227.8 s @ 921600 |
 | Backup stored where | `~/airtime-backup/stock-full-16mb.bin` on the owner's Mac | in-repo vs external pending the public/private answer |
 | BOOT button location | | accessible without opening case? |

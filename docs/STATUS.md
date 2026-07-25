@@ -136,11 +136,15 @@ fork decision below.
    public, keep the images out of git (local + cloud backup) and commit only the SHA-256.
    `SHA256SUMS` goes in the repo either way. No Git LFS — 2 MB doesn't warrant it.
 
-   **Amendment to PLAN.md §7 — now CONFIRMED by measurement (2026-07-25).** Back up the
-   **full 16 MB**, not `0x0`+`0x200000`. The partition table read from the owner's unit
-   reaches 0x800000, and `app0` alone spans 3 MB (0x10000–0x310000): a 2 MB read stops
-   *inside the application* and misses `littlefs` (1.8 MB) and the `settings` NVS
-   partition entirely. The 2 MB image is not a valid fast-restore option and is no longer
-   taken at all — an image that looks like a backup but truncates a partition is worse
-   than none, because it gets reached for during a failure. See
-   [`MILESTONE0.md §7`](MILESTONE0.md#1-identification--recorded-2026-07-25).
+   **Amendment to PLAN.md §7 — CONFIRMED by measurement (2026-07-25).** Back up the
+   **full 16 MB**, not `0x0`+`0x200000`. On the owner's unit the `settings` partition at
+   0x7e0000 is **28.7% populated** with real per-unit configuration; a 2 MB read cannot
+   reach it, and an `erase_flash` followed by a 2 MB restore would wipe it permanently.
+   No partial image is taken at all — a file that looks like a backup but omits a
+   populated partition is worse than none, because it is what gets reached for during a
+   failure.
+
+   *(An earlier version of this entry argued the 2 MB read would truncate `app0`.
+   Occupancy measurement refuted that — `app0` holds ~1.5 MB and fits below 0x200000.
+   Conclusion unchanged, reasoning corrected; see the note in
+   [`MILESTONE0.md §2`](MILESTONE0.md#2-back-up-the-stock-firmware).)*
