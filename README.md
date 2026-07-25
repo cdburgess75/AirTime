@@ -4,7 +4,7 @@
 
 AirTime runs entirely on an *unmodified* [AMNVOLT ATS Mini V4](docs/PLAN.md#2-target-hardware-owned-verified) pocket receiver. When internet and GPS are gone, time still arrives over the air — **FM RDS** and **WWV** — and AirTime arbitrates those sources into a drift-disciplined internal clock, then serves it to your laptop as **NTP**.
 
-> Status: **core-first development — the core is logically complete.** RDS 4A clock-time decode, multi-station voting, Goertzel WWV detection, the minute-marker gate, the disciplined clock, drift learning, the arbiter, the SNTP responder, and the acquisition/listen scheduler are all written and unit-tested on the host: `make test` → **58 tests, 1903 checks passing**. What remains is the thin firmware adapters and the on-device calibration constant. No code is flashed to hardware yet: the Milestone 0 safety steps remain a **pre-flash** gate. See [`docs/STATUS.md`](docs/STATUS.md).
+> Status: **the whole device runs — in simulation.** Every piece of AirTime's logic is written and host-tested (`make test` → **81 tests, 2151 checks passing**), and a simulated ATS Mini drives the real application end to end: it cold-starts from RDS, outvotes a station transmitting wrong time, lets WWV refine the fix, learns its crystal, and serves accurate stratum-1 NTP — with WiFi and the ADC never live at the same time. What remains is the thin firmware adapters and the one calibration constant only hardware can supply. Nothing is flashed yet: the Milestone 0 safety steps remain a **pre-flash** gate. See [`docs/STATUS.md`](docs/STATUS.md).
 
 ---
 
@@ -108,8 +108,11 @@ AirTime/
 │       ├── drift.*           Crystal drift learning
 │       ├── arbiter.*         Multi-source arbiter (the heart, §4)
 │       ├── sntp.*            NTP server packets + client counting
-│       └── scheduler.*       Acquisition, listen windows, band stepping
-├── test/                     Dependency-free unit tests (58 cases)
+│       ├── scheduler.*       Acquisition, listen windows, band stepping
+│       ├── hal.h             The hardware seam (interfaces)
+│       ├── display.*         The §5 display lines
+│       └── app.*             AirTimeApp — wires it all to the seam
+├── test/                     Unit tests (81 cases) + fakes.h, a simulated ATS Mini
 └── docs/
     ├── PLAN.md            The canonical v1 specification and build plan
     ├── ARCHITECTURE.md    The core ↔ hardware seam

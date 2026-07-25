@@ -8,9 +8,9 @@
 // latest CT report from each receivable station and reports the consensus clock
 // offset plus how many distinct stations agree.
 //
-// A "report" says: at local monotonic time rx_monotonic_ms, station `pi`
-// asserted UTC was asserted_utc_ms. The implied clock offset is therefore
-// (asserted_utc_ms - rx_monotonic_ms). Stations that agree produce offsets that
+// A "report" says: at local monotonic time rx_monotonic_us, station `pi`
+// asserted UTC was asserted_utc_us. The implied clock offset is therefore
+// (asserted_utc_us - rx_monotonic_us). Stations that agree produce offsets that
 // cluster; a lone wrong station sits alone and is outvoted.
 //
 // Fixed-capacity, zero-heap — suitable for the firmware as-is.
@@ -22,13 +22,13 @@ namespace airtime {
 
 struct CtReport {
   uint16_t pi;             // station PI code (station identity; dedup key)
-  int64_t asserted_utc_ms; // UTC the station reported, in ms
-  int64_t rx_monotonic_ms; // local monotonic time at reception, in ms
+  int64_t asserted_utc_us; // UTC the station reported (µs)
+  int64_t rx_monotonic_us; // local monotonic time at reception (µs)
 };
 
 struct VoteResult {
   bool has_consensus;    // true iff >=2 distinct stations agree within tolerance
-  int64_t offset_ms;     // consensus clock offset (median of the winning cluster)
+  int64_t offset_us;     // consensus clock offset (median of the winning cluster)
   int agreeing_stations; // distinct stations in the winning cluster
   int total_reports;     // reports considered
 };
@@ -44,10 +44,15 @@ class StationVoter {
   bool add(const CtReport& r);
 
   // Winning cluster = the set of reports whose implied offsets all fall within
-  // tolerance_ms of a common member, maximizing distinct-station count.
-  // With one report: has_consensus=false but offset_ms/agreeing_stations still
+  // tolerance_us of a common member, maximizing distinct-station count.
+  // With one report: has_consensus=false but offset_us/agreeing_stations still
   // describe that single source (usable for small single-source slews).
-  VoteResult vote(int64_t tolerance_ms) const;
+  VoteResult vote(int64_t tolerance_us) const;
+
+  // Drop reports received before `cutoff_mono_us`, so a station that goes off
+  // air (or drifts out of range) stops voting instead of carrying a stale
+  // assertion forever.
+  void prune(int64_t cutoff_mono_us);
 
   std::size_t size() const { return count_; }
 

@@ -64,8 +64,30 @@ or a core decision into a hardware action. Anticipated seam:
 
 ## Testing philosophy
 
-Every core module ships with unit tests that pin its contract (58 cases,
-1903 checks; `make test`):
+### The simulated device
+
+Because the seam (`hal.h`) is injected, the **entire device runs on the host**.
+`test/fakes.h` implements a simulated ATS Mini — a crystal drifting at a
+configurable ppm, FM stations transmitting real RDS group 4A clock-time (correctly
+or otherwise), WWV minute markers that only arrive on propagating bands, a receive
+chain with latency, WiFi, and NVS — and `test/test_app.cpp` drives the **real**
+`AirTimeApp` against it. Those tests cover cold start, outvoting a lying station,
+WWV refining RDS's coarse fix, drift learning and persistence, warm boot, serving
+accurate NTP to a simulated laptop, and the ADC2/WiFi invariant end to end.
+
+This is what makes hardware bring-up cheap: when the adapters are written, the
+logic they feed has already been exercised for simulated hours.
+
+> A cautionary note now embedded in the fake: `Sim::advance` derives monotonic
+> time from *total* elapsed time, never by accumulating a per-step delta. At 10 ms
+> steps a 28 ppm error is 0.28 µs per step, which rounds to zero every time — the
+> first version of the fake silently simulated a perfect crystal and made the
+> drift-learning test fail against correct application code.
+
+### Coverage
+
+Every core module ships with unit tests that pin its contract (81 cases,
+2151 checks; `make test`):
 - `goertzel` — tone detection, amplitude scaling, off-frequency rejection.
 - `wwv_marker` — 800 ms detection + leading-edge timestamp; short/long/low-power
   rejection (the duration gate).
@@ -84,3 +106,7 @@ Every core module ships with unit tests that pin its contract (58 cases,
 - `scheduler` — boot acquisition, fix-or-timeout promotion, hourly windows,
   operator overrides, band stepping and learned band preference, plus the
   **WiFi↔ADC2 invariant sweep**.
+- `wwvPhaseCorrection` — nearest-minute locking, calibration-constant handling,
+  and refusal beyond the acceptance window (it must never guess a minute).
+- `display` — the §5 lines verbatim, including the blunt unsynced form.
+- `app` — the end-to-end simulations described above.

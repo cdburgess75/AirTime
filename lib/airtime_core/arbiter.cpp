@@ -102,6 +102,22 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
   return r;
 }
 
+void Arbiter::restore(int64_t mono_us, int64_t utc_us, int64_t uncertainty_us) {
+  clock_.set(mono_us, utc_us);
+  last_accepted_mono_ = mono_us;
+  last_offset_ = 0;
+  last_injected_ = clock_.totalInjectedUs();
+  last_sync_mono_ = mono_us;
+  // Deliberately large: this is a memory, not a measurement. isSynced() stays
+  // false until a real source lands.
+  last_source_unc_ = uncertainty_us;
+}
+
+void Arbiter::seedDriftPpm(int64_t mono_us, double ppm) {
+  drift_.setPpm(ppm);
+  clock_.setRatePpm(mono_us, drift_.ppm());
+}
+
 int64_t Arbiter::uncertaintyUs(int64_t mono_us) const {
   if (!clock_.isSet()) return INT64_MAX / 4;
   int64_t dt = mono_us - last_sync_mono_;

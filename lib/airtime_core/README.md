@@ -23,6 +23,9 @@ product spec.
 | `arbiter.{h,cpp}` | Multi-source arbiter — slew/step rules, two-source gate, uncertainty (the heart) | §4, M4 |
 | `sntp.{h,cpp}` | NTP/SNTP server packets, honest stratum/leap flagging, client counting | §4 rule 5, M2 |
 | `scheduler.{h,cpp}` | Boot acquisition, hourly listen windows, WWV band stepping; enforces the WiFi↔ADC2 invariant | §5, §4, M3/M4 |
+| `hal.h` | The hardware seam — interfaces the firmware implements and tests fake | — |
+| `display.{h,cpp}` | The §5 display lines (UTC + honest uncertainty/status) | §5 |
+| `app.{h,cpp}` | `AirTimeApp` — wires every module to the seam; the whole device | §4, §5 |
 
 ## Testing
 

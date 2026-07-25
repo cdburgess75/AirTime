@@ -4,6 +4,25 @@
 
 namespace airtime {
 
+bool wwvPhaseCorrection(int64_t clock_utc_at_edge_us, int64_t calibration_us,
+                        int64_t* offset_us, int64_t max_offset_us) {
+  constexpr int64_t kMinute = 60000000;
+
+  // Back out the receive-chain latency: this is what our clock read at the
+  // instant WWV actually transmitted the mark.
+  const int64_t x = clock_utc_at_edge_us - calibration_us;
+
+  // Distance to the nearest minute boundary, signed (how much to add to the
+  // clock). Floor-mod keeps this correct for negative x too.
+  int64_t rem = x % kMinute;
+  if (rem < 0) rem += kMinute;
+  const int64_t offset = (rem <= kMinute / 2) ? -rem : (kMinute - rem);
+
+  if (offset > max_offset_us || offset < -max_offset_us) return false;
+  if (offset_us != nullptr) *offset_us = offset;
+  return true;
+}
+
 WwvMarkerDetector::WwvMarkerDetector(const WwvMarkerConfig& cfg) : cfg_(cfg) {}
 
 void WwvMarkerDetector::reset() {

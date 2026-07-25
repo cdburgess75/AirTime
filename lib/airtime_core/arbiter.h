@@ -63,6 +63,17 @@ class Arbiter {
   // Feed a time fix; returns what was done and the resulting state.
   ArbiterUpdate update(const TimeFix& fix);
 
+  // Warm boot: seed the clock from persisted last-known time WITHOUT claiming a
+  // sync. `uncertainty_us` should reflect how stale the stored value is, so the
+  // device honestly reports "UNSYNCED — last-known + drift" (§5) and NTP keeps
+  // flagging itself unusable until a real source arrives. Enough to let WWV
+  // phase-lock work, which needs the clock within half a minute.
+  void restore(int64_t mono_us, int64_t utc_us, int64_t uncertainty_us);
+
+  // Seed the learned crystal correction from NVS (PLAN.md §4 rule 4) so a
+  // characterized crystal keeps its characterization across a power cycle.
+  void seedDriftPpm(int64_t mono_us, double ppm);
+
   // Operator "confirm the big jump" action on the encoder. Consumed by the next
   // accepted large correction.
   void setOperatorConfirm(bool v) { operator_confirm_ = v; }

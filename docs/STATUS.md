@@ -3,11 +3,15 @@
 Live checklist for the build. Milestone contents come from [`PLAN.md §7`](PLAN.md#7-milestones).
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked/gate
 
-Last updated: batch 3 adds the SNTP responder and the acquisition/listen
-scheduler. The core is now feature-complete against the spec's *logic*:
-**58 tests / 1903 checks** passing via `make test`, including a closed-loop
-simulation where a 25 ppm-slow crystal is learned (offset → < 20 ms/hour) and an
-8-hour sweep proving WiFi and ADC2 are never enabled together (§2).
+Last updated: batch 4 adds the hardware seam (`hal.h`), the §5 display
+formatting, the WWV phase-correction helper, and **`AirTimeApp`** — the wiring
+that makes a device — plus a **fully simulated ATS Mini** (`test/fakes.h`) that
+runs the real app end to end. **81 tests / 2151 checks** passing via `make test`.
+
+The simulated device cold-starts from RDS, outvotes a lying station, lets WWV
+refine the coarse fix, learns its crystal (27.99 ppm measured against a true
+28 ppm), survives a warm boot honestly unsynced, and serves accurate stratum-1
+NTP to a simulated laptop — all with WiFi and ADC2 never live together.
 
 > **Owner decision (2026-07-25): the Milestone 0 hardware gate is dropped for
 > host-side development.** Because of the bricking risk, we build and unit-test
@@ -91,10 +95,19 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 Every remaining item needs either the physical device or a decision from the
 owner. The pure logic of the spec is written and host-tested.
 
-**Firmware adapters** (thin shims; see [`ARCHITECTURE.md`](ARCHITECTURE.md)) —
-`RdsSource` (SI4732 RDS registers), `Sampler` (ADC2_CH0 on IO11, core 2),
-`MonotonicClock` (`esp_timer`), `DriftStore`/`TimeStore` (NVS), `NtpResponder`
-(lwIP UDP/123), `WiFiControl` (SoftAP up/down), `Ui` (TFT + encoder).
+**Firmware adapters** — the interfaces are now *defined* in
+[`hal.h`](../lib/airtime_core/hal.h) and *faked* in [`fakes.h`](../test/fakes.h),
+so each one is a fill-in-the-blank against a contract the tests already exercise:
+
+| Interface | Device implementation |
+|---|---|
+| `IMonotonicClock` | `esp_timer_get_time()` |
+| `IRdsSource` | SI4732 RDS group registers |
+| `IWwvSampler` | ADC2_CH0 on IO11 + our `Goertzel`, pinned to core 2 |
+| `IWiFiControl` | SoftAP up/down |
+| `ITimeStore` | NVS |
+| *(not an interface)* | UDP/123 socket → `AirTimeApp::handleNtpRequest` |
+| *(not an interface)* | TFT + encoder → `AirTimeApp::displayState` / operator calls |
 
 **Genuinely hardware-dependent** — the calibration constant (§4: SI4732 DSP group
 delay + amp + ADC latency, est. 10–40 ms), the local FM station survey (M1), and

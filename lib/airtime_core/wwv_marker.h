@@ -35,6 +35,25 @@ struct WwvMarker {
   real peak_power;          // peak normalized power during the tone
 };
 
+// Turn a detected minute marker into a phase correction.
+//
+// WWV gives phase, never date (PLAN.md §3), so this answers only "how far is the
+// clock from the nearest minute boundary?" — which means the clock must already
+// be roughly right (within half a minute) for the answer to be meaningful. A
+// marker cannot cold-start the clock; RDS, warm-boot memory, or manual entry does
+// that.
+//
+// clock_utc_at_edge_us : our UTC estimate at the marker's leading edge
+// calibration_us       : fixed latency of the receive chain — SI4732 DSP group
+//                        delay + amplifier + ADC (PLAN.md §4; measured once on
+//                        hardware). The tone is observed this much late.
+// max_offset_us        : reject beyond this (default 30 s — past half a minute we
+//                        would be locking onto the wrong minute).
+//
+// Returns false if the implied correction exceeds max_offset_us.
+bool wwvPhaseCorrection(int64_t clock_utc_at_edge_us, int64_t calibration_us,
+                        int64_t* offset_us, int64_t max_offset_us = 30000000);
+
 class WwvMarkerDetector {
  public:
   explicit WwvMarkerDetector(const WwvMarkerConfig& cfg = WwvMarkerConfig{});
