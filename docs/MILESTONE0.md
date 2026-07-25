@@ -62,9 +62,36 @@ macOS does not gate serial access by group — no `dialout`, nothing to add
 yourself to. If the port simply isn't there, it's the cable or the driver
 (see [§8](#8-if-something-goes-wrong)).
 
-Installing esptool on macOS: `brew install esptool` is the least friction.
-(`pip3 install esptool` also works, but Homebrew's Python will refuse with
-`externally-managed-environment` unless you use `pipx install esptool`.)
+**Installing esptool on macOS.** No Homebrew required. Check for Python first:
+
+```sh
+python3 --version
+```
+
+- **Prints a version** → install into your user directory (no admin, no
+  virtualenv, nothing system-wide):
+  ```sh
+  python3 -m pip install --user esptool
+  export PATH="$PATH:$(python3 -c 'import site; print(site.USER_BASE)')/bin"
+  esptool version
+  ```
+  Add that `export` line to `~/.zshrc` to make it stick.
+
+- **Command not found**, or it opens a dialog → install Apple's Command Line
+  Tools (gives you `python3` and `git`), then retry the above:
+  ```sh
+  xcode-select --install
+  ```
+
+- **If Homebrew's Python is what you have**, `pip install` may refuse with
+  `externally-managed-environment`. Use `pipx install esptool`, or add
+  `--break-system-packages` to the `--user` install above.
+
+A standalone prebuilt binary is also published on Espressif's esptool GitHub
+releases page (pick the macOS asset matching your CPU — arm64 for Apple Silicon,
+amd64 for Intel). If you go that route, macOS quarantines downloaded binaries;
+clear it with `xattr -d com.apple.quarantine ./esptool` or the first run will be
+blocked.
 
 **Linux**
 
