@@ -31,7 +31,7 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 - [x] Identify chip + partition layout ✅ ESP32-S3 rev v0.2, 16 MB flash, 8 MB PSRAM; partitions reach 0x800000
 - [x] Back up stock firmware ✅ full 16 MB, verified, committed to `firmware/backup/`
 - [x] **Recovery drill** ✅ **PASSED** — erased and restored on purpose; boots to stock
-- [ ] Build **stock** `ats-mini` (**try OSPI first** — 8 MB PSRAM ⇒ octal), flash, confirm normal radio operation
+- [ ] Build **stock** `ats-mini` via **Arduino CLI** (profile `esp32s3-ospi`, upstream's default — 8 MB PSRAM ⇒ octal), flash, confirm normal radio operation
 - [ ] IO11 verification — HJBerndt binary, 9999.000 kHz USB beat, backlight flicker = tap confirmed
       - [ ] If no flicker at any volume → original‑V4 pads → one jumper wire (amp pin 8 → IO11), retest
 - [ ] Record outcomes in the [`MILESTONE0.md §7`](MILESTONE0.md#7-record-the-results) table and commit
@@ -39,7 +39,7 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 > **Green when:** the recovery drill passed *and* the IO11 row is resolved (routed, or
 > jumpered and then confirmed).
 >
-> Claude can help with: subtree setup, PlatformIO config, exact esptool commands, and
+> Claude can help with: subtree setup, Arduino CLI config, exact esptool commands, and
 > documenting results. The flashing/probing itself is yours.
 
 ## 🟡 Milestone 1 — RDS clock
@@ -66,7 +66,6 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 
 - [x] Goertzel 1000 Hz detector — `goertzel` ✅ host-tested (core‑2/IO11 wiring is the `Sampler` adapter)
 - [x] Minute‑marker detection: duration gate (700–900 ms) + noise‑floor threshold + leading‑edge timestamp — `wwv_marker` ✅ host-tested
-- [ ] Leading‑edge timestamp (`esp_timer`, µs)
 - [x] WiFi‑down listen windows (NTP clients coast through) — `scheduler` ✅ host-tested
 - [x] Band stepping 5/10/15 MHz with per‑band success + SNR logging and learned band preference — `scheduler` ✅
 - [ ] Calibration constant *(genuinely hardware-dependent: measure once on-device, validate via WSJT‑X DT)*
@@ -113,8 +112,10 @@ so each one is a fill-in-the-blank against a contract the tests already exercise
 delay + amp + ADC latency, est. 10–40 ms), the local FM station survey (M1), and
 all of Milestone 5 field acceptance.
 
-**Blocked on the fork** — the device PlatformIO env, which needs the `ats-mini`
-fork decision below.
+**Firmware base** — `esp32-si4732/ats-mini` is vendored at `firmware/ats-mini/` as a
+git subtree. It builds with **Arduino CLI**, not PlatformIO as PLAN.md §6 assumed; the
+repo's own `platformio.ini` covers the host test build only. Integrating `airtime_core`
+into an Arduino sketch build is a Milestone 1 task.
 
 ## Setup decisions
 
@@ -125,12 +126,16 @@ fork decision below.
    core across two repos and adds a clone-time failure mode (every remote session starts
    from a fresh clone; a missed `--recursive` yields a silently empty directory).
    Vendoring is simple but strands us against an active upstream. Subtree gives one repo,
-   one clone, *and* a real merge path (`git subtree pull`). One line added to the vendored
-   `platformio.ini` (`lib_extra_dirs = ../../lib`) picks up `airtime_core` unchanged.
-   Commands in [`MILESTONE0.md §5a`](MILESTONE0.md#5a-bring-the-firmware-base-into-the-repo).
+   one clone, *and* a real merge path (`git subtree pull`).
+   **Done 2026-07-25** — subtree added at `firmware/ats-mini/`.
+
+   *Correction to this entry's original plan: it assumed a vendored `platformio.ini` that
+   would pick up `airtime_core` via `lib_extra_dirs`. Upstream has no `platformio.ini` —
+   it is an Arduino sketch built with Arduino CLI, configured by `ats-mini/sketch.yaml`.
+   Integration will instead place the core's sources where the sketch build sees them.*
 
 2. **Stock‑firmware backup → in‑repo if this repo is private; checksum-only if public.**
-   A write-once 2 MB blob is the benign case for git, and the file's whole value is being
+   A write-once binary is the benign case for git, and the file's whole value is being
    *available* during a failure — in-repo means offsite, versioned, and auto-cloned into
    every future session. **Caveat:** it is AMNVOLT's copyrighted binary, so if the repo is
    public, keep the images out of git (local + cloud backup) and commit only the SHA-256.

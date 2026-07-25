@@ -56,7 +56,7 @@ No GPS module · no external RTC (DS3231) · no WWV date/timecode decode (phase 
 
 | Milestone | Deliverable | State |
 |---|---|---|
-| **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | ⛔ **Pre-flash gate — hardware, owner‑run.** Runbook ready: [`docs/MILESTONE0.md`](docs/MILESTONE0.md) |
+| **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | 🟡 **§1–§4 done — recovery drill PASSED.** §5 build + §6 IO11 remain: [`docs/MILESTONE0.md`](docs/MILESTONE0.md) |
 | **1 — RDS clock** | Self‑setting clock from broadcast FM | 🟡 Decode + voting done (host) |
 | **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | 🟡 SNTP + client counting + unsynced flagging done (host) |
 | **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | 🟡 Goertzel, marker gate, band stepping done (host) |
@@ -68,8 +68,8 @@ Detailed milestone contents live in [`docs/PLAN.md §7`](docs/PLAN.md#7-mileston
 ## Build
 
 - **Base:** a fork of [`esp32-si4732/ats-mini`](https://github.com/esp32-si4732/ats-mini) — active community firmware for this exact hardware, WiFi/web stack included.
-- **Toolchain:** [PlatformIO](https://platformio.org/), driven from Claude Code on Linux.
-- **PSRAM variant matters:** the fork ships OSPI and QSPI builds; the correct one shows nonzero PSRAM in Settings→About. Determine which this V4 needs before the first flash.
+- **Toolchain:** [Arduino CLI](https://arduino.github.io/arduino-cli/) for the device build; plain `g++`/`make` for the host core and its tests.
+- **PSRAM variant:** upstream ships `esp32s3-ospi` and `esp32s3-qspi` profiles. This unit reports 8 MB PSRAM (the `R8`, octal), so **OSPI** — which is also upstream's default. Confirm via non-zero PSRAM in Settings→About.
 
 ## Using AirTime as your time source
 
@@ -97,7 +97,7 @@ Confirm success in WSJT‑X: the **DT column** should cluster near zero.
 AirTime/
 ├── README.md              You are here
 ├── Makefile               Host build + unit tests (make test)
-├── platformio.ini         PlatformIO envs (native now; device env in M1)
+├── platformio.ini         Host test env only (device build uses Arduino CLI)
 ├── lib/
 │   └── airtime_core/         Platform-independent core (no Arduino/ESP-IDF)
 │       ├── goertzel.*        1000 Hz WWV tone detector
@@ -115,6 +115,9 @@ AirTime/
 ├── test/                     Unit tests (81 cases) + fakes.h, a simulated ATS Mini
 ├── tools/
 │   └── inspect_flash.py   Validate / compare ESP32 flash images (Milestone 0)
+├── firmware/
+│   ├── ats-mini/          Upstream esp32-si4732/ats-mini (git subtree)
+│   └── backup/            Verified stock firmware image + checksum
 └── docs/
     ├── PLAN.md            The canonical v1 specification and build plan
     ├── ARCHITECTURE.md    The core ↔ hardware seam
@@ -122,8 +125,10 @@ AirTime/
     └── STATUS.md          Live milestone / task tracker
 ```
 
-The `ats-mini` firmware base is brought in as a **git subtree** at `firmware/ats-mini/`
-during Milestone 0 (§5a of the runbook); it consumes `lib/airtime_core` unchanged.
+The `ats-mini` firmware base is vendored as a **git subtree** at `firmware/ats-mini/`,
+alongside the verified stock-firmware backup in `firmware/backup/`. Note it builds with
+**Arduino CLI** (`ats-mini/sketch.yaml`), not PlatformIO — see
+[`docs/MILESTONE0.md §5`](docs/MILESTONE0.md).
 
 Device firmware (the thin hardware adapters that feed the core) is added starting
 in Milestone 1; it consumes `lib/airtime_core` unchanged and is only *flashed*

@@ -29,7 +29,7 @@ while everything is still working.
 | | |
 |---|---|
 | Hardware | ATS Mini V4, USB-C data cable (**not** charge-only), charged battery |
-| Software | Python 3 and `esptool` ≥ 4.0 (PlatformIO is not needed until §5) |
+| Software | Python 3 and `esptool` ≥ 4.0 (Arduino CLI is not needed until §5) |
 | Time | ~45 min, unhurried |
 | Optional | HF antenna on the SMA port (needed for §6; evening is best) |
 
@@ -375,45 +375,78 @@ recoverable by repeating §4c.
 Prove the toolchain end-to-end with *unmodified* upstream code, so that any later
 problem is unambiguously ours and not the build.
 
-### 5a. Bring the firmware base into the repo
+> ### Correction to PLAN.md §6: the toolchain is **arduino-cli**, not PlatformIO
+>
+> `esp32-si4732/ats-mini` has no `platformio.ini`. It is an Arduino sketch built with
+> **Arduino CLI**, configured by `ats-mini/sketch.yaml` (profiles, pinned library
+> versions) with a thin `Makefile` wrapper. PLAN.md §6's "Build: PlatformIO" is simply
+> mistaken about this upstream. This is a factual correction, not a reopened decision.
+>
+> The repo's own `platformio.ini` remains valid and unaffected — it builds and tests
+> `lib/airtime_core` on the host (`make test`). Only the *device* build changes.
 
-Per the project decision, upstream is vendored with **git subtree** — one clone, no
-submodule ceremony, and a real upstream merge path later:
+### 5a. The firmware base is already vendored
 
-```sh
-git subtree add --prefix=firmware/ats-mini \
-    https://github.com/esp32-si4732/ats-mini main --squash
-```
+`firmware/ats-mini/` is a **git subtree** of `esp32-si4732/ats-mini` — one clone, no
+submodule ceremony, with a real upstream merge path. It is already committed, so a
+`git pull` is all you need.
 
-Future upstream updates, when you want them:
-
-```sh
-git subtree pull --prefix=firmware/ats-mini \
-    https://github.com/esp32-si4732/ats-mini main --squash
-```
-
-### 5b. Pick the PSRAM variant — this matters
-
-The upstream project ships **OSPI** and **QSPI** builds. The wrong one boots but reports
-**zero PSRAM**. Check the envs available:
+To take upstream changes later:
 
 ```sh
-cd firmware/ats-mini
-grep -E '^\[env' platformio.ini
+git subtree pull --prefix=firmware/ats-mini https://github.com/esp32-si4732/ats-mini main --squash
 ```
 
-Build and flash one variant, unmodified:
+### 5b. Install Arduino CLI
+
+Upstream's [documented method](https://arduino.github.io/arduino-cli/1.2/installation/):
 
 ```sh
-pio run -e <variant> -t upload --upload-port "$PORT"
+mkdir -p ~/bin
+curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=~/bin sh
+export PATH="$HOME/bin:$PATH"
+arduino-cli version
 ```
 
-### 5c. Verify
+### 5c. Build and flash stock, unmodified
 
-On the device: **Settings → About**. **PSRAM must be non-zero.** If it reads zero, flash
-the other variant and re-check. Record the winner in §7 — every future build uses it.
+From the **subtree root** (`firmware/ats-mini/`). The first run downloads the ESP32
+core and the pinned libraries, so expect several minutes:
 
-Confirm normal radio operation: FM tunes, HF tunes, audio out of the speaker.
+```sh
+arduino-cli compile --clean -e -p /dev/cu.usbmodem14401 -u ats-mini
+```
+
+`sketch.yaml` sets `default_profile: esp32s3-ospi`, so this builds the **OSPI** variant
+automatically — which is the one this hardware needs (see §5d). Nothing is modified;
+this is upstream's code exactly as published.
+
+If the library index or core download fails, refresh the indexes and retry:
+
+```sh
+arduino-cli core update-index
+arduino-cli lib update-index
+```
+
+### 5d. Verify
+
+**PSRAM variant.** `sketch.yaml` defines two profiles — `esp32s3-ospi` (`PSRAM=opi`) and
+`esp32s3-qspi` (`PSRAM=enabled`). §1 measured **8 MB PSRAM (AP_3v3)** on this unit, i.e.
+the `R8` part, which is octal — matching upstream's own default. Confirm on the device:
+**Settings → About**, where **PSRAM must be non-zero**. If it reads zero, build the other
+profile and re-check:
+
+```sh
+arduino-cli compile --clean -e -m esp32s3-qspi -p /dev/cu.usbmodem14401 -u ats-mini
+```
+
+Then confirm normal radio operation: FM tunes, HF tunes, audio out of the speaker.
+
+> **The partition table will not change.** `ats-mini/partitions.csv` is byte-for-byte
+> identical to what §1 read off the device, so `settings` and `littlefs` are untouched
+> by this flash. That identity also strongly suggests **the radio already ships with
+> ats-mini firmware** — Settings → About will show a version string if so. The §2 backup
+> covers you regardless.
 
 ---
 
@@ -535,7 +568,7 @@ Conclusions worth carrying forward:
 | BOOT button location | not located / not needed | auto-reset worked every time; case never opened |
 | Forced download mode | **automatic** ✅ | esptool DTR/RTS auto-reset over USB-Serial/JTAG; manual BOOT method never required |
 | **Recovery drill (§4)** | ✅ **PASSED 2026-07-25** | `erase_flash` (3.1 s) → full 16 MB `write_flash` → boots to stock, confirmed by the owner |
-| PSRAM variant | | OSPI / QSPI — the one showing non-zero PSRAM |
+| PSRAM variant | **esp32s3-ospi** (expected) | 8 MB AP_3v3 ⇒ octal; also upstream's `default_profile`. Confirm via About |
 | PSRAM reported in About | | must be non-zero |
 | Stock radio operation | ⬜ confirmed | FM + HF tune, audio out |
 | **IO11 tap (§6)** | ⬜ confirmed / ⬜ jumpered | flicker seen? at what volume? |
