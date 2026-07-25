@@ -3,8 +3,11 @@
 Live checklist for the build. Milestone contents come from [`PLAN.md §7`](PLAN.md#7-milestones).
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked/gate
 
-Last updated: batch 1 of the host-tested core is green — Goertzel, RDS 4A
-decode, and multi-station voting (16 tests / 78 checks passing via `make test`).
+Last updated: batch 2 of the host-tested core is green — the disciplined clock,
+drift learning, WWV minute-marker detector, and the arbiter now join batch 1
+(**38 tests / 123 checks** passing via `make test`), including a closed-loop
+simulation where a 25 ppm-slow crystal is learned and the per-fix offset
+collapses to < 20 ms/hour.
 
 > **Owner decision (2026-07-25): the Milestone 0 hardware gate is dropped for
 > host-side development.** Because of the bricking risk, we build and unit-test
@@ -51,21 +54,21 @@ decode, and multi-station voting (16 tests / 78 checks passing via `make test`).
 **Deliverable: clock disciplines itself from HF with FM absent.**
 
 - [x] Goertzel 1000 Hz detector — `goertzel` ✅ host-tested (core‑2/IO11 wiring is the `Sampler` adapter)
-- [ ] Minute‑marker detection: duration gate (700–900 ms) + noise‑floor threshold *(batch 2: `wwv_marker`)*
+- [x] Minute‑marker detection: duration gate (700–900 ms) + noise‑floor threshold + leading‑edge timestamp — `wwv_marker` ✅ host-tested
 - [ ] Leading‑edge timestamp (`esp_timer`, µs)
 - [ ] WiFi‑down listen windows (NTP clients coast through)
 - [ ] Band stepping 5/10/15 MHz with per‑band success + SNR logging
 - [ ] Calibration constant (measure once; validate via WSJT‑X DT)
 
-## ⬜ Milestone 4 — Arbiter + confidence
+## 🟡 Milestone 4 — Arbiter + confidence
 **Deliverable: the full AirTime runtime behavior of §5.**
 
-- [ ] Slew/step rules (<500 ms slew; ≥500 ms needs 2 sources or operator confirm)
-- [ ] Two‑source requirement for large corrections
-- [ ] Drift learning → NVS
-- [ ] Uncertainty computation + always‑on display
-- [ ] Boot‑time parallel acquisition (RDS vote + WWV band‑step, WiFi down)
-- [ ] Hourly listen scheduler
+- [x] Slew/step rules (<500 ms slew; ≥500 ms needs 2 sources or operator confirm) — `arbiter` ✅
+- [x] Two‑source requirement for large corrections (own support ≥2, cross-source corroboration, or operator confirm) — `arbiter` ✅
+- [x] Drift learning (residual-frequency integrator w/ injected-slew compensation) — `drift` + `arbiter` ✅ (NVS *persistence* still needs `DriftStore` adapter)
+- [x] Uncertainty computation (±(elapsed × drift + source unc); sync flag) — `arbiter` ✅ (display is the `Ui` adapter)
+- [ ] Boot‑time parallel acquisition (RDS vote + WWV band‑step, WiFi down) *(runtime orchestration — needs adapters)*
+- [ ] Hourly listen scheduler *(runtime orchestration — needs adapters)*
 
 ## ⬜ Milestone 5 — Field acceptance
 **Deliverable: cold start → laptop synced → WSJT‑X DT ≈ 0 across an evening.**

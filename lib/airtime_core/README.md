@@ -15,10 +15,12 @@ product spec.
 |---|---|---|
 | `types.h` | Shared numeric types (`real` = `float`, to match the ESP32-S3 FPU) | — |
 | `goertzel.{h,cpp}` | Single-frequency (1000 Hz) power detector for the WWV minute marker | §4, M3 |
+| `wwv_marker.{h,cpp}` | Minute-marker gate: duration (700–900 ms) + noise-floor threshold + leading-edge timestamp | §4, M3 |
 | `rds_ct.{h,cpp}` | RDS group 4A clock-time decode; MJD ↔ civil date | §4 Tier 1, M1 |
 | `station_vote.{h,cpp}` | Multi-station CT voting / outlier rejection | §4 Tier 1, M1 |
-
-Forthcoming (batch 2): `disciplined_clock`, `drift`, `arbiter`, `wwv_marker`.
+| `disciplined_clock.{h,cpp}` | The internal clock: rate + phase steering, slew-not-step | §4 rule 1, M4 |
+| `drift.{h,cpp}` | Crystal drift learning (residual-frequency integrator) | §4 rule 4, M4 |
+| `arbiter.{h,cpp}` | Multi-source arbiter — slew/step rules, two-source gate, uncertainty (the heart) | §4, M4 |
 
 ## Testing
 

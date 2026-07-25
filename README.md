@@ -4,7 +4,7 @@
 
 AirTime runs entirely on an *unmodified* [AMNVOLT ATS Mini V4](docs/PLAN.md#2-target-hardware-owned-verified) pocket receiver. When internet and GPS are gone, time still arrives over the air — **FM RDS** and **WWV** — and AirTime arbitrates those sources into a drift-disciplined internal clock, then serves it to your laptop as **NTP**.
 
-> Status: **core-first development.** The platform-independent core (RDS 4A clock-time decode, multi-station voting, Goertzel WWV detection) is written and unit-tested on the host — `make test` → 16 tests, 78 checks passing. No code is flashed to hardware yet: the Milestone 0 safety steps remain a **pre-flash** gate. See [`docs/STATUS.md`](docs/STATUS.md).
+> Status: **core-first development.** The whole platform-independent core — RDS 4A clock-time decode, multi-station voting, Goertzel WWV detection, the disciplined clock, drift learning, the WWV minute-marker detector, and the arbiter — is written and unit-tested on the host: `make test` → **38 tests, 123 checks passing**, including a closed-loop simulation that learns a 25 ppm-slow crystal. No code is flashed to hardware yet: the Milestone 0 safety steps remain a **pre-flash** gate. See [`docs/STATUS.md`](docs/STATUS.md).
 
 ---
 
@@ -60,7 +60,7 @@ No GPS module · no external RTC (DS3231) · no WWV date/timecode decode (phase 
 | **1 — RDS clock** | Self‑setting clock from broadcast FM | 🟡 Decode + voting done (host) |
 | **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | ⬜ Not started |
 | **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | 🟡 Goertzel done (host) |
-| **4 — Arbiter + confidence** | Full AirTime runtime behavior | ⬜ Next (batch 2) |
+| **4 — Arbiter + confidence** | Full AirTime runtime behavior | 🟡 Arbiter, clock, drift, uncertainty done (host) |
 | **5 — Field acceptance** | Cold start → laptop synced → WSJT‑X DT ≈ 0 all evening | ⬜ Not started |
 
 Detailed milestone contents live in [`docs/PLAN.md §7`](docs/PLAN.md#7-milestones) and are tracked in [`docs/STATUS.md`](docs/STATUS.md).
@@ -99,11 +99,15 @@ AirTime/
 ├── Makefile               Host build + unit tests (make test)
 ├── platformio.ini         PlatformIO envs (native now; device env in M1)
 ├── lib/
-│   └── airtime_core/      Platform-independent core (no Arduino/ESP-IDF)
-│       ├── goertzel.*     1000 Hz WWV tone detector
-│       ├── rds_ct.*       RDS group 4A clock-time decode
-│       └── station_vote.* Multi-station CT voting
-├── test/                  Dependency-free unit tests
+│   └── airtime_core/         Platform-independent core (no Arduino/ESP-IDF)
+│       ├── goertzel.*        1000 Hz WWV tone detector
+│       ├── rds_ct.*          RDS group 4A clock-time decode
+│       ├── station_vote.*    Multi-station CT voting
+│       ├── wwv_marker.*      WWV minute-marker gate (duration + noise floor)
+│       ├── disciplined_clock.*  Slew/rate-steered internal clock
+│       ├── drift.*           Crystal drift learning
+│       └── arbiter.*         Multi-source arbiter (the heart, §4)
+├── test/                     Dependency-free unit tests (38 checks-heavy cases)
 └── docs/
     ├── PLAN.md            The canonical v1 specification and build plan
     ├── ARCHITECTURE.md    The core ↔ hardware seam

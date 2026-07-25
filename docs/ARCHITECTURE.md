@@ -14,11 +14,11 @@ written or verified. The hardware is pushed to the very edges.
    │                                  │    │        airtime_core           │      │
    │  esp_timer ──► MonotonicClock ───┼──► │  (platform-independent, pure) │──►   │  Display
    │                                  │    │                               │      │  (UTC + ±unc)
-   │  NVS ──► DriftStore / TimeStore ─┘    │  goertzel   rds_ct            │      │
-   │                                       │  station_vote  wwv_marker*    │──►   │  NTP responder
-   │  WiFi/SoftAP control ◄────────────────│  disciplined_clock*  arbiter* │      │  (SoftAP)
+   │  NVS ──► DriftStore / TimeStore ─┘    │  goertzel  rds_ct  wwv_marker │      │
+   │                                       │  station_vote  drift          │──►   │  NTP responder
+   │  WiFi/SoftAP control ◄────────────────│  disciplined_clock  arbiter   │      │  (SoftAP)
    │                                       └───────────────────────────────┘      │
-   │                                          (* = batch 2, forthcoming)          │
+   │                                       (all core modules host-tested)         │
    └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -60,11 +60,17 @@ or a core decision into a hardware action. Anticipated seam:
 
 ## Testing philosophy
 
-Every core module ships with unit tests that pin its contract:
+Every core module ships with unit tests that pin its contract (38 cases,
+123 checks; `make test`):
 - `goertzel` — tone detection, amplitude scaling, off-frequency rejection.
+- `wwv_marker` — 800 ms detection + leading-edge timestamp; short/long/low-power
+  rejection (the duration gate).
 - `rds_ct` — the RDS-standard MJD anchor (1982-08-06 = MJD 45187), field
   packing, date round-trips, and rejection of malformed groups.
 - `station_vote` — consensus, outlier rejection, single-source handling, dedup.
-
-Batch 2 adds property-style tests for the clock (monotonicity, bounded slew) and
-the arbiter (slew-vs-step thresholds, two-source gate, uncertainty growth).
+- `disciplined_clock` — rate accuracy, slew-not-step, no discontinuity on rate
+  change.
+- `drift` — open-loop convergence to the true crystal error, clamping.
+- `arbiter` — slew-vs-step thresholds, two-source gate (support / corroboration /
+  operator confirm), uncertainty growth, and a **closed-loop** test where a
+  25 ppm-slow crystal is learned and the per-fix offset collapses to < 20 ms/hour.
