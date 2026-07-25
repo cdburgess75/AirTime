@@ -113,6 +113,8 @@ AirTime/
 │       ├── display.*         The §5 display lines
 │       └── app.*             AirTimeApp — wires it all to the seam
 ├── test/                     Unit tests (81 cases) + fakes.h, a simulated ATS Mini
+├── tools/
+│   └── inspect_flash.py   Validate / compare ESP32 flash images (Milestone 0)
 └── docs/
     ├── PLAN.md            The canonical v1 specification and build plan
     ├── ARCHITECTURE.md    The core ↔ hardware seam

@@ -211,8 +211,15 @@ ls -l stock-full-16mb.bin                       # expect exactly 16777216 bytes
 shasum -a 256 -c SHA256SUMS                     # expect: OK   (macOS)
 ```
 
-Then confirm it contains an actual firmware image rather than erased flash, and that
-the partitions we know about are really in there:
+**If you have this repo checked out**, one command does the rest — it decodes the
+partition table out of the image, checks every header, reports what each partition
+actually holds, and fails loudly on a truncated image:
+
+```sh
+python3 tools/inspect_flash.py ~/airtime-backup/stock-full-16mb.bin
+```
+
+Otherwise, the equivalent inline (Python 3.9 safe — no backslashes inside f-strings):
 
 ```sh
 python3 - <<'PY'
@@ -286,6 +293,21 @@ esptool --chip esp32s3 --port "$PORT" --baud 921600 \
 
 Power-cycle. The radio should boot to stock firmware exactly as it did before: same
 screen, tuning works, audio works.
+
+**Prove it rigorously**, rather than trusting that it looks right — read the flash back
+and compare it against the backup:
+
+```sh
+cd ~/airtime-backup
+python3 -m esptool --chip esp32s3 --port "$PORT" --baud 921600 \
+        read_flash 0x0 0x1000000 after-restore-16mb.bin
+
+python3 <repo>/tools/inspect_flash.py stock-full-16mb.bin after-restore-16mb.bin
+```
+
+`nvs`, `otadata` and `coredump` are expected to differ — the device writes them as it
+boots. **`app0`, `app1`, `settings` and the bootloader must match exactly**; the tool
+flags it if they don't.
 
 **You have now bricked and un-bricked this device on purpose.** Everything after this is
 recoverable by repeating §4c.
