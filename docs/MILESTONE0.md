@@ -362,10 +362,41 @@ Don't conclude "no tap" from a quiet band.
 
 Fill this in and commit it. Future sessions read this table instead of guessing.
 
+### §1 identification — recorded 2026-07-25
+
+Raw `flash_id` output from the owner's unit:
+
+```
+Chip is ESP32-S3 (QFN56) (revision v0.2)
+Features: WiFi, BLE, Embedded PSRAM 8MB (AP_3v3)
+Crystal is 40MHz
+USB mode: USB-Serial/JTAG
+MAC: 20:6e:f1:b5:90:30
+Manufacturer: 46   Device: 4018
+Detected flash size: 16MB
+Flash type set in eFuse: quad (4 data lines)
+Flash voltage set by eFuse to 3.3V
+```
+
+Two conclusions worth carrying forward:
+
+- **8 MB PSRAM ⇒ the `R8` part ⇒ octal PSRAM ⇒ try the OSPI build first** (§5b).
+  Confirm the usual way — non-zero PSRAM in Settings→About — but this should save
+  a flash/check round trip.
+- **USB mode is USB-Serial/JTAG and esptool auto-reset worked** with no button
+  held, so download mode is reachable automatically. The manual BOOT method (§4a)
+  is a fallback here, not a prerequisite. This also means the ROM's USB CDC keeps
+  enumerating after an erase, which is exactly what makes §4 safe.
+
+### Results table
+
 | Item | Result | Notes |
 |---|---|---|
-| Date run | | |
-| Chip / flash size reported | | expect ESP32-S3 / 16MB |
+| Date run | 2026-07-25 (§1 only) | §2 onward not yet run |
+| Chip / flash size reported | **ESP32-S3 (QFN56) rev v0.2 / 16MB** ✅ | as expected; quad flash, 3.3 V |
+| PSRAM detected | **8 MB (AP_3v3)** ✅ | ⇒ OSPI build variant expected |
+| USB mode | **USB-Serial/JTAG** | auto-reset into download mode works |
+| MAC | `20:6e:f1:b5:90:30` | unit identity; also predicts the SoftAP BSSID |
 | Highest partition offset | | does anything live above 0x200000? |
 | Full backup SHA-256 | | from `firmware/backup/SHA256SUMS` |
 | Backup stored where | | in-repo (private) / external (public) |
