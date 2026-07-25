@@ -69,8 +69,13 @@ python3 --version
 ```
 
 - **Prints a version** → install into your user directory (no admin, no
-  virtualenv, nothing system-wide):
+  virtualenv, nothing system-wide). **Upgrade pip first** — the Command Line
+  Tools ship pip 21.2.4, which is too old to fetch the prebuilt `cryptography`
+  wheel esptool depends on; without this it tries to compile it from source,
+  needs a Rust toolchain, and fails with
+  `Could not build wheels for cryptography`:
   ```sh
+  python3 -m pip install --user --upgrade pip
   python3 -m pip install --user esptool
   export PATH="$PATH:$(python3 -c 'import site; print(site.USER_BASE)')/bin"
   esptool version
