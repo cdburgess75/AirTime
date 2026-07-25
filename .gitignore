@@ -1,0 +1,30 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# Build / firmware artifacts
+*.o
+*.elf
+*.map
+build/
+# NOTE: stock-firmware backup .bin files are intentionally NOT ignored — see Milestone 0.
+#       If backups are kept in-repo they must be committed on purpose.
+
+# Editors / IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / scratch
+*.log
+scratch/
