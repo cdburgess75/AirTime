@@ -21,14 +21,21 @@ simulation where a 25 ppm-slow crystal is learned (offset → < 20 ms/hour) and 
 ## ⛔ Milestone 0 — Safety net & hardware verification (now a PRE-FLASH gate)
 **Downgraded from "no code before green" to "no *flashing* before green" (owner decision above). All steps still need the physical device and are owner‑run.**
 
-- [ ] Back up stock firmware (read `0x0`, size `0x200000`); commit the `.bin` (or store safely)
-- [ ] Recovery drill — forced download mode, Erase All, restore backup, confirm boot
-- [ ] Build **stock** `ats-mini` from the fork (correct PSRAM variant), flash, confirm normal radio operation
+📖 **Full step-by-step runbook: [`MILESTONE0.md`](MILESTONE0.md)** — copy-pasteable commands,
+the recovery drill, the IO11 beat test, a results table to fill in, and troubleshooting.
+
+- [ ] Identify chip + partition layout (does anything live above 0x200000?)
+- [ ] Back up stock firmware — **full 16 MB** (see amendment below), checksum it, verify it
+- [ ] **Recovery drill** — rehearse forced download mode, then erase and restore on purpose
+- [ ] Build **stock** `ats-mini` (correct PSRAM variant), flash, confirm normal radio operation
 - [ ] IO11 verification — HJBerndt binary, 9999.000 kHz USB beat, backlight flicker = tap confirmed
       - [ ] If no flicker at any volume → original‑V4 pads → one jumper wire (amp pin 8 → IO11), retest
-- [ ] Record outcome: which V4 sub‑revision, PSRAM variant (OSPI/QSPI), IO11 confirmed vs jumpered
+- [ ] Record outcomes in the [`MILESTONE0.md §7`](MILESTONE0.md#7-record-the-results) table and commit
 
-> Claude can help with: fork setup, PlatformIO config, the exact esptool/backup commands, and
+> **Green when:** the recovery drill passed *and* the IO11 row is resolved (routed, or
+> jumpered and then confirmed).
+>
+> Claude can help with: subtree setup, PlatformIO config, exact esptool commands, and
 > documenting results. The flashing/probing itself is yours.
 
 ## 🟡 Milestone 1 — RDS clock
@@ -96,11 +103,27 @@ all of Milestone 5 field acceptance.
 **Blocked on the fork** — the device PlatformIO env, which needs the `ats-mini`
 fork decision below.
 
-## Open setup questions (need an owner decision)
+## Setup decisions
 
-1. **How should the `ats-mini` fork live in git?** Options: (a) fork on GitHub and add it as a
-   git **submodule** here; (b) **vendor** a snapshot of the sources into this repo; (c) develop
-   AirTime as commits **on the fork itself** and keep this repo for spec/docs only. Affects how
-   upstream updates are pulled in.
-2. **Where does the stock‑firmware backup `.bin` go?** In‑repo (simple, but a ~2 MB binary blob)
-   or stored outside git with a checksum recorded here.
+1. **How the `ats-mini` base lives in git → `git subtree` at `firmware/ats-mini/`.**
+   Pulled directly from upstream `esp32-si4732/ats-mini` (no GitHub fork needed unless we
+   later contribute back). Rationale: the adapters must *edit* upstream files, so local
+   modifications are unavoidable either way. A submodule would split glue code from the
+   core across two repos and adds a clone-time failure mode (every remote session starts
+   from a fresh clone; a missed `--recursive` yields a silently empty directory).
+   Vendoring is simple but strands us against an active upstream. Subtree gives one repo,
+   one clone, *and* a real merge path (`git subtree pull`). One line added to the vendored
+   `platformio.ini` (`lib_extra_dirs = ../../lib`) picks up `airtime_core` unchanged.
+   Commands in [`MILESTONE0.md §5a`](MILESTONE0.md#5a-bring-the-firmware-base-into-the-repo).
+
+2. **Stock‑firmware backup → in‑repo if this repo is private; checksum-only if public.**
+   A write-once 2 MB blob is the benign case for git, and the file's whole value is being
+   *available* during a failure — in-repo means offsite, versioned, and auto-cloned into
+   every future session. **Caveat:** it is AMNVOLT's copyrighted binary, so if the repo is
+   public, keep the images out of git (local + cloud backup) and commit only the SHA-256.
+   `SHA256SUMS` goes in the repo either way. No Git LFS — 2 MB doesn't warrant it.
+
+   **Amendment to PLAN.md §7:** back up the **full 16 MB**, not `0x0`+`0x200000`. This is a
+   16 MB part (N16R8); if stock firmware keeps SPIFFS/NVS/calibration data above 2 MB, a
+   2 MB image would not fully restore it. Costs ~3 extra minutes. The 2 MB app-region
+   image is still taken as a fast-restore option.

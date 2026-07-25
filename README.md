@@ -56,7 +56,7 @@ No GPS module · no external RTC (DS3231) · no WWV date/timecode decode (phase 
 
 | Milestone | Deliverable | State |
 |---|---|---|
-| **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | ⛔ **Pre-flash gate — hardware, owner‑run.** No *flashing* before this is green. |
+| **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | ⛔ **Pre-flash gate — hardware, owner‑run.** Runbook ready: [`docs/MILESTONE0.md`](docs/MILESTONE0.md) |
 | **1 — RDS clock** | Self‑setting clock from broadcast FM | 🟡 Decode + voting done (host) |
 | **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | 🟡 SNTP + client counting + unsynced flagging done (host) |
 | **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | 🟡 Goertzel, marker gate, band stepping done (host) |
@@ -113,8 +113,12 @@ AirTime/
 └── docs/
     ├── PLAN.md            The canonical v1 specification and build plan
     ├── ARCHITECTURE.md    The core ↔ hardware seam
+    ├── MILESTONE0.md      Backup / recovery-drill / IO11 runbook (run before flashing)
     └── STATUS.md          Live milestone / task tracker
 ```
+
+The `ats-mini` firmware base is brought in as a **git subtree** at `firmware/ats-mini/`
+during Milestone 0 (§5a of the runbook); it consumes `lib/airtime_core` unchanged.
 
 Device firmware (the thin hardware adapters that feed the core) is added starting
 in Milestone 1; it consumes `lib/airtime_core` unchanged and is only *flashed*
