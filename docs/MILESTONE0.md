@@ -82,6 +82,17 @@ python3 --version
   ```
   Add that `export` line to `~/.zshrc` to make it stick.
 
+  > **If `esptool` is still "command not found"** after a successful install, it
+  > is only a PATH problem — the package is there. Invoke the module directly
+  > instead, which needs no PATH at all:
+  > ```sh
+  > python3 -m esptool version
+  > ```
+  > **Every `esptool …` command in this runbook can be written
+  > `python3 -m esptool …`.** Depending on the version the installed script may
+  > also be named `esptool.py` rather than `esptool`; check with
+  > `ls "$(python3 -c 'import site; print(site.USER_BASE)')/bin"`.
+
 - **Command not found**, or it opens a dialog → install Apple's Command Line
   Tools (gives you `python3` and `git`), then retry the above:
   ```sh
