@@ -176,8 +176,12 @@ void AirTimeApp::pollWwv(int64_t now) {
     sched_.onWwvMarker(m.peak_power);
 
     // WWV carries no date (PLAN.md §3): it can only pull an already-roughly-right
-    // clock onto the exact minute boundary. It cannot cold-start one.
-    if (!arbiter_.isSet()) continue;
+    // clock onto the exact minute boundary. It cannot cold-start one — and a
+    // restored NVS time does not count as "roughly right": measured 65 minutes
+    // stale, which no ±30 s marker can see. Wait for a source that knows the
+    // date. (The arbiter refuses this too; belt and braces, because the cost of
+    // getting it wrong is a confidently wrong clock.)
+    if (!arbiter_.hasSourceFix()) continue;
 
     const int64_t clock_utc = arbiter_.utcAt(m.leading_edge_us);
     int64_t off = 0;

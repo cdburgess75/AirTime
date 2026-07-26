@@ -90,10 +90,43 @@ AT_TEST(arb_large_corroborated_by_second_source) {
   AT_CHECK(r2.action == Action::SlewedLarge);
 }
 
+// WWV knows where the minute EDGE is, never which minute it is (§3). So it can
+// never be the source that establishes a date — not on a cold clock, and not
+// against a warm-boot memory, which is the case that actually bit.
+//
+// On the device: a restored time 65 minutes stale, the tuner on AM through
+// acquisition, and WWV first to speak. It pulled the clock 0.28 s onto a minute
+// boundary — the wrong one — and by counting as a source it re-armed the
+// corroboration gate against the RDS fix that knew the date. The laptop read
+// 3899.72 s out, i.e. 65 minutes minus 0.28 s. A whole number of minutes off is
+// this bug's fingerprint.
+AT_TEST(arb_wwv_cannot_establish_a_minute) {
+  const int64_t hour = 3600LL * 1000000;
+  Arbiter a;
+
+  // Cold: nothing for WWV to refine.
+  AT_CHECK(a.update(fix(Source::Wwv, 0, T0, 30000, 2)).action == Action::Rejected);
+  AT_CHECK(!a.isSet());
+
+  // Warm boot, an hour stale: still refused, however well it corroborates.
+  a.restore(1000, T0 - hour, hour);
+  const int64_t before = a.utcAt(2000);
+  AT_CHECK(a.update(fix(Source::Wwv, 2000, T0 + 2000, 30000, 2)).action ==
+           Action::Rejected);
+  AT_CHECK_EQ(a.utcAt(2000), before);   // the memory is left exactly as it was
+
+  // A source that carries the date re-seeds it, and WWV is welcome after that.
+  a.update(fix(Source::Rds, 3000, T0 + 3000, 250000, 1));
+  AT_CHECK(a.hasSourceFix());
+  AT_CHECK(a.update(fix(Source::Wwv, 4000, T0 + 4000, 30000, 1)).action !=
+           Action::Rejected);
+}
+
 // Uncertainty grows with time since the last sync, and eventually unsyncs.
 AT_TEST(arb_uncertainty_growth) {
   Arbiter a;
-  a.update(fix(Source::Wwv, 0, T0, 20000, 1));  // ±20 ms source
+  a.update(fix(Source::Rds, 0, T0, 250000, 2));  // a source that knows the date
+  a.update(fix(Source::Wwv, 0, T0, 20000, 1));   // then WWV's ±20 ms phase
   AT_CHECK(a.isSynced(0));
   AT_CHECK(a.uncertaintyUs(0) < 100000);
   // ~16.7 h later at 20 ppm growth => ~1.2 s uncertainty => unsynced.

@@ -392,6 +392,48 @@ fix[wwv +687ms pair=Y A | rds -12ms n=3 A | pend=0ms] rate=+18.2ppm
 `pend` must fall to zero. If it sits, the clock is crawling and is not synced,
 whatever the ± says.
 
+### Then WWV locked the clock onto the wrong minute
+
+With the step fix flashed, the laptop read **−3899.72 s ± 0.037**. Two things
+in that one line:
+
+* **3899.72 s = 65 minutes minus 0.28 s.** A whole number of minutes. That is
+  a WWV phase lock — the clock sitting exactly on a minute boundary, and the
+  wrong one.
+* **±0.037** is WWV's own uncertainty (30 ms). WWV was the source disciplining
+  the clock.
+
+Sequence: warm boot restores a 65-minute-stale time → `isSet()` is true, so the
+old gate allowed listening → the one tuner parks on AM for acquisition, where
+RDS cannot be read at all → WWV gets there first → it "corrects" the clock by
+0.28 s, perfectly, onto the wrong minute → **and that accepted fix marks the
+clock as sourced**, which re-arms the corroboration gate against the one source
+that knew the date. RDS is then locked out permanently. The device reports
+±37 ms while being 65 minutes wrong.
+
+Two gates, because the cost of being wrong here is a confidently wrong clock:
+
+1. **WWV may never establish a minute** (`arbiter.cpp`). Cold clock or warm
+   memory alike, a WWV fix is refused until some source that carries a date has
+   spoken. §3 already said WWV has no date; this makes the arbiter enforce it
+   rather than trusting callers to.
+2. **A restored memory does not unlock listening** (`effectiveDirective`, now
+   gated on `hasSourceFix()` rather than `isSet()`). This also ends the
+   five-minute post-warm-boot WiFi outage: with the tuner left on FM, the first
+   RDS vote lands in 60–90 s and acquisition ends on the fix instead of the
+   timeout.
+
+Tests: `arb_wwv_cannot_establish_a_minute`, plus the WWV-suppression assertion
+inside `app_warm_boot_stale_by_an_hour_recovers`. Both verified to fail with
+their gate reverted.
+
+**The pattern in all four bugs of this session:** every one was a case of the
+device believing something it had no way to know — a rejected fix counted as a
+fix, a phase bias read as a frequency, an accepted correction assumed applied,
+and a marker that knows only the minute's edge allowed to assert which minute
+it was. The uncertainty machinery of §5 is only honest if every claim behind it
+is.
+
 ## Field variability — the survey is a probe, not the config (2026-07-26)
 
 Owner direction: location, antenna, propagation, and time of day are all
