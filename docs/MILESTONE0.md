@@ -6,12 +6,18 @@ This milestone exists because the owner has bricked a device before. Work throug
 in order. Nothing here is exploratory — every step is either a backup, a rehearsal of
 recovery, or a measurement that retires an assumption.
 
-> **Status (2026-07-25): §1–§5 essentially complete. The recovery drill has PASSED.**
-> The device was erased and restored deliberately; stock `ats-mini` then built and
-> flashed first try (v2.35). A verified 16 MB backup exists **on the owner's machine
-> only — never in this repo**, because a full flash image contains the `settings` NVS
-> partition and therefore live WiFi credentials. **§5d verification and §6 (IO11)
-> remain.** Outcomes are recorded in [§7](#7-record-the-results).
+> # ✅ MILESTONE 0 IS GREEN (2026-07-25)
+>
+> The recovery drill **passed** — the device was erased and restored deliberately. Stock
+> `ats-mini` built and flashed first try. And **the IO11 tap is CONFIRMED**: audio is
+> present on GPIO11, so no jumper wire is needed and the standing assumption in
+> PLAN.md §2 is retired.
+>
+> A verified 16 MB backup exists **on the owner's machine only — never in this repo**,
+> because a full flash image contains the `settings` NVS partition and therefore live
+> WiFi credentials.
+>
+> Full results in [§7](#7-record-the-results). The pre-flash gate is lifted.
 
 ---
 
@@ -589,6 +595,33 @@ of Hz away. Broadband rms does not care where the energy sits. `peak`/`mag` then
 The absolute numbers matter far less than the *change* with volume — that is what
 separates a real tap from a floating pin picking up noise.
 
+### ✅ Result on this unit (2026-07-25): TAP CONFIRMED
+
+| | Volume 0 | Volume 35, 9999 USB, tone audible |
+|---|---|---|
+| `rms` | 37.0–37.8 (±0.4) | **45.2–73.5** |
+| `pp` | 130–141 | **264–410** |
+| `peak` | **2750 Hz** | **1250 Hz** |
+| `mag` | 16.5–21.4 | **39.1–89.8** |
+
+The rms rise is suggestive; the **peak moving from 2750 Hz to 1250 Hz is conclusive**.
+That is not a level change, it is a different signal appearing — the demodulated audio.
+A floating pin cannot produce that. **No jumper wire required.**
+
+Two findings to carry forward:
+
+- **The receiver reads ~250 Hz low at 10 MHz (~25 ppm).** 9999.000 USB against WWV's
+  10 MHz carrier should beat at 1000 Hz; it landed in the 1250 Hz bin. `ats-mini` has a
+  calibration setting if this is worth trimming.
+- **That offset does not affect real WWV detection.** This test used an SSB beat, whose
+  frequency error tracks the tuning error exactly. Marker detection receives WWV in
+  **AM**, where the 1000 Hz tone is recovered by envelope detection and arrives at
+  1000 Hz regardless of small tuning error. The 1000 Hz Goertzel in `airtime_core` is
+  correct as written — do not "fix" it to 1250 Hz.
+- **There is a steady ~2750 Hz noise component** in the receive chain at zero volume
+  (rms ≈ 37 counts). Far from 1000 Hz, so it will not trouble the marker detector, but it
+  sets the noise floor the `wwv_marker` thresholds work against.
+
 > **Observed in practice:** with WiFi ON this unit read `pp` 1000–2700 with `max` pinned
 > at 4095 and `dc` wandering; with WiFi OFF, `pp` 250–600, no clipping, and `dc` stable to
 > ±3 counts. The §2 constraint is not theoretical.
@@ -696,13 +729,13 @@ Conclusions worth carrying forward:
 | **Recovery drill (§4)** | ✅ **PASSED 2026-07-25** | `erase_flash` (3.1 s) → full 16 MB `write_flash` → boots to stock, confirmed by the owner |
 | PSRAM variant | **esp32s3-ospi** ✅ CONFIRMED | 8 MB AP_3v3 ⇒ octal; upstream's `default_profile`; correct first try |
 | PSRAM reported in About | **8192k (8075k free)** ✅ | non-zero ⇒ OSPI correct |
-| Stock radio operation | 🟡 boots, WiFi joins (IP 192.168.1.92) — **v2.35 Jul 25 2026** | flashed first try; FM/HF tune + audio check outstanding |
+| Stock radio operation | ✅ boots, WiFi joins (IP 192.168.1.92), HF receives — **v2.35 Jul 25 2026** | 9999 USB beat audible and measurable on IO11 |
 | Previous firmware on unit | **ats-mini, built Sep 22 2025** | extracted from the backup's app0 — the radio already ran ats-mini |
-| **IO11 tap (§6)** | ⬜ confirmed / ⬜ jumpered | flicker seen? at what volume? |
-| V4 sub-revision concluded | | V4 (pads) or V4a (routed) |
+| **IO11 tap (§6)** | ✅ **CONFIRMED — routed, no jumper** | rms 37→73 and peak 2750→1250 Hz when the tone plays |
+| V4 sub-revision concluded | **V4a (routed)** | the factory audio tap to IO11 is present |
 
-**Milestone 0 is green when the recovery drill passed and the IO11 row is resolved**
-(either confirmed as routed, or jumpered and then confirmed).
+**Milestone 0 is GREEN.** ✅ The recovery drill passed and the IO11 tap is confirmed as
+factory-routed. The pre-flash gate is lifted.
 
 ---
 

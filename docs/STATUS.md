@@ -13,17 +13,16 @@ refine the coarse fix, learns its crystal (27.99 ppm measured against a true
 28 ppm), survives a warm boot honestly unsynced, and serves accurate stratum-1
 NTP to a simulated laptop — all with WiFi and ADC2 never live together.
 
-> **Owner decision (2026-07-25): the Milestone 0 hardware gate is dropped for
-> host-side development.** Because of the bricking risk, we build and unit-test
-> the platform-independent core on the laptop first (no device touched). The M0
-> safety steps below remain a **pre-flash** gate: nothing gets flashed to the
-> ATS Mini until they're done — but they no longer block writing/testing core
-> logic. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the hardware seam.
+> **Milestone 0 is complete (2026-07-25) and the pre-flash gate is lifted.** The device
+> has a verified backup, has been erased and restored on purpose, runs a build made from
+> this repo, and **has a confirmed audio tap on IO11**. Adapter work against
+> [`hal.h`](../lib/airtime_core/src/airtime/hal.h) can now proceed against real hardware.
 
 ---
 
-## ⛔ Milestone 0 — Safety net & hardware verification (now a PRE-FLASH gate)
-**Downgraded from "no code before green" to "no *flashing* before green" (owner decision above). All steps still need the physical device and are owner‑run.**
+## ✅ Milestone 0 — Safety net & hardware verification — **COMPLETE (2026-07-25)**
+**The pre-flash gate is LIFTED.** Recovery drill passed, and the IO11 tap is confirmed as
+factory-routed — no jumper wire needed, so PLAN.md §2's standing assumption is retired.
 
 📖 **Full step-by-step runbook: [`MILESTONE0.md`](MILESTONE0.md)** — copy-pasteable commands,
 the recovery drill, the IO11 beat test, a results table to fill in, and troubleshooting.
@@ -32,16 +31,17 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 - [x] Back up stock firmware ✅ full 16 MB, verified (`aeb512fe…`). **Kept local only — NOT in the repo**; see decision 2
 - [x] **Recovery drill** ✅ **PASSED** — erased and restored on purpose; boots to stock
 - [x] Build **stock** `ats-mini` via **Arduino CLI** ✅ built + flashed first try (`esp32s3-ospi`); device boots **ATS-Mini F/W v2.35 Jul 25 2026**
-      - [ ] §5d verification outstanding: **PSRAM non-zero in Settings→About**, plus FM/HF tune and audio
-- [ ] IO11 verification — HJBerndt binary, 9999.000 kHz USB beat, backlight flicker = tap confirmed
-      - [ ] If no flicker at any volume → original‑V4 pads → one jumper wire (amp pin 8 → IO11), retest
-- [ ] Record outcomes in the [`MILESTONE0.md §7`](MILESTONE0.md#7-record-the-results) table and commit
+      - [x] §5d verified: **PSRAM 8192k** in Settings→About (OSPI correct), WiFi joins, HF receives
+- [x] **IO11 verification** ✅ **TAP CONFIRMED** — measured with our own `AirTimeProbe`, not the
+      backlight test (ats-mini has no audio ADC path, so that test cannot work). With the
+      9999 USB tone: rms 37→73 and the dominant frequency moves 2750→1250 Hz. **No jumper needed.**
+- [x] Record outcomes in the [`MILESTONE0.md §7`](MILESTONE0.md#7-record-the-results) table and commit
 
-> **Green when:** the recovery drill passed *and* the IO11 row is resolved (routed, or
-> jumpered and then confirmed).
->
-> Claude can help with: subtree setup, Arduino CLI config, exact esptool commands, and
-> documenting results. The flashing/probing itself is yours.
+> **Two findings for later:** the receiver reads ~250 Hz low at 10 MHz (~25 ppm), and a
+> steady ~2750 Hz noise component sits in the receive chain at zero volume (rms ≈ 37
+> counts) — that is the floor `wwv_marker` will threshold against. The tuning offset does
+> **not** affect real WWV detection, which uses AM envelope recovery rather than an SSB
+> beat, so the 1000 Hz Goertzel is correct as written.
 
 ## 🟡 Milestone 1 — RDS clock
 **Deliverable: self‑setting clock from broadcast FM.**
@@ -96,7 +96,7 @@ Every remaining item needs either the physical device or a decision from the
 owner. The pure logic of the spec is written and host-tested.
 
 **Firmware adapters** — the interfaces are now *defined* in
-[`hal.h`](../lib/airtime_core/hal.h) and *faked* in [`fakes.h`](../test/fakes.h),
+[`hal.h`](../lib/airtime_core/src/airtime/hal.h) and *faked* in [`fakes.h`](../test/fakes.h),
 so each one is a fill-in-the-blank against a contract the tests already exercise:
 
 | Interface | Device implementation |
@@ -111,7 +111,10 @@ so each one is a fill-in-the-blank against a contract the tests already exercise
 
 **Genuinely hardware-dependent** — the calibration constant (§4: SI4732 DSP group
 delay + amp + ADC latency, est. 10–40 ms), the local FM station survey (M1), and
-all of Milestone 5 field acceptance.
+all of Milestone 5 field acceptance. Milestone 0 measured two useful priors for this
+work: the receiver reads **~250 Hz low at 10 MHz (~25 ppm)**, and the receive chain
+carries a steady **~2750 Hz noise component at rms ≈ 37 ADC counts** with the volume at
+zero — the floor `wwv_marker` thresholds against.
 
 **Firmware base** — `esp32-si4732/ats-mini` is vendored at `firmware/ats-mini/` as a
 git subtree. It builds with **Arduino CLI**, not PlatformIO as PLAN.md §6 assumed; the

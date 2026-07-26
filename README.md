@@ -4,7 +4,7 @@
 
 AirTime runs entirely on an *unmodified* [AMNVOLT ATS Mini V4](docs/PLAN.md#2-target-hardware-owned-verified) pocket receiver. When internet and GPS are gone, time still arrives over the air — **FM RDS** and **WWV** — and AirTime arbitrates those sources into a drift-disciplined internal clock, then serves it to your laptop as **NTP**.
 
-> Status: **the whole device runs — in simulation.** Every piece of AirTime's logic is written and host-tested (`make test` → **81 tests, 2151 checks passing**), and a simulated ATS Mini drives the real application end to end: it cold-starts from RDS, outvotes a station transmitting wrong time, lets WWV refine the fix, learns its crystal, and serves accurate stratum-1 NTP — with WiFi and the ADC never live at the same time. What remains is the thin firmware adapters and the one calibration constant only hardware can supply. Nothing is flashed yet: the Milestone 0 safety steps remain a **pre-flash** gate. See [`docs/STATUS.md`](docs/STATUS.md).
+> Status: **Milestone 0 complete; the whole device runs in simulation.** Every piece of AirTime's logic is written and host-tested (`make test` → **81 tests, 2151 checks passing**), and a simulated ATS Mini drives the real application end to end: it cold-starts from RDS, outvotes a station transmitting wrong time, lets WWV refine the fix, learns its crystal, and serves accurate stratum-1 NTP — with WiFi and the ADC never live at the same time. What remains is the thin firmware adapters and the one calibration constant only hardware can supply. **Milestone 0 is complete**: the device has a verified backup, survived a deliberate erase-and-restore, and its IO11 audio tap is confirmed. See [`docs/STATUS.md`](docs/STATUS.md).
 
 ---
 
@@ -37,7 +37,7 @@ The arbiter is the heart of the project. Its rules (full detail in [`docs/PLAN.m
 
 ## Hardware
 
-**AMNVOLT ATS Mini V4** — genuine, case‑branded (sub‑revision V4 or V4a).
+**AMNVOLT ATS Mini V4** — genuine, case‑branded. Determined to be a **V4a**: the factory audio tap to IO11 is present (measured, Milestone 0 §6).
 
 - ESP32‑S3‑WROOM‑1‑N16R8 (dual core, WiFi, 16 MB flash, 8 MB PSRAM)
 - SI4732‑A10 DSP receiver: 150 kHz–30 MHz AM/SSB, 64–108 MHz FM **with hardware RDS decode**
@@ -45,18 +45,18 @@ The arbiter is the heart of the project. Its rules (full detail in [`docs/PLAN.m
 
 Two hardware facts shape the whole design:
 
-- **WWV audio is sampled on GPIO IO11 (ADC2_CH0)** via the factory amplifier‑output routing. *This is a standing assumption verified in Milestone 0; if it fails, the fix is a single jumper wire and nothing else changes.*
+- **WWV audio is sampled on GPIO IO11 (ADC2_CH0)** via the factory amplifier‑output routing. ✅ **Measured and confirmed on the owner's unit (2026-07-25)** — no jumper wire needed. This unit is a V4a.
 - **ADC2 cannot be read while WiFi is active** (an ESP32 silicon limit). So **all WWV listening happens with WiFi down**; FM/RDS reception is unaffected and runs regardless.
 
 ## What v1 is deliberately *not*
 
-No GPS module · no external RTC (DS3231) · no WWV date/timecode decode (phase only) · no soldering (contingent on the IO11 assumption) · not a general receiver UI — it is a clock appliance. These are settled decisions; see [`docs/PLAN.md §3`](docs/PLAN.md#3-what-v1-is-not-settled-decisions).
+No GPS module · no external RTC (DS3231) · no WWV date/timecode decode (phase only) · **no soldering — confirmed unnecessary** · not a general receiver UI — it is a clock appliance. These are settled decisions; see [`docs/PLAN.md §3`](docs/PLAN.md#3-what-v1-is-not-settled-decisions).
 
 ## Roadmap
 
 | Milestone | Deliverable | State |
 |---|---|---|
-| **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | 🟡 **§1–§4 done — recovery drill PASSED.** §5 build + §6 IO11 remain: [`docs/MILESTONE0.md`](docs/MILESTONE0.md) |
+| **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | ✅ **COMPLETE** — drill passed, **IO11 tap confirmed**, no jumper needed: [`docs/MILESTONE0.md`](docs/MILESTONE0.md) |
 | **1 — RDS clock** | Self‑setting clock from broadcast FM | 🟡 Decode + voting done (host) |
 | **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | 🟡 SNTP + client counting + unsynced flagging done (host) |
 | **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | 🟡 Goertzel, marker gate, band stepping done (host) |
