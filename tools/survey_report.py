@@ -99,15 +99,24 @@ def main():
 
     usable = {f: statistics.median(v) * 1000 for f, v in offsets.items()
               if len(v) >= 2}
-    if usable:
+    # A station whole seconds/minutes off has a broken clock, not a bias —
+    # the §4 voter would reject its every report, so don't tune it at all.
+    broken = {f: m for f, m in usable.items() if abs(m) > 2000}
+    good = {f: m for f, m in usable.items() if abs(m) <= 2000}
+    if good:
         print("\nSuggested kFmStations for AirTimeMode.cpp"
               " (best phase behaviour first):")
-        for f in sorted(usable, key=lambda f: abs(usable[f])):
-            flag = "" if abs(usable[f]) < 250 else \
+        for f in sorted(good, key=lambda f: abs(good[f])):
+            flag = "" if abs(good[f]) < 250 else \
                 "  // CAUTION: bias near/over RDS error budget"
             print(f"    {f},  // {mhz(f):.1f} MHz {ps.get(f, '')}"
                   f" pi={pi_of.get(f, '?')}"
-                  f" offset {usable[f]:+.0f} ms (n={len(offsets[f])}){flag}")
+                  f" offset {good[f]:+.0f} ms (n={len(offsets[f])}){flag}")
+    for f in sorted(broken, key=lambda f: abs(broken[f])):
+        print(f"    // {mhz(f):.1f} MHz {ps.get(f, '')} pi={pi_of.get(f, '?')}"
+              f" EXCLUDED: clock wrong by {broken[f] / 1000:+.1f} s"
+              f" (n={len(offsets[f])}) — voting would reject every report")
+    if usable:
         print("\nSingle-sample stations were omitted; run the survey longer"
               " to qualify them.")
 

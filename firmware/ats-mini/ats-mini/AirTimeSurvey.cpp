@@ -45,7 +45,7 @@ constexpr uint8_t kMinSnr = 8;             // dwell-list threshold, dB
 constexpr uint32_t kDwellMs = 75000;       // spans one minute boundary
 constexpr uint32_t kNoSyncBailMs = 12000;  // no RDS sync at all -> skip
 constexpr uint32_t kAfterCtLingerMs = 4000;
-constexpr size_t kMaxStations = 32;
+constexpr size_t kMaxStations = 48;
 
 enum class St { Boot, Scan, DwellTune, Dwell };
 
@@ -53,7 +53,18 @@ St state = St::Boot;
 int32_t scan_f = kScanStart;
 uint32_t t_state = 0;
 
+// When the list is full, a stronger late-dial station replaces the weakest
+// listed one — a dense market must not silently truncate the top of the dial
+// (observed in the field: n=32 filled by 101.1 MHz).
 int32_t dwell[kMaxStations];
+uint8_t dwell_snr[kMaxStations];
+// Learned per station across rounds. Round 1 explores everything once; later
+// rounds dwell only on stations that actually sent clock-time, so CT samples
+// accumulate fast instead of re-waiting 75 s on every no-CT station. RDS CT
+// is once a minute by the standard — one clean spanning dwell is decisive.
+bool had_rds[kMaxStations];
+bool had_ct[kMaxStations];
+bool any_ct = false;
 size_t dwell_n = 0;
 size_t dwell_i = 0;
 uint32_t round_n = 1;
@@ -90,13 +101,28 @@ void resetDwellDecode()
   ps[8] = 0;
 }
 
+bool eligible(size_t i)
+{
+  if(round_n == 1) return true;   // explore the whole list once
+  if(had_ct[i]) return true;      // then focus on stations that pay
+  if(!any_ct) return had_rds[i];  // no CT anywhere yet: keep trying RDS ones
+  return false;
+}
+
 void nextDwell()
 {
-  dwell_i++;
-  if(dwell_i >= dwell_n)
+  for(size_t hop = 0; hop <= dwell_n; hop++)
   {
-    dwell_i = 0;
-    Serial.printf("SVY round %lu done\n", (unsigned long)round_n++);
+    dwell_i++;
+    if(dwell_i >= dwell_n)
+    {
+      dwell_i = 0;
+      size_t ct_n = 0;
+      for(size_t i = 0; i < dwell_n; i++) ct_n += had_ct[i] ? 1 : 0;
+      Serial.printf("SVY round %lu done ct_stations=%u\n",
+                    (unsigned long)round_n++, (unsigned)ct_n);
+    }
+    if(eligible(dwell_i)) break;
   }
   state = St::DwellTune;
 }
@@ -187,10 +213,27 @@ void airtimeRdsSurvey()
       if(now - t_state < kSettleMs) break;
       rx.getCurrentReceivedSignalQuality(0);
       const uint8_t r = rx.getCurrentRSSI(), s = rx.getCurrentSNR();
-      if(s >= kMinSnr && dwell_n < kMaxStations)
+      if(s >= kMinSnr)
       {
-        dwell[dwell_n++] = scan_f;
-        Serial.printf("SVY sig f=%ld rssi=%u snr=%u\n", (long)scan_f, r, s);
+        if(dwell_n < kMaxStations)
+        {
+          dwell_snr[dwell_n] = s;
+          dwell[dwell_n++] = scan_f;
+          Serial.printf("SVY sig f=%ld rssi=%u snr=%u\n", (long)scan_f, r, s);
+        }
+        else
+        {
+          size_t w = 0;
+          for(size_t i = 1; i < dwell_n; i++)
+            if(dwell_snr[i] < dwell_snr[w]) w = i;
+          if(s > dwell_snr[w])
+          {
+            Serial.printf("SVY sig f=%ld rssi=%u snr=%u (replaces f=%ld)\n",
+                          (long)scan_f, r, s, (long)dwell[w]);
+            dwell[w] = scan_f;
+            dwell_snr[w] = s;
+          }
+        }
       }
       scan_f += kScanStep;
       if(scan_f > kScanEnd)
