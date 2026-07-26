@@ -51,7 +51,8 @@ struct WwvSamplerConfig {
   int64_t block_us = 20000;       // ~20 ms blocks => ~20 ms edge quantisation
   int core = 0;                   // main loop owns core 1; take the other one
   int task_priority = 2;
-  std::size_t queue_len = 128;    // ~2.5 s of blocks; the loop drains far faster
+  std::size_t queue_len = 256;    // ~5 s of blocks: rides out main-loop stalls
+                                  // (flash writes, UI work) without dropping
   // Samples are scaled by 1/adc_full_scale so a full-swing tone reads ~1.0,
   // matching the normalisation airtime::Goertzel and WwvMarkerConfig expect.
   airtime::real adc_full_scale = 2048.0f;

@@ -109,6 +109,13 @@ static int atRdsRead(uint16_t w[4], uint8_t ble[4], void*)
 
 void airtimeSetup()
 {
+  // Status prints must NEVER block: with no computer attached to USB, HWCDC
+  // writes stall until a timeout, and a stalled main loop overflows the WWV
+  // block queue (observed: 13% of blocks dropped across unlogged listen
+  // windows). Zero timeout means "drop the output, keep the radio running" —
+  // the right priority for a time appliance.
+  Serial.setTxTimeoutMs(0);
+
   // Known state: radio silent until the scheduler says otherwise. Stock netInit
   // is compiled out in this build, but the chip may still hold AP config.
   WiFi.persistent(false);
