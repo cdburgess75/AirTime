@@ -79,10 +79,18 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 - [ ] Timezone config
 - [x] Persist last‑known date/time to NVS — `NvsTimeStore` ✍️ written, compiles for target; on‑device verify pending
 
-## 🟡 Milestone 2 — Serve
+## 🟢 Milestone 2 — Serve — **VERIFIED ON DEVICE (2026-07-26)**
 **Deliverable: laptop runs FT8 synced to the radio, no internet.**
 
-- [x] SoftAP up + UDP/123 socket — `Esp32WiFiControl` ✍️ written, compiles for target; on‑device verify pending
+First end-to-end serve: the owner's Mac joined the AirTime AP and ran
+`sntp 192.168.4.1` → **`-0.343 s ± 0.154 s`**. The −343 ms offset is exactly
+the surveyed RDS station-lateness envelope (+80..+360 ms stations pull the
+clock behind truth by a few hundred ms), and the ±154 ms bound carries the
+device's own published root dispersion — the honesty path works. Already well
+inside FT8 tolerance; the first WWV listen window should tighten it to tens
+of ms. Remaining below is WSJT-X itself.
+
+- [x] SoftAP up + UDP/123 socket — `Esp32WiFiControl` ✅ **verified on device**
 - [x] NTP/SNTP responder — `sntp` ✅ host-tested (packet layer; UDP socket is the adapter)
 - [x] Client counting — `sntp::ClientCounter` ✅ host-tested
 - [x] Unsynchronized flagging (LI=3 / stratum 16; uncertainty published as root dispersion) — `sntp` ✅
