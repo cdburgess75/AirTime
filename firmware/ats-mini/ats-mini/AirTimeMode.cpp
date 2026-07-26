@@ -195,8 +195,14 @@ void airtimeLoop()
     // flr/pk: current noise floor and strongest block seen (normalised power).
     // st: bursts that crossed the on-threshold; run: last/longest burst ms;
     // rej: duration-gate rejects short/long; mk: accepted minute markers.
+    // band= is the WWV frequency currently being listened to (0 = not in a
+    // window). Diag counters are cumulative; attribute deltas to the band
+    // shown while they moved. Field report: music heard on ~10 MHz at this
+    // QTH — a jammed band inflates flr and buries the beep, so per-band
+    // attribution is the whole game.
     Serial.printf(
-        "  mkr[flr=%.1e pk=%.1e st=%lu run=%ld/%ldms rej=%lu/%lu mk=%lu]\n",
+        "  mkr[band=%ld flr=%.1e pk=%.1e st=%lu run=%ld/%ldms rej=%lu/%lu mk=%lu]\n",
+        (long)atApp->directive().wwv_band_khz,
         (double)md.noise_floor, (double)md.max_power,
         (unsigned long)md.tone_starts,
         (long)(md.last_tone_us / 1000), (long)(md.longest_tone_us / 1000),
