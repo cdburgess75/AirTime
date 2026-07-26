@@ -460,10 +460,27 @@ MEM: HEAP ...k (...k), PSRAM ...k (...k)
 
 **PSRAM should read ~8192k.** Zero means the wrong profile.
 
-Two values on that page look wrong but are not: `FLASH: 8M` (the profile sets
-`FlashSize=8M`, consistent with the partition table ending at 0x800000, even though the
-chip is 16 MB) and `CPU: … 80 MHz` (the profile sets `CPUFreq=80` for battery life). The
-page also shows the WiFi MAC, which should match what `flash_id` reported in §1.
+`CPU: … 80 MHz` looks low but is deliberate — the profile sets `CPUFreq=80` for battery
+life. `FLASH` reports the **real chip size (16M)**, not the profile's `FlashSize=8M`:
+`ESP.getFlashChipSize()` reads the chip, while the profile setting governs the
+partition/bootloader configuration. The page also shows the WiFi MAC, which should match
+what `flash_id` reported in §1.
+
+Measured on this unit (2026-07-25), confirming the OSPI choice:
+
+```
+CPU: ESP32-S3 r2, 80 MHz
+FLASH: 16M, 3072k (1463k), FS 1856k (1848k)
+NVS: TOTAL 2016, USED 430, FREE 1586
+MEM: HEAP 301k (190k), PSRAM 8192k (8075k)
+Display ID: 048181B3, STAT: 09D0532400
+WiFi MAC: 20:6E:F1:B5:90:30, IP: 192.168.1.92
+```
+
+`PSRAM 8192k` ✅. Note also `IP:` being populated — the radio rejoined WiFi after a full
+reflash, which is direct evidence the `settings` partition survived, as the identical
+partition table predicted. And `FS 1856k (1848k)` — 8k used — matches the
+formatted-but-empty littlefs measured in §3.
 
 If PSRAM reads zero, build the other profile and re-check:
 
@@ -599,9 +616,9 @@ Conclusions worth carrying forward:
 | BOOT button location | not located / not needed | auto-reset worked every time; case never opened |
 | Forced download mode | **automatic** ✅ | esptool DTR/RTS auto-reset over USB-Serial/JTAG; manual BOOT method never required |
 | **Recovery drill (§4)** | ✅ **PASSED 2026-07-25** | `erase_flash` (3.1 s) → full 16 MB `write_flash` → boots to stock, confirmed by the owner |
-| PSRAM variant | **esp32s3-ospi** (expected) | 8 MB AP_3v3 ⇒ octal; also upstream's `default_profile`. Confirm via About |
-| PSRAM reported in About | | must be non-zero |
-| Stock radio operation | 🟡 boots — **v2.35 Jul 25 2026** | flashed first try via arduino-cli `esp32s3-ospi`; FM/HF/audio check outstanding |
+| PSRAM variant | **esp32s3-ospi** ✅ CONFIRMED | 8 MB AP_3v3 ⇒ octal; upstream's `default_profile`; correct first try |
+| PSRAM reported in About | **8192k (8075k free)** ✅ | non-zero ⇒ OSPI correct |
+| Stock radio operation | 🟡 boots, WiFi joins (IP 192.168.1.92) — **v2.35 Jul 25 2026** | flashed first try; FM/HF tune + audio check outstanding |
 | Previous firmware on unit | **ats-mini, built Sep 22 2025** | extracted from the backup's app0 — the radio already ran ats-mini |
 | **IO11 tap (§6)** | ⬜ confirmed / ⬜ jumpered | flicker seen? at what volume? |
 | V4 sub-revision concluded | | V4 (pads) or V4a (routed) |
