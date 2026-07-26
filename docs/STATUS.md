@@ -221,6 +221,48 @@ repeated fixes from one station as independent evidence — floor the posterior 
 station's own accuracy, so N reports from a biased station never make us more certain
 than that station is.
 
+## Field variability — the survey is a probe, not the config (2026-07-26)
+
+Owner direction: location, antenna, propagation, and time of day are all
+variables — the device goes to the field. A station list baked from a home
+survey is therefore a **warm start, not the mechanism**. Combined with what the
+first real survey showed (one phase-accurate CT station on the whole New
+Orleans dial; a crowd asserting the right minute but 1–3 s sloppy; several
+clocks minutes-to-hours broken), the design is:
+
+1. **The device self-surveys.** The FM scan the survey probe does (RSSI/SNR
+   pass, then dwell rotation hunting CT) moves into the app proper. Any stored
+   station list is only a hint that makes the first fix faster at a known QTH;
+   an unknown dial is discovered from nothing.
+2. **RDS voting happens at minute-consensus tolerance, not phase tolerance.**
+   Field data: real stations rarely agree within 400 ms (only one is even
+   *capable* of it here), but honest-plus-sloppy stations agree on the minute
+   within a few seconds — five of them in this market — while broken clocks
+   agree with nobody. Widen the vote tolerance to seconds; let the cluster
+   pick the minute; report RDS uncertainty honestly at seconds scale for
+   unvetted stations.
+3. **Stations earn phase trust on the device, the same way the survey measured
+   it.** Once WWV has disciplined the clock, every CT arrival is a measurement
+   of that station's own offset. A station observed stable and tight (an 89.9)
+   earns a small uncertainty and helps hold phase between listen windows; a
+   sloppy or broken one never does. Per-station stats persist in NVS. This is
+   the "floor the posterior at the station's own accuracy" fix from the
+   weighting caveat — inverted into earned trust, now justified by data.
+4. **The sharp edge this data exposed:** WWV's marker fixes are ±30 s
+   ambiguous (phase within a minute, not which minute). A device seeded by a
+   single broken station (a WWOZ, 12 min off) would get its *phase* beautifully
+   corrected and stay minutes wrong. The **minute must come from RDS consensus
+   or the operator** — a lone unverified CT station may seed only with wide
+   uncertainty and must never be minute-corroborated by WWV alone.
+5. **Propagation and antenna were already architected for** on the HF side —
+   band stepping 5/10/15 MHz with per-band success logging and learned
+   preference resets naturally when conditions change; a better antenna just
+   makes bands start succeeding. On FM, antenna/location changes are absorbed
+   by rescanning. Time-of-day effects are why listen windows step bands at all.
+
+Implementation lands after the current n≥2 survey run confirms offset
+*stability* (the assumption behind earned trust).
+
 ## Setup decisions
 
 1. **How the `ats-mini` base lives in git → `git subtree` at `firmware/ats-mini/`.**
