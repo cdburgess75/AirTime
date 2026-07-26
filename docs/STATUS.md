@@ -255,6 +255,28 @@ repeated fixes from one station as independent evidence — floor the posterior 
 station's own accuracy, so N reports from a biased station never make us more certain
 than that station is.
 
+## First day on hardware — what is verified and what is open (2026-07-26)
+
+Verified on the device, over the air, in one day: RDS cold start to sync in
+30 s; uncertainty visibly tightening 250→110 ms across weighted votes and
+growing honestly between them; the RDS throttle stretching to its 10-minute
+cadence once disciplined; NTP served over the AirTime AP (first measurement
+`sntp 192.168.4.1` → −0.343 s ± 0.154 s, exactly the surveyed station-lateness
+envelope); **warm boot** restoring time+drift from NVS as `UNSYNCED —
+last-known + drift` and correctly starting WWV listening immediately;
+fast-build listen windows firing on cadence with the single-tuner rules
+visible (RDS counters freeze during windows); the watchdog fix holding
+(zero resets across hours); and the serial-backpressure fix (drop=0).
+
+**Open: zero WWV marker detections across many clean windows.** The sampler
+streams perfectly; the detector never fires. Three candidate causes with
+different fixes — tone below threshold, AGC chopping the 800 ms beep under
+the 700 ms gate, or dead/jammed bands — now discriminated by the `mkr[]`
+diag line (band-tagged floor/peak/burst/reject counters). Field lesson
+already paid for: the stale stock display misled the operator into a false
+jamming theory (the "9999" readout was a probe-era leftover; the music was
+our own FM rotation) — the §5 display is promoted in priority.
+
 ## Field variability — the survey is a probe, not the config (2026-07-26)
 
 Owner direction: location, antenna, propagation, and time of day are all
