@@ -63,7 +63,12 @@ def main():
             elif s := RE_CT.match(line):
                 f, pi, utc, ble = (int(s.group(1)), s.group(2),
                                    int(s.group(3)), s.group(4))
-                if any(int(d) > 1 for d in ble):
+                # Survey stats demand pristine blocks. "1-2 bits corrected" is
+                # usually fine but not always: a real ble=0111 sample decoded
+                # to a plausible-looking date in 2049 (100.1 MHz, PI 186C).
+                # The device's voter can outvote such poison; a survey median
+                # cannot.
+                if ble != "0000":
                     rejected += 1
                     continue
                 pi_of[f] = pi

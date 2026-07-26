@@ -266,6 +266,16 @@ void airtimeRdsSurvey()
 
     case St::Dwell:
       pumpRds();
+      // Teach the round-focus logic what this dwell learned. (First field run
+      // shipped without these two lines: every station stayed "never sent CT"
+      // and round 2+ degraded to a full rotation — visible in the log as
+      // "round N done ct_stations=0" ticking once per station.)
+      if(sync_seen) had_rds[dwell_i] = true;
+      if(ct_seen && !had_ct[dwell_i])
+      {
+        had_ct[dwell_i] = true;
+        any_ct = true;
+      }
       if(ct_seen && (ps_printed || now - t_ct > kAfterCtLingerMs))
       {
         nextDwell();  // CT caught; the next one is a minute away

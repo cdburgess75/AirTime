@@ -47,12 +47,20 @@
 #include <airtime_esp32.h>
 
 // ── Milestone 1 station survey ──────────────────────────────────────────────
-// SI4735 native FM units (10 kHz): 9110 = 91.1 MHz. Only stations the survey
-// confirmed to transmit clock-time (group 4A) belong here, and the survey must
-// record each station's measured offset from true time — that number decides
-// whether RDS bias handling needs to move past the STATUS.md caveat.
-static const int32_t kFmStations[1] = {0};  // placeholder slot, none surveyed
-static const size_t kFmStationCount = 0;    // raise as survey entries land
+// SI4735 native FM units (10 kHz): 8990 = 89.9 MHz. Measured 2026-07-26 at
+// the home QTH (New Orleans dial), two runs ~35 min apart, offsets stable
+// between runs; full table in docs/STATUS.md. These three cluster within the
+// voter's tolerance and sit inside RDS's ±250 ms error model. Every other CT
+// sender on this dial measured 0.9 s to 6.2 hours from truth — excluded.
+// This list is a WARM START for this location, not the mechanism: the
+// self-survey design (STATUS.md, "Field variability") supersedes it.
+static const int32_t kFmStations[] = {
+    8990,   // 89.9  WWNO   pi=A920  +37..+87 ms (n=3) — the anchor
+    10470,  // 104.7 WJSH   pi=6E47  +216 ms (n=1)
+    10750,  // 107.5 K-LOVE pi=33CB  +352..+367 ms (n=2)
+};
+static const size_t kFmStationCount =
+    sizeof(kFmStations) / sizeof(kFmStations[0]);
 
 static const uint8_t kWwvListenVolume = 35; // the level Milestone 0 calibrated
 

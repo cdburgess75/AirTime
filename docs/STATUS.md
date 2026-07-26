@@ -46,7 +46,33 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 ## 🟡 Milestone 1 — RDS clock
 **Deliverable: self‑setting clock from broadcast FM.**
 
-- [ ] Survey receivable FM stations: PI, whether CT is sent, and **each station's CT offset from truth** — that last one drives the arbiter's phase behaviour, see the weighting note below *(hardware — tooling ready: `-DAIRTIME_RDS_SURVEY` build + `tools/survey_log.py` + `tools/survey_report.py`, runbook in [MILESTONE1.md](MILESTONE1.md))*
+- [x] Survey receivable FM stations — **DONE 2026-07-26**, New Orleans home QTH, two runs ~35 min apart. Verdict: **offsets are stable per station** (earned-trust assumption holds), the dial splits into one on-time station, a 0.9–3.2 s "sloppy" crowd that still asserts the correct minute, and broken clocks minutes-to-hours off. Warm-start list (89.9/104.7/107.5) baked into `AirTimeMode.cpp`. Full table:
+
+  | MHz | PI | Station | offset (runs) | class |
+  |---|---|---|---|---|
+  | 89.9 | A920 | WWNO | +37/+84/+87 ms | **on time — the anchor** |
+  | 104.7 | 6E47 | WJSH | +216 ms (n=1) | good |
+  | 107.5 | 33CB | K-LOVE | +352/+367 ms | good |
+  | 98.9 | 8B94 | WUUU | +0.91/+1.00 s | sloppy, stable |
+  | 100.7 | 8774 | (Eagle) | +0.93 s | sloppy |
+  | 98.1 | 5D3B | — | +1.50/+1.56 s | sloppy, stable |
+  | 91.1 | 82F3 | Vida | +1.59 s | sloppy |
+  | 97.7 | 6373 | — | +2.25 s | sloppy |
+  | 103.3 | 833C | — | +2.35 s | sloppy |
+  | 94.3 | 87BB | — | +2.39 s | sloppy |
+  | 106.1 | 829D | — | +2.69 s | sloppy |
+  | 101.9 | 72F2 | — | +2.75 s | sloppy |
+  | 106.5 | 3CA1 | — | +2.98 s | sloppy |
+  | 94.1 | A687 | — | +2.6/+3.2/+3.1 s | sloppy |
+  | 107.1 | 685F | — | +3.11/+3.19 s | sloppy, stable |
+  | 105.3 | 9989 | WWL | +10.3 s | broken |
+  | 92.3 | 986D | Alt 92.3 | +212.2/+212.3 s | broken (~3.5 min) |
+  | 96.5 | 8776 | WTGG | +484.7/+484.9 s | broken (~8 min) |
+  | 90.7 | A945 | WWOZ | +747.3/+747.4/+747.5 s | broken (~12.5 min, free-running) |
+  | 97.1 | F000 | — | +22366.5/+22366.6 s | broken (6.21 h, stable!) |
+  | 100.1 | 186C | — | (ble=0111 sample decoded to year 2049) | poison — see report filter |
+
+  ~15 stations agree on the correct minute within ±3.2 s while broken clocks agree with nobody — the minute-consensus design is confirmed by data. Sloppy-station offsets repeat within ~0.5 s run-to-run; tight ones within 100 ms.
 - [x] RDS CT‑group (group 4A) decode — `rds_ct` ✅ host-tested
 - [x] Multi‑station **voting** logic — `station_vote` ✅ host-tested (scan is hardware)
 - [ ] Minute‑boundary set *(needs disciplined clock — batch 2)*
