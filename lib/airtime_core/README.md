@@ -72,8 +72,6 @@ The sketch is `firmware/ats-mini/ats-mini/`; running this from the repository ro
 fails with `Can't open sketch`. **This only has an effect once the sketch includes
 `<airtime/app.h>`** — until then it builds stock ats-mini unchanged.
 
-The library is only compiled in once the sketch actually includes `<airtime/app.h>`.
-
 ## Footprint
 
 Measured with `-Os`: `AirTimeApp` is **1,896 bytes** of RAM in total (arbiter 256,
