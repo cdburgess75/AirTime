@@ -183,6 +183,7 @@ void airtimeLoop()
     airtime::formatUtcLine(st, l1, sizeof(l1));
     airtime::formatStatusLine(st, l2, sizeof(l2));
     Serial.printf("AirTime %s | %s\n", l1, l2);
+    const airtime::WwvMarkerDiag md = atApp->wwvMarker().diag();
     Serial.printf(
         "  wwv[fs=%.0f dc=%.0f blk=%lu drop=%lu] rds[ok=%lu rej=%lu] "
         "ap[%d joined, %lu served]\n",
@@ -190,6 +191,17 @@ void airtimeLoop()
         (unsigned long)atWwv.blocksProduced(), (unsigned long)atWwv.blocksDropped(),
         (unsigned long)atRds.groupsAccepted(), (unsigned long)atRds.groupsRejected(),
         atWifi.stationCount(), (unsigned long)atWifi.requestsServed());
+    // The marker detector's view — the number that decides the next move.
+    // flr/pk: current noise floor and strongest block seen (normalised power).
+    // st: bursts that crossed the on-threshold; run: last/longest burst ms;
+    // rej: duration-gate rejects short/long; mk: accepted minute markers.
+    Serial.printf(
+        "  mkr[flr=%.1e pk=%.1e st=%lu run=%ld/%ldms rej=%lu/%lu mk=%lu]\n",
+        (double)md.noise_floor, (double)md.max_power,
+        (unsigned long)md.tone_starts,
+        (long)(md.last_tone_us / 1000), (long)(md.longest_tone_us / 1000),
+        (unsigned long)md.rejected_short, (unsigned long)md.rejected_long,
+        (unsigned long)md.markers);
   }
 }
 

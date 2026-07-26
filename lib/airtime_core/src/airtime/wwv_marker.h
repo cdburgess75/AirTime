@@ -41,6 +41,23 @@ struct WwvMarker {
   real peak_power;          // peak normalized power during the tone
 };
 
+// What the detector has SEEN, cumulatively — the difference between "the tone
+// is below threshold", "the tone fragments before the duration gate passes"
+// (AGC pumping), and "there is no tone on this band" is invisible from the
+// outside, and each needs a different fix. Counters survive reset() on
+// purpose: reset happens at every band change, and a per-window report must
+// span them.
+struct WwvMarkerDiag {
+  real noise_floor = 0.0f;      // current estimate (post-reset it re-learns)
+  real max_power = 0.0f;        // strongest single block ever seen
+  int64_t last_tone_us = 0;     // duration of the most recent completed burst
+  int64_t longest_tone_us = 0;  // longest completed burst
+  uint32_t tone_starts = 0;     // rising edges (bursts that crossed on_th)
+  uint32_t rejected_short = 0;  // bursts under the 700 ms gate
+  uint32_t rejected_long = 0;   // bursts over the 900 ms gate
+  uint32_t markers = 0;         // accepted minute markers
+};
+
 // Turn a detected minute marker into a phase correction.
 //
 // WWV gives phase, never date (PLAN.md §3), so this answers only "how far is the
@@ -73,6 +90,12 @@ class WwvMarkerDetector {
   real noiseFloor() const { return noise_; }
   bool inTone() const { return in_tone_; }
 
+  WwvMarkerDiag diag() const {
+    WwvMarkerDiag d = diag_;
+    d.noise_floor = noise_;
+    return d;
+  }
+
  private:
   WwvMarkerConfig cfg_;
   bool in_tone_ = false;
@@ -80,6 +103,7 @@ class WwvMarkerDetector {
   real noise_ = 0.0f;
   real peak_ = 0.0f;
   int64_t tone_start_ = 0;
+  WwvMarkerDiag diag_;  // counters cumulative across reset(); see struct note
 };
 
 }  // namespace airtime

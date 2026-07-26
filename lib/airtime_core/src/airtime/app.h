@@ -111,6 +111,7 @@ class AirTimeApp {
   const Arbiter& arbiter() const { return arbiter_; }
   const Scheduler& scheduler() const { return sched_; }
   const Directive& directive() const { return directive_; }
+  const WwvMarkerDetector& wwvMarker() const { return marker_; }
 
  private:
   // The scheduler's directive, adjusted for what only the app knows. Today

@@ -36,6 +36,8 @@ void WwvMarkerDetector::reset() {
 bool WwvMarkerDetector::process(int64_t mono_us, real power, WwvMarker* out) {
   bool emitted = false;
 
+  if (power > diag_.max_power) diag_.max_power = power;
+
   if (!in_tone_) {
     // Track the noise floor only while idle, so a long tone can't inflate it.
     if (!have_noise_) {
@@ -49,6 +51,7 @@ bool WwvMarkerDetector::process(int64_t mono_us, real power, WwvMarker* out) {
       in_tone_ = true;
       tone_start_ = mono_us;  // leading edge == minute boundary
       peak_ = power;
+      ++diag_.tone_starts;
     }
   } else {
     if (power > peak_) peak_ = power;
@@ -56,6 +59,8 @@ bool WwvMarkerDetector::process(int64_t mono_us, real power, WwvMarker* out) {
     if (power < off_th) {
       const int64_t dur = mono_us - tone_start_;
       in_tone_ = false;
+      diag_.last_tone_us = dur;
+      if (dur > diag_.longest_tone_us) diag_.longest_tone_us = dur;
       if (dur >= cfg_.gate_min_us && dur <= cfg_.gate_max_us) {
         if (out != nullptr) {
           out->leading_edge_us = tone_start_;
@@ -63,6 +68,11 @@ bool WwvMarkerDetector::process(int64_t mono_us, real power, WwvMarker* out) {
           out->peak_power = peak_;
         }
         emitted = true;
+        ++diag_.markers;
+      } else if (dur < cfg_.gate_min_us) {
+        ++diag_.rejected_short;
+      } else {
+        ++diag_.rejected_long;
       }
       // Resume noise tracking from this first silent sample.
       noise_ += cfg_.noise_alpha * (power - noise_);

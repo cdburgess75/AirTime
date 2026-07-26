@@ -64,6 +64,35 @@ AT_TEST(wwv_ignores_subfloor_burst) {
 }
 
 // Levels as actually measured on hardware (Milestone 0 §6) must detect.
+// The diag block must tell apart "marker accepted", "burst too short"
+// (AGC pumping fingerprint) and "nothing above threshold" — and survive
+// reset(), which fires at every band change.
+AT_TEST(wwv_diag_counts_and_survives_reset) {
+  WwvMarkerDetector det;
+  int64_t t = 0;
+  WwvMarker m;
+  const real kNoise = 7.7e-5f, kTone = 1.9e-3f;
+  constexpr int64_t kBlk = 20000;
+
+  for (int i = 0; i < 100; ++i, t += kBlk) det.process(t, kNoise, &m);
+  // A full 800 ms marker...
+  for (int i = 0; i < 40; ++i, t += kBlk) det.process(t, kTone, &m);
+  for (int i = 0; i < 50; ++i, t += kBlk) det.process(t, kNoise, &m);
+  // ...then a 200 ms fragment (what AGC pumping produces).
+  for (int i = 0; i < 10; ++i, t += kBlk) det.process(t, kTone, &m);
+  for (int i = 0; i < 50; ++i, t += kBlk) det.process(t, kNoise, &m);
+
+  det.reset();  // band change must not wipe the evidence
+
+  const airtime::WwvMarkerDiag d = det.diag();
+  AT_CHECK_EQ(d.markers, 1u);
+  AT_CHECK_EQ(d.tone_starts, 2u);
+  AT_CHECK_EQ(d.rejected_short, 1u);
+  AT_CHECK_EQ(d.rejected_long, 0u);
+  AT_CHECK(d.longest_tone_us >= 700000 && d.longest_tone_us <= 900000);
+  AT_CHECK(d.max_power >= kTone);
+}
+
 AT_TEST(wwv_detects_at_measured_levels) {
   Feeder f;
   for (int i = 0; i < 10; ++i) f.feed(i, 7.7e-5f);   // measured in-bin noise
