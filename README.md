@@ -4,7 +4,14 @@
 
 AirTime runs entirely on an *unmodified* [AMNVOLT ATS Mini V4](docs/PLAN.md#2-target-hardware-owned-verified) pocket receiver. When internet and GPS are gone, time still arrives over the air — **FM RDS** and **WWV** — and AirTime arbitrates those sources into a drift-disciplined internal clock, then serves it to your laptop as **NTP**.
 
-> Status: **Milestone 0 complete; the whole device runs in simulation.** Every piece of AirTime's logic is written and host-tested (`make test` → **81 tests, 2151 checks passing**), and a simulated ATS Mini drives the real application end to end: it cold-starts from RDS, outvotes a station transmitting wrong time, lets WWV refine the fix, learns its crystal, and serves accurate stratum-1 NTP — with WiFi and the ADC never live at the same time. What remains is the thin firmware adapters and the one calibration constant only hardware can supply. **Milestone 0 is complete**: the device has a verified backup, survived a deliberate erase-and-restore, and its IO11 audio tap is confirmed. See [`docs/STATUS.md`](docs/STATUS.md).
+> Status: **It works on the radio.** `sntp` against the device returns
+> **−0.005 s ± 0.071** with no internet and no GPS: RDS seeds the date from
+> broadcast FM, a WWV minute marker on 15 MHz pulls the phase onto the second,
+> and the laptop takes its time from the radio's own access point. Milestones
+> 0–4 are verified on hardware; what remains is an evening of FT8 decodes
+> (Milestone 5) and the §5 front-panel display. `make test` → **97 tests, 2269
+> checks passing**. The story of how it got there — including four bugs that
+> each made the device confidently wrong — is in [`docs/STATUS.md`](docs/STATUS.md).
 
 ---
 
@@ -57,11 +64,11 @@ No GPS module · no external RTC (DS3231) · no WWV date/timecode decode (phase 
 | Milestone | Deliverable | State |
 |---|---|---|
 | **0 — Safety net + HW verify** | Stock firmware backed up, recovery drill done, IO11 tap confirmed | ✅ **COMPLETE** — drill passed, **IO11 tap confirmed**, no jumper needed: [`docs/MILESTONE0.md`](docs/MILESTONE0.md) |
-| **1 — RDS clock** | Self‑setting clock from broadcast FM | 🟡 Decode + voting done (host) |
-| **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | 🟡 SNTP + client counting + unsynced flagging done (host) |
-| **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | 🟡 Goertzel, marker gate, band stepping done (host) |
-| **4 — Arbiter + confidence** | Full AirTime runtime behavior | 🟡 Arbiter, clock, drift, uncertainty, scheduler done (host) |
-| **5 — Field acceptance** | Cold start → laptop synced → WSJT‑X DT ≈ 0 all evening | ⬜ Not started |
+| **1 — RDS clock** | Self‑setting clock from broadcast FM | ✅ **ON DEVICE** — cold start to sync in 30 s; dial surveyed, stations scored: [`docs/MILESTONE1.md`](docs/MILESTONE1.md) |
+| **2 — Serve** | Laptop runs FT8 synced to the radio, no internet | ✅ **ON DEVICE** — laptop served over the radio's own AP |
+| **3 — WWV phase lock** | Clock disciplines itself from HF with FM absent | ✅ **ON DEVICE** — 15 MHz minute marker detected and applied; `sntp` → **−0.005 s ± 0.071** |
+| **4 — Arbiter + confidence** | Full AirTime runtime behavior | ✅ Slew/step, corroboration, per‑source drift, honest uncertainty — all exercised over the air |
+| **5 — Field acceptance** | Cold start → laptop synced → WSJT‑X DT ≈ 0 all evening | 🟡 Client setup documented ([`docs/CLIENT_SETUP.md`](docs/CLIENT_SETUP.md)); evening of decodes pending |
 
 Detailed milestone contents live in [`docs/PLAN.md §7`](docs/PLAN.md#7-milestones) and are tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
@@ -114,16 +121,22 @@ AirTime/
 │           ├── hal.h             The hardware seam (interfaces)
 │           ├── display.*         The §5 display lines
 │           └── app.*             AirTimeApp — wires it all to the seam
-├── test/                     Unit tests (81 cases) + fakes.h, a simulated ATS Mini
+├── lib/airtime_esp32/         ESP32 adapters: RDS chip, ADC sampler, SoftAP, NVS
+├── test/                     Unit tests (97 cases) + fakes.h, a simulated ATS Mini
 ├── tools/
-│   └── inspect_flash.py   Validate / compare ESP32 flash images (Milestone 0)
+│   ├── inspect_flash.py   Validate / compare ESP32 flash images (Milestone 0)
+│   ├── build_fw.sh        Compile a firmware flavour (airtime|fast|stock|probe|survey)
+│   ├── survey_log.py      Timestamp the radio's serial output to a log
+│   └── survey_report.py   Score surveyed FM stations by clock-time accuracy
 ├── firmware/
-│   ├── ats-mini/          Upstream esp32-si4732/ats-mini (git subtree)
+│   ├── ats-mini/          Upstream esp32-si4732/ats-mini (git subtree) + AirTime glue
 │   └── backup/            Verified stock firmware image + checksum
 └── docs/
     ├── PLAN.md            The canonical v1 specification and build plan
     ├── ARCHITECTURE.md    The core ↔ hardware seam
     ├── MILESTONE0.md      Backup / recovery-drill / IO11 runbook (run before flashing)
+    ├── MILESTONE1.md      FM station survey runbook
+    ├── CLIENT_SETUP.md    Pointing macOS / Linux / Windows at the radio for WSJT-X
     └── STATUS.md          Live milestone / task tracker
 ```
 

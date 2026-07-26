@@ -168,6 +168,33 @@ void airtimeSetup()
   Serial.println("AirTime: up. NTP at 192.168.4.1:123 while serving.");
 }
 
+// The §5 display. ats-mini's drawScreen() already takes two status lines and
+// AirTime's display module already produces exactly two, so the clock lands in
+// the stock layout with no new drawing code and no fight with the existing UI.
+//
+// This matters more than it looks. In this build the frequency readout is
+// actively misleading — the scheduler retunes the chip constantly, so whatever
+// the dial says is a leftover. That cost a whole debugging session once: the
+// display read "9999" from an earlier probe build and sent us hunting a
+// jamming theory that did not exist. A time appliance should show the time and
+// how much it can be trusted, and nothing it cannot stand behind.
+//
+// Buffers are static because drawScreen keeps the pointers only for the length
+// of the call, but the caller reads them after we return.
+void airtimeStatusLines(const char **l1, const char **l2)
+{
+  static char line1[32] = "AirTime";
+  static char line2[96] = "starting...";
+  if(atApp != nullptr)
+  {
+    const airtime::DisplayState st = atApp->displayState();
+    airtime::formatUtcLine(st, line1, sizeof(line1));
+    airtime::formatStatusLine(st, line2, sizeof(line2));
+  }
+  *l1 = line1;
+  *l2 = line2;
+}
+
 void airtimeLoop()
 {
   if(atApp == nullptr) return;

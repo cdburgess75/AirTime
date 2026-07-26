@@ -1031,7 +1031,28 @@ void loop()
   }
 
   // Redraw screen if necessary
+#ifdef AIRTIME
+  // AirTime owns the two status lines: the dial readout is meaningless in this
+  // build (the scheduler retunes at will), so the screen shows the clock and
+  // how much it can be trusted instead. See airtimeStatusLines().
+  {
+    extern void airtimeStatusLines(const char **l1, const char **l2);
+    // A clock that only redraws on radio events is a stopped clock: ats-mini
+    // refreshes on tuning and button presses, and AirTime generates neither.
+    // Tick the seconds ourselves.
+    static uint32_t atLastTick = 0;
+    if(currentTime - atLastTick >= 1000)
+    {
+      atLastTick = currentTime;
+      needRedraw = true;
+    }
+    const char *atL1, *atL2;
+    airtimeStatusLines(&atL1, &atL2);
+    if(needRedraw) drawScreen(atL1, atL2);
+  }
+#else
   if(needRedraw) drawScreen();
+#endif
 
   // Add a small default delay in the main loop
   delay(5);
