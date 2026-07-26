@@ -567,19 +567,29 @@ macOS's built-in `screen "$PORT" 115200` is a third option (exit: Ctrl-A, K, y).
 One line per second:
 
 ```
-AIRTIME-IO11 n=4096 fs= 21000Hz dc=1850 min=1600 max=2100 pp= 500 g1k= 210.4
+AIRTIME-IO11 fs= 9995 dc=2873 pp= 462 rms= 141.0 peak=1250Hz mag= 162.8 clip=no
 ```
 
-**Turn the volume down to zero, then up to ~35, and watch `pp` and `g1k`.**
+**Turn the volume to zero, then up to ~35, and watch `rms`.**
+
+`rms` is the field to trust. A single-frequency detector is the wrong instrument here —
+the beat is only *nominally* 1000 Hz, and BFO plus receiver calibration can put it tens
+of Hz away. Broadband rms does not care where the energy sits. `peak`/`mag` then tell you
+*which* frequency dominates, useful for confirming you are hearing what you think.
 
 | Observation | Meaning | Action |
 |---|---|---|
-| `g1k` and `pp` **rise clearly with volume** | **Tap confirmed.** IO11 carries audio | Assumption retired ✅ |
-| `g1k` stays at its quiet value **at every volume**, tone clearly audible | Original V4 — pads only | One jumper: amp IC pin 8 → IO11, then retest |
-| `fs` below ~2500 Hz, or wild readings | WiFi still on, or sampling stalled | Fix §6c first; the Goertzel is skipped below 2.5 kHz |
+| `rms` **rises clearly with volume** | **Tap confirmed.** IO11 carries audio | Assumption retired ✅ |
+| `rms` **unchanged at every volume**, tone clearly audible | Original V4 — pads only | One jumper: amp IC pin 8 → IO11, then retest |
+| `clip=YES`, `dc` wandering, huge `pp` | **WiFi is still on** — ADC2 is unreadable | Fix §6c; readings are meaningless until then |
+| `fs` below ~7000 Hz | Sampling stalled; the sweep is skipped | Investigate before drawing conclusions |
 
-The absolute numbers matter less than the *change* with volume — that is what distinguishes
-a real tap from a floating pin picking up noise.
+The absolute numbers matter far less than the *change* with volume — that is what
+separates a real tap from a floating pin picking up noise.
+
+> **Observed in practice:** with WiFi ON this unit read `pp` 1000–2700 with `max` pinned
+> at 4095 and `dc` wandering; with WiFi OFF, `pp` 250–600, no clipping, and `dc` stable to
+> ±3 counts. The §2 constraint is not theoretical.
 
 ### 6e. Reflash stock afterwards
 
