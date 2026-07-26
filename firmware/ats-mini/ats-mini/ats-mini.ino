@@ -749,6 +749,13 @@ bool processRssiSnr()
 //
 void loop()
 {
+#ifdef AIRTIME_IO11_PROBE
+  // Milestone 0 §6 hardware verification only; see AirTimeProbe.cpp.
+  // Compiled out unless -DAIRTIME_IO11_PROBE is passed.
+  extern void airtimeIo11Probe();
+  airtimeIo11Probe();
+#endif
+
   uint32_t currentTime = millis();
   bool needRedraw = false;
 

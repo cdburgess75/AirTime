@@ -504,32 +504,85 @@ Then confirm normal radio operation: FM tunes, HF tunes, audio out of the speake
 at the factory; the original V4 has solder pads only. Everything in Milestone 3 depends
 on this, so measure it rather than hope.
 
-**The method** (from HJBerndt's documentation): feed the receiver a steady 1 kHz tone and
-watch whether the firmware's ADC-driven backlight responds to it.
+> ### ⚠️ ats-mini alone CANNOT perform this test
+>
+> A real attempt was made by tuning 9999 kHz USB on stock ats-mini v2.35 and watching for
+> backlight flicker. **The result was meaningless.** Searching that firmware finds
+> `analogRead` exactly once — in `Battery.cpp`, reading `VBAT_MON` — and no reference to
+> ADC2, IO11, or any audio decoder. `PIN_LCD_BL` (GPIO38) is PWM brightness only.
+>
+> **ats-mini contains no code that could modulate the backlight from audio.** A radio
+> with a perfectly working tap shows exactly the same absence of flicker. Concluding
+> "not routed" from this would have meant opening the case and soldering a jumper that
+> was not needed.
+>
+> The test requires firmware that actually samples the pin: either the probe below, or
+> HJBerndt's binary.
 
-1. **Antenna on**, HF connected. Evening gives the best 10 MHz propagation.
-2. Flash the **HJBerndt binary** (closed-source; it is a *verification tool* here, not
-   donor code — see PLAN.md §6). Keep your §2 backup handy; you'll reflash after.
-3. Tune **9999.000 kHz USB**. WWV's 10 MHz carrier beats against your BFO to a continuous
-   **1000 Hz** tone. *(Alternative: 4999.000 kHz USB against WWV 5 MHz.)*
-4. Set **volume ≈ 35** — the tap is fed from the amplifier output, so it needs real
-   audio level.
-5. Enter **Decoder → Tune/BL**.
+### 6a. Preconditions
 
-**Read the result:**
+- **HF antenna connected**, and you can *hear* a clean ~1 kHz beat at **9999.000 kHz USB**
+  (WWV's 10 MHz carrier against the BFO). Evening is best; 4999.000 vs WWV 5 MHz also
+  works. **A null result only counts if the tone is audible** — a dead band looks
+  identical to a missing connection.
+- **Volume around 35.** The tap is fed from the amplifier output and needs real level.
+
+### 6b. Build the probe
+
+`AirTimeProbe.cpp` samples IO11 and prints the peak-to-peak swing plus a 1000 Hz Goertzel
+magnitude, so "is audio present on this pin" becomes a number rather than a judgement
+call. It is compiled only when the flag is set, so stock behaviour is otherwise untouched.
+
+```sh
+cd <repo>/firmware/ats-mini
+arduino-cli compile --clean -e --build-property "compiler.cpp.extra_flags=-DAIRTIME_IO11_PROBE" -p "$PORT" -u ats-mini
+```
+
+### 6c. ⚠️ Turn WiFi OFF on the radio
+
+**ADC2 cannot be read while WiFi is active** (PLAN.md §2 — silicon, not firmware). With
+WiFi up the probe reads garbage. Disable it in the radio's menu before testing. This is
+the same constraint AirTime's scheduler exists to manage, meeting reality for the first
+time.
+
+### 6d. Watch the numbers
+
+```sh
+arduino-cli monitor -p "$PORT" -c baudrate=115200
+```
+
+One line per second:
+
+```
+AIRTIME-IO11 n=4096 fs= 21000Hz dc=1850 min=1600 max=2100 pp= 500 g1k= 210.4
+```
+
+**Turn the volume down to zero, then up to ~35, and watch `pp` and `g1k`.**
 
 | Observation | Meaning | Action |
 |---|---|---|
-| Backlight **flickers** in time with the tone | **Tap confirmed.** IO11 carries audio | Assumption retired ✅ Proceed |
-| **No flicker at any volume** | Original V4 — pads only, not routed | One jumper wire: **amp IC pin 8 → IO11**, then retest |
-| No tone audible at all | Propagation/antenna/tuning issue | Fix reception first; this is not an IO11 result |
+| `g1k` and `pp` **rise clearly with volume** | **Tap confirmed.** IO11 carries audio | Assumption retired ✅ |
+| `g1k` stays at its quiet value **at every volume**, tone clearly audible | Original V4 — pads only | One jumper: amp IC pin 8 → IO11, then retest |
+| `fs` below ~2500 Hz, or wild readings | WiFi still on, or sampling stalled | Fix §6c first; the Goertzel is skipped below 2.5 kHz |
 
-The third row matters: **a null result only counts if you can actually hear the tone.**
-Don't conclude "no tap" from a quiet band.
+The absolute numbers matter less than the *change* with volume — that is what distinguishes
+a real tap from a floating pin picking up noise.
 
-6. **Reflash** stock or your `ats-mini` build afterwards (§4c or §5b).
+### 6e. Reflash stock afterwards
 
----
+```sh
+arduino-cli compile --clean -e -p "$PORT" -u ats-mini
+```
+
+Without the flag the probe is compiled out entirely.
+
+### Alternative: HJBerndt's binary
+
+The originally-specified route (PLAN.md §7): flash his closed-source image, tune
+9999.000 kHz USB, volume ~35, **Decoder → Tune/BL**, and watch for backlight flicker. It
+is prior art and a verification tool, not donor code. The probe above is preferred — it
+uses the toolchain already working here, requires trusting no third-party binary, and
+gives a number instead of a flicker.
 
 ## 7. Record the results
 
