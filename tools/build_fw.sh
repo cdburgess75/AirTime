@@ -23,10 +23,11 @@ FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PSRAM=opi,CPUFreq=80,USBMod
 
 case "${1:-airtime}" in
   airtime) FLAGS="-DAIRTIME" ;;
+  fast)    FLAGS="-DAIRTIME -DAIRTIME_FAST_LISTEN" ;;  # WWV windows every 10 min
   stock)   FLAGS="" ;;
   probe)   FLAGS="-DAIRTIME_IO11_PROBE" ;;
   survey)  FLAGS="-DAIRTIME_RDS_SURVEY" ;;
-  *) echo "usage: $0 [airtime|stock|probe|survey]" >&2; exit 2 ;;
+  *) echo "usage: $0 [airtime|fast|stock|probe|survey]" >&2; exit 2 ;;
 esac
 
 restore() { [ -f "$SKETCH/sketch.yaml.off" ] && mv "$SKETCH/sketch.yaml.off" "$SKETCH/sketch.yaml"; }

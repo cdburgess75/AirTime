@@ -137,6 +137,12 @@ void airtimeSetup()
 
   airtime::AppConfig cfg;
   cfg.wwv_calibration_us = 0;  // measured on this unit in Milestone 3
+#ifdef AIRTIME_FAST_LISTEN
+  // Test builds only: WWV listen windows every 10 minutes instead of hourly,
+  // so marker detection can be verified without waiting out the hour. Not a
+  // field configuration — six windows an hour costs serving uptime.
+  cfg.scheduler.listen_interval_us = 10LL * 60 * 1000000;
+#endif
 
   atApp = new airtime::AirTimeApp(deps, cfg);
   atApp->setFmStations(kFmStations, kFmStationCount);
