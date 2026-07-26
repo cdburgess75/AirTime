@@ -46,7 +46,16 @@ Directive AirTimeApp::effectiveDirective(Directive d) const {
   // See the declaration for the reasoning: unseeded, WWV can neither help
   // (markers are ±30 s ambiguous; pollWwv discards them) nor be afforded —
   // on the single-tuner radio it would starve the RDS path that CAN seed.
-  if (!arbiter_.isSet() && d.wwv_listening) {
+  //
+  // The test is "has a real source spoken yet", NOT "is the clock set". A warm
+  // boot sets the clock from NVS, and that memory is only as good as the
+  // power-down was short — measured on the device: an hour stale. Trusting it
+  // cost twice over. The tuner sat on AM for the whole 5-minute acquisition
+  // (RDS cannot be read in AM mode, so nothing could end it early), which is
+  // where "no WiFi for five minutes after boot" came from; and WWV was invited
+  // to phase-lock a clock whose MINUTE was wrong, which a ±30 s marker cannot
+  // detect and would have silently locked in.
+  if (!arbiter_.hasSourceFix() && d.wwv_listening) {
     d.wwv_listening = false;
     d.wwv_band_khz = 0;
   }

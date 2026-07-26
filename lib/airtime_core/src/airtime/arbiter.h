@@ -135,6 +135,13 @@ class Arbiter {
 
   // Read side.
   bool isSet() const { return clock_.isSet(); }
+
+  // True once a real source has been accepted since power-on. `isSet()` is a
+  // weaker claim: a warm boot sets the clock from NVS, and that value can be
+  // arbitrarily stale (measured: an hour). Anything that needs the MINUTE to be
+  // right — WWV phase lock above all, since a marker is only ±30 s meaningful —
+  // must ask this, not isSet().
+  bool hasSourceFix() const { return source_synced_; }
   int64_t utcAt(int64_t mono_us) const { return clock_.utcAt(mono_us); }
 
   // The source-and-drift uncertainty model of §4 rule 5. This is also what

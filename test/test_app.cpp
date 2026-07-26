@@ -346,10 +346,18 @@ AT_TEST(app_warm_boot_stale_by_an_hour_recovers) {
   AT_CHECK(iabs(sim.clockErrorUs(app)) > 59 * kMin);   // wakes up an hour out
   AT_CHECK(!app.displayState().synced);                // and admits it
 
+  // The stale memory must NOT license WWV listening. On the one-tuner radio
+  // that parks the chip on AM, where RDS cannot be read at all, so nothing can
+  // end acquisition early and the AP stays down for the full 5-minute timeout
+  // — and it invites WWV to phase-lock a clock whose minute is an hour wrong.
+  sim.advance(30 * kS, &app);
+  AT_CHECK(!sim.wwv.isRunning());
+
   sim.advance(3 * kMin, &app);
 
   AT_CHECK(iabs(sim.clockErrorUs(app)) < 300000);      // fixed, within RDS
   AT_CHECK(app.displayState().synced);
+  AT_CHECK(sim.wifi.isUp());     // and serving, without waiting out the timeout
 
   // And the time it hands a laptop is the corrected one, not a promise to be
   // correct in 87 days.
