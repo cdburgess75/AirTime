@@ -25,7 +25,8 @@ case "${1:-airtime}" in
   airtime) FLAGS="-DAIRTIME" ;;
   stock)   FLAGS="" ;;
   probe)   FLAGS="-DAIRTIME_IO11_PROBE" ;;
-  *) echo "usage: $0 [airtime|stock|probe]" >&2; exit 2 ;;
+  survey)  FLAGS="-DAIRTIME_RDS_SURVEY" ;;
+  *) echo "usage: $0 [airtime|stock|probe|survey]" >&2; exit 2 ;;
 esac
 
 restore() { [ -f "$SKETCH/sketch.yaml.off" ] && mv "$SKETCH/sketch.yaml.off" "$SKETCH/sketch.yaml"; }

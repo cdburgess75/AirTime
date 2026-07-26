@@ -46,7 +46,7 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 ## 🟡 Milestone 1 — RDS clock
 **Deliverable: self‑setting clock from broadcast FM.**
 
-- [ ] Survey receivable FM stations: PI, whether CT is sent, and **each station's CT offset from truth** — that last one drives the arbiter's phase behaviour, see the weighting note below *(hardware)*
+- [ ] Survey receivable FM stations: PI, whether CT is sent, and **each station's CT offset from truth** — that last one drives the arbiter's phase behaviour, see the weighting note below *(hardware — tooling ready: `-DAIRTIME_RDS_SURVEY` build + `tools/survey_log.py` + `tools/survey_report.py`, runbook in [MILESTONE1.md](MILESTONE1.md))*
 - [x] RDS CT‑group (group 4A) decode — `rds_ct` ✅ host-tested
 - [x] Multi‑station **voting** logic — `station_vote` ✅ host-tested (scan is hardware)
 - [ ] Minute‑boundary set *(needs disciplined clock — batch 2)*

@@ -770,6 +770,12 @@ void loop()
   airtimeLoop();
 #endif
 
+#ifdef AIRTIME_RDS_SURVEY
+  // Milestone 1 station survey; see AirTimeSurvey.cpp and docs/MILESTONE1.md.
+  extern void airtimeRdsSurvey();
+  airtimeRdsSurvey();
+#endif
+
   uint32_t currentTime = millis();
   bool needRedraw = false;
 
@@ -979,9 +985,10 @@ void loop()
   // Periodically check received RDS information
   if((currentTime - lastRDSCheck) > RDS_CHECK_TIME)
   {
-#ifndef AIRTIME
-    // Under AIRTIME the Esp32RdsSource adapter is the chip's only RDS
-    // consumer — two readers would each see half the FIFO.
+#if !defined(AIRTIME) && !defined(AIRTIME_RDS_SURVEY)
+    // Under AIRTIME (or the survey probe) AirTime code is the chip's only RDS
+    // consumer — each FM_RDS_STATUS read pops the FIFO, so two readers would
+    // each see half the groups.
     needRedraw |= (currentMode == FM) && (snr >= 12) && checkRds();
 #endif
     lastRDSCheck = currentTime;
