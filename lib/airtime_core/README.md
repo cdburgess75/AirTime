@@ -64,9 +64,13 @@ g++ -std=gnu++17 -Os -fno-exceptions -fno-rtti -Wall -Wextra -Wshadow -Werror \
 `arduino-cli` is pointed at this directory as an extra library search path:
 
 ```sh
-cd firmware/ats-mini
+cd <repo>/firmware/ats-mini          # both paths below are relative to HERE
 arduino-cli compile --clean -e --libraries ../../lib -p "$PORT" -u ats-mini
 ```
+
+The sketch is `firmware/ats-mini/ats-mini/`; running this from the repository root
+fails with `Can't open sketch`. **This only has an effect once the sketch includes
+`<airtime/app.h>`** — until then it builds stock ats-mini unchanged.
 
 The library is only compiled in once the sketch actually includes `<airtime/app.h>`.
 
