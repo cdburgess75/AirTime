@@ -171,6 +171,79 @@ AT_TEST(sched_learns_preferred_band) {
   AT_CHECK_EQ(d.wwv_band_khz, 10000);
 }
 
+// Every band must eventually be tried, even though a window is too short to
+// sweep them all. A 3-minute window fits at most two 2-minute dwells, so a
+// window that restarts the sweep in the same place can never reach the third
+// band — measured on the device: three consecutive windows tried 5 then 10 MHz
+// and stopped, while 15 MHz was the only band producing markers at that QTH.
+AT_TEST(sched_sweeps_every_band_across_windows) {
+  Scheduler s;
+  s.start(0);
+  s.onRdsFix(0);
+  s.tick(kS);
+  AT_CHECK(s.phase() == Phase::Serving);
+
+  bool tried[3] = {false, false, false};
+  int64_t t = kS;
+  for (int window = 0; window < 6; ++window) {
+    s.requestListenNow();
+    for (int i = 0; i < 40; ++i) {   // 200 s, past the 3-minute window
+      t += 5 * kS;
+      const Directive d = s.tick(t);
+      if (!d.wwv_listening) continue;
+      for (int b = 0; b < 3; ++b) {
+        if (d.wwv_band_khz == (b == 0 ? 5000 : b == 1 ? 10000 : 15000)) tried[b] = true;
+      }
+    }
+  }
+  AT_CHECK(tried[0] && tried[1] && tried[2]);
+}
+
+// The same must hold when the dwell is as long as the window, so the rotation
+// never steps *inside* one and the cursor can only move between them.
+AT_TEST(sched_sweeps_when_dwell_fills_the_window) {
+  SchedulerConfig cfg;
+  cfg.band_dwell_us = cfg.listen_duration_us;  // exactly one band per window
+  Scheduler s(cfg);
+  s.start(0);
+  s.onRdsFix(0);
+  s.tick(kS);
+
+  int32_t seen[4] = {0, 0, 0, 0};
+  int64_t t = kS;
+  for (int window = 0; window < 4; ++window) {
+    s.requestListenNow();
+    t += kS;
+    seen[window] = s.tick(t).wwv_band_khz;
+    t += 4 * kMin;          // out-wait the window
+    s.tick(t);
+  }
+  AT_CHECK_EQ(seen[0], 5000);
+  AT_CHECK_EQ(seen[1], 10000);
+  AT_CHECK_EQ(seen[2], 15000);
+  AT_CHECK_EQ(seen[3], 5000);   // and round again
+}
+
+// ...and once a band delivers, windows open there instead of sweeping on.
+AT_TEST(sched_sticks_to_a_band_that_delivers) {
+  SchedulerConfig cfg;
+  cfg.exit_listen_on_fix = false;
+  Scheduler s(cfg);
+  s.start(0);
+  s.onRdsFix(0);
+  s.tick(kS);
+
+  s.tick(61 * kMin);                       // window opens on 5 MHz
+  AT_CHECK(s.phase() == Phase::Listening);
+  s.tick(63 * kMin);                       // silent -> stepped to 10 MHz
+  AT_CHECK_EQ(s.currentBandKhz(), 10000);
+  s.onWwvMarker(9.0f);                     // 10 MHz delivers
+  s.tick(65 * kMin);                       // window ends
+  AT_CHECK(s.phase() == Phase::Serving);
+
+  AT_CHECK_EQ(s.tick(126 * kMin).wwv_band_khz, 10000);  // opens where it works
+}
+
 // The band rotation is configurable (§4 allows adding 2.5/20 MHz).
 AT_TEST(sched_custom_bands) {
   Scheduler s;

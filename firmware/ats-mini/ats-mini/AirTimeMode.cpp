@@ -62,6 +62,15 @@ static const int32_t kFmStations[] = {
 static const size_t kFmStationCount =
     sizeof(kFmStations) / sizeof(kFmStations[0]);
 
+// WWV band order — a warm start like the FM list above. 15 MHz first: it is
+// the only band that has produced a marker at this QTH (two sessions of logs),
+// which matches §4's daytime expectation (10/15 by day, 5 at night). The
+// scheduler's learned per-band preference takes over once anything delivers;
+// this only decides where a fresh boot looks FIRST, so the first window is
+// spent on the likeliest band instead of sweeping two dead ones.
+static const int32_t kWwvBands[] = {15000, 10000, 5000};
+static const size_t kWwvBandCount = sizeof(kWwvBands) / sizeof(kWwvBands[0]);
+
 static const uint8_t kWwvListenVolume = 35; // the level Milestone 0 calibrated
 
 static airtime_esp32::EspMonotonicClock atMono;
@@ -153,6 +162,7 @@ void airtimeSetup()
 
   atApp = new airtime::AirTimeApp(deps, cfg);
   atApp->setFmStations(kFmStations, kFmStationCount);
+  atApp->setWwvBands(kWwvBands, kWwvBandCount);
   atApp->begin();
 
   Serial.println("AirTime: up. NTP at 192.168.4.1:123 while serving.");

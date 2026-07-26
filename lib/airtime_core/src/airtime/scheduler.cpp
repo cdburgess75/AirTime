@@ -94,6 +94,15 @@ Directive Scheduler::directive() const {
 }
 
 void Scheduler::enterServing(int64_t mono_us) {
+  // A window that heard nothing hands the next one a fresh band. Without this
+  // the sweep cannot finish: a 3-minute window holds at most two 2-minute
+  // dwells, and every window restarted at the same place, so the third band was
+  // never reached at all. Measured at the owner's QTH — three consecutive
+  // windows tried 5 MHz then 10 MHz and stopped, while the only band that has
+  // ever produced a marker there is 15 MHz.
+  if (phase_ == Phase::Listening && !band_productive_ && band_count_ > 0) {
+    band_idx_ = (band_idx_ + 1) % band_count_;
+  }
   phase_ = Phase::Serving;
   last_listen_end_ = mono_us;
   want_listen_ = false;
@@ -106,7 +115,12 @@ void Scheduler::enterListening(int64_t mono_us) {
   band_start_ = mono_us;
   // Start the window on the band that has been working locally, then rotate on
   // through the others as the window runs.
-  band_idx_ = preferredBandIndex();
+  // Open on a band that has actually delivered. Until one has, leave the sweep
+  // cursor alone — enterServing advanced it past whatever was silent last time,
+  // and overriding that here is what made the rotation loop over the same two
+  // bands forever.
+  const std::size_t pref = preferredBandIndex();
+  if (band_count_ > 0 && bands_[pref].successes > 0) band_idx_ = pref;
   if (band_count_ > 0) bands_[band_idx_].attempts++;
   want_listen_ = false;
   want_serve_ = false;

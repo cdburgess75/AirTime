@@ -130,6 +130,12 @@ class AirTimeApp {
   // from the Milestone 1 station survey.
   void setFmStations(const int32_t* khz, std::size_t n);
 
+  // WWV band rotation, first entry tried first (default 5/10/15 MHz). A warm
+  // start like the FM list: order it by what actually works at the QTH — the
+  // learned per-band preference takes over as soon as any band delivers.
+  // Call before begin().
+  void setWwvBands(const int32_t* khz, std::size_t n) { sched_.setBands(khz, n); }
+
   void begin();
   void loop();
 
