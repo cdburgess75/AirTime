@@ -36,6 +36,13 @@ class DriftEstimator {
   bool hasEstimate() const { return samples_ > 0; }
   int samples() const { return samples_; }
 
+  // Magnitude of the rate error still unexplained, as an EMA of |residual|.
+  // This is what §4 rule 4 buys: once the crystal is characterised the clock's
+  // rate is known far better than its ±20 ppm spec, so uncertainty between syncs
+  // should grow at THIS rate, not at the datasheet number. Returns a large value
+  // until enough fixes have landed to mean anything.
+  double residualPpm() const { return samples_ >= 3 ? residual_ppm_ : 1e9; }
+
   // Seed from persisted NVS value.
   void setPpm(double p);
   void reset();
@@ -44,6 +51,7 @@ class DriftEstimator {
   double clampPpm(double p) const;
 
   double ppm_ = 0.0;
+  double residual_ppm_ = 0.0;
   double gain_;
   double max_ppm_;
   bool have_prev_ = false;

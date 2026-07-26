@@ -42,7 +42,36 @@ struct ArbiterConfig {
   int64_t step_threshold_us = 500000;                       // 500 ms (rule 2/3 boundary)
   int64_t corroboration_window_us = 15LL * 60 * 1000000;    // window to corroborate a big jump across sources
   int64_t sync_threshold_us = 1000000;                      // "synced" while uncertainty < 1 s (FT8 needs < 1 s)
-  double unc_growth_ppm = 20.0;                             // uncertainty growth from the crystal (±20 ppm spec)
+  // Uncertainty growth between syncs. Starts at the crystal's ±20 ppm spec, but
+  // once the drift estimator has characterised the crystal the clock's rate is
+  // known far better than that, and growth follows the measured residual instead
+  // — which is precisely what §4 rule 4 means by "a characterised ±20 ppm
+  // crystal behaves like a much better one".
+  //
+  // This is not cosmetic. Overstating growth inflates our uncertainty between
+  // WWV windows, which raises a coarse source's blend gain and lets RDS drag
+  // phase back off the minute. Measured: with growth pinned at 20 ppm the error
+  // sawtoothed between -25 ms (just after WWV) and -204 ms (an hour later).
+  double unc_growth_ppm = 20.0;
+  double min_unc_growth_ppm = 0.5;   // floor; we never claim perfect knowledge
+
+  // Weight each accepted correction by how much better the source is than our
+  // current estimate: gain = our_var / (our_var + source_var). This makes §4
+  // rule 5's "uncertainty is first-class" load-bearing, and produces §4's source
+  // tiering without a hardcoded priority list — a coarse source barely moves a
+  // well-disciplined clock, while any source pulls hard on a stale one.
+  //
+  // Without it the source that reports MORE OFTEN wins regardless of precision:
+  // RDS at ±250 ms every ~75 s simply overrides WWV at ±30 ms once an hour, and
+  // Milestone 3's phase lock is undone as fast as it is applied.
+  //
+  // The accept/reject gates above are untouched — this only scales a correction
+  // that has already been accepted.
+  bool uncertainty_weighting = true;
+  // Floor on the posterior, so repeated fixes cannot make the clock so
+  // "certain" that it stops responding. We cannot know UTC better than the
+  // calibration constant is accurate anyway.
+  int64_t min_uncertainty_us = 5000;
   double drift_gain = 0.5;
   double drift_max_ppm = 100.0;
   int64_t max_slew_ppm = 500;

@@ -13,6 +13,10 @@ double DriftEstimator::clampPpm(double p) const {
 
 double DriftEstimator::integrate(double residual_ppm) {
   ppm_ = clampPpm(ppm_ + gain_ * residual_ppm);
+  const double mag = residual_ppm < 0 ? -residual_ppm : residual_ppm;
+  // Slow EMA: this feeds the uncertainty model, so it should reflect sustained
+  // unexplained rate error rather than a single noisy fix.
+  residual_ppm_ = samples_ == 0 ? mag : residual_ppm_ + 0.25 * (mag - residual_ppm_);
   ++samples_;
   return ppm_;
 }
@@ -39,6 +43,7 @@ void DriftEstimator::setPpm(double p) { ppm_ = clampPpm(p); }
 
 void DriftEstimator::reset() {
   ppm_ = 0.0;
+  residual_ppm_ = 0.0;
   have_prev_ = false;
   prev_mono_ = 0;
   prev_offset_ = 0;

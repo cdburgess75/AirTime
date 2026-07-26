@@ -44,7 +44,19 @@ struct AppConfig {
   // the voter before the rotation returns to them and voting degrades to one
   // source. Keep this > station_count * fm_dwell_us.
   int64_t rds_report_ttl_us = 15LL * 60 * 1000000;
-  int64_t rds_submit_interval_us = 30LL * 1000000;   // don't spam the arbiter
+  // How often RDS may steer the clock. Weighting alone does not settle the
+  // contest between sources, because influence is gain x RATE: RDS at ~48
+  // fixes/hour still out-pulls WWV at 1/hour even when each RDS fix is scaled to
+  // a few percent. And RDS error is systematic (a given station is consistently
+  // early or late), so repeated samples do not average it away the way the
+  // Kalman blend assumes.
+  //
+  // So once the clock is already better than RDS's own accuracy, RDS is
+  // throttled hard. Its §4 job is date and coarse time, not phase — beyond that
+  // point more RDS contributes only its bias.
+  int64_t rds_submit_interval_us = 30LL * 1000000;
+  int64_t rds_submit_interval_disciplined_us = 10LL * 60 * 1000000;
+  int64_t rds_disciplined_below_us = 150000;  // "better than RDS can tell us"
 
   // Per-station scan dwell. MUST exceed the RDS clock-time repeat interval —
   // group 4A is transmitted about once a MINUTE, so a shorter dwell only

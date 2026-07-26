@@ -46,7 +46,7 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 ## 🟡 Milestone 1 — RDS clock
 **Deliverable: self‑setting clock from broadcast FM.**
 
-- [ ] Survey receivable FM stations; note which send RDS CT *(hardware)*
+- [ ] Survey receivable FM stations: PI, whether CT is sent, and **each station's CT offset from truth** — that last one drives the arbiter's phase behaviour, see the weighting note below *(hardware)*
 - [x] RDS CT‑group (group 4A) decode — `rds_ct` ✅ host-tested
 - [x] Multi‑station **voting** logic — `station_vote` ✅ host-tested (scan is hardware)
 - [ ] Minute‑boundary set *(needs disciplined clock — batch 2)*
@@ -121,30 +121,52 @@ git subtree. It builds with **Arduino CLI**, not PlatformIO as PLAN.md §6 assum
 repo's own `platformio.ini` covers the host test build only. Integrating `airtime_core`
 into an Arduino sketch build is a Milestone 1 task.
 
-## Open design question: uncertainty-weighted steering
+## Uncertainty-weighted steering — IMPLEMENTED, with a caveat
 
-**`TimeFix.uncertainty_us` is carried but never used to weight a correction.** The
-arbiter applies every accepted fix in full, so **the source that reports more often
-wins, regardless of which is more precise** — the opposite of what §4's tiering intends.
+`TimeFix.uncertainty_us` now weights how far an accepted correction steers the clock:
 
-Demonstrated in simulation: one RDS station biased 220 ms late, submitting every ~75 s,
-against WWV landing once an hour. WWV is accepted and credited, but the clock settles at
-RDS's 220 ms bias — even though RDS declares ±250 ms and WWV ±30 ms, and §4 puts WWV
-above RDS *precisely* for phase accuracy.
+    gain = our_var / (our_var + source_var)
 
-The principled fix is a variance-weighted gain, applying a fraction of each correction:
+applied *after* the §4 accept/reject gates, which are unchanged. This makes rule 5's
+"uncertainty is first-class" load-bearing and produces §4's tiering with no hardcoded
+priority list. Two things it fixed outright:
 
-    gain = our_variance / (our_variance + source_variance)
+- **Uncertainty is now reported honestly.** It was pinned at whatever the last source
+  claimed — a flat 250 ms — so a coarse fix arriving after a precise one made the device
+  report itself *less* certain than it had been. More data cannot make you less certain.
+  The posterior `1/sqrt(1/ov + 1/sv)` fixes it, and it feeds the NTP root dispersion.
+- **Uncertainty growth now follows the learned crystal** (§4 rule 4) rather than the
+  ±20 ppm datasheet spec, via a new `DriftEstimator::residualPpm()`.
 
-With our uncertainty at 30 ms and RDS claiming 250 ms, that gain is ~0.014 — RDS barely
-moves a WWV-disciplined clock, while still dominating when we are badly out. It also
-makes §4 rule 5's "uncertainty is first-class state" load-bearing rather than decorative.
+Verified: drift still converges exactly (28.00 ppm, ~0 µs error), and with unbiased
+stations the clock holds **−4 to −97 ms** across three hours — inside the sub-100 ms
+target.
 
-This changes the arbiter — "the heart" — and PLAN.md does not specify it, so it is
-flagged rather than assumed. `app_wwv_refines_phase` asserts today's real behaviour and
-carries a pointer here.
+### The caveat: a systematically biased station still drags phase
 
-## Setup decisions
+With one RDS station **220 ms late**, the error sawtooths: WWV fires hourly and snaps it
+to −25 ms, then RDS drags it back to −204 ms over the following hour. Mean −148 ms.
+Still inside FT8's ~1 s tolerance, but not "DT clusters near zero".
+
+Neither weighting nor throttling RDS resolves it, and the reason is worth recording:
+influence is gain × **rate**, and RDS error is **systematic**, not independent. Repeated
+samples of a station that is always 220 ms late do not average toward truth the way the
+Kalman blend assumes, so frequent coarse fixes keep winning. Growing uncertainty from the
+measured residual does not help either, because the oscillation itself inflates that
+residual — the loop feeds itself.
+
+**Deliberately not tuned further, because 220 ms is a number we invented.** Real RDS CT
+bias is unknown until the Milestone 1 station survey measures it. Tuning a control loop
+against a guessed disturbance would be fitting noise. What the survey should capture per
+station: PI, whether CT is sent at all, and the **offset of its CT from truth** — the last
+being exactly the quantity this behaviour depends on.
+
+If the measured bias turns out to be significant, the principled fix is to stop treating
+repeated fixes from one station as independent evidence — floor the posterior at that
+station's own accuracy, so N reports from a biased station never make us more certain
+than that station is.
+
+## Setup decisions## Setup decisions
 
 1. **How the `ats-mini` base lives in git → `git subtree` at `firmware/ats-mini/`.**
    Pulled directly from upstream `esp32-si4732/ats-mini` (no GitHub fork needed unless we

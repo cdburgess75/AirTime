@@ -87,13 +87,34 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
       clock_.setRatePpm(mono, ppm);
     }
 
-    clock_.steer(mono, offset);         // slew, never step (rule 1)
+    // Rule 5, made load-bearing: blend rather than obey. `offset` remains the
+    // full measurement (the drift estimator needs it); only the amount actually
+    // applied is scaled.
+    int64_t applied = offset;
+    int64_t posterior = fix.uncertainty_us;
+    if (cfg_.uncertainty_weighting) {
+      const double ours = static_cast<double>(uncertaintyUs(mono));
+      const double src =
+          static_cast<double>(fix.uncertainty_us > 0 ? fix.uncertainty_us : 1);
+      const double ov = ours * ours;
+      const double sv = src * src;
+      const double gain = ov / (ov + sv);
+      applied = static_cast<int64_t>(llround(gain * static_cast<double>(offset)));
+      // Posterior of two independent estimates. Note this can only ever shrink
+      // our uncertainty — before, a coarse fix arriving after a precise one made
+      // the device report itself *less* certain than it had been, which is
+      // backwards and fed straight into the NTP root dispersion.
+      posterior = static_cast<int64_t>(llround(std::sqrt(1.0 / (1.0 / ov + 1.0 / sv))));
+      if (posterior < cfg_.min_uncertainty_us) posterior = cfg_.min_uncertainty_us;
+    }
+
+    clock_.steer(mono, applied);        // slew, never step (rule 1)
 
     last_accepted_mono_ = mono;
     last_offset_ = offset;
     last_injected_ = clock_.totalInjectedUs();
     last_sync_mono_ = mono;
-    last_source_unc_ = fix.uncertainty_us;
+    last_source_unc_ = posterior;
     operator_confirm_ = false;          // confirmation is single-use
   }
 
@@ -122,7 +143,13 @@ int64_t Arbiter::uncertaintyUs(int64_t mono_us) const {
   if (!clock_.isSet()) return INT64_MAX / 4;
   int64_t dt = mono_us - last_sync_mono_;
   if (dt < 0) dt = 0;
-  const double growth = static_cast<double>(dt) * cfg_.unc_growth_ppm / 1e6;
+  // Grow at the measured residual rate error once the crystal is characterised,
+  // falling back to its datasheet spec until then (§4 rule 4).
+  double rate_ppm = cfg_.unc_growth_ppm;
+  const double residual = drift_.residualPpm();
+  if (residual < rate_ppm) rate_ppm = residual;
+  if (rate_ppm < cfg_.min_unc_growth_ppm) rate_ppm = cfg_.min_unc_growth_ppm;
+  const double growth = static_cast<double>(dt) * rate_ppm / 1e6;
   return last_source_unc_ + static_cast<int64_t>(llround(growth));
 }
 

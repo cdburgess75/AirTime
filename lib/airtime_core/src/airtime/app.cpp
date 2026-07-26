@@ -102,7 +102,12 @@ void AirTimeApp::pollRds(int64_t now) {
 
   voter_.prune(now - cfg_.rds_report_ttl_us);
 
-  if (have_new_ct_ && (now - last_rds_submit_) >= cfg_.rds_submit_interval_us) {
+  // Throttle RDS once we are already more accurate than it is; see AppConfig.
+  const bool disciplined = arbiter_.isSet() &&
+                           arbiter_.uncertaintyUs(now) < cfg_.rds_disciplined_below_us;
+  const int64_t interval = disciplined ? cfg_.rds_submit_interval_disciplined_us
+                                       : cfg_.rds_submit_interval_us;
+  if (have_new_ct_ && (now - last_rds_submit_) >= interval) {
     submitRdsVote(now);
   }
 }
