@@ -43,6 +43,21 @@ class SI4735_fixed: public SI4735
       return getRdsVersionCode()? SI4735::getRdsText2B() : SI4735::getRdsText2A();
     }
 
+    // AirTime: raw access to the current RDS group and its per-block error
+    // levels (0 = clean, 1 = 1-2 bits corrected, 2 = 3-5 corrected,
+    // 3 = uncorrectable), for clock-time decoding with independent gating.
+    void getRdsRawGroup(uint16_t w[4], uint8_t ble[4])
+    {
+      w[0] = ((uint16_t)currentRdsStatus.resp.BLOCKAH << 8) | currentRdsStatus.resp.BLOCKAL;
+      w[1] = ((uint16_t)currentRdsStatus.resp.BLOCKBH << 8) | currentRdsStatus.resp.BLOCKBL;
+      w[2] = ((uint16_t)currentRdsStatus.resp.BLOCKCH << 8) | currentRdsStatus.resp.BLOCKCL;
+      w[3] = ((uint16_t)currentRdsStatus.resp.BLOCKDH << 8) | currentRdsStatus.resp.BLOCKDL;
+      ble[0] = currentRdsStatus.resp.BLEA;
+      ble[1] = currentRdsStatus.resp.BLEB;
+      ble[2] = currentRdsStatus.resp.BLEC;
+      ble[3] = currentRdsStatus.resp.BLED;
+    }
+
   void seekStationProgress(void (*showFunc)(uint16_t f), bool (*stopSeeking)(), uint8_t up_down)
   {
     si47x_frequency freq;

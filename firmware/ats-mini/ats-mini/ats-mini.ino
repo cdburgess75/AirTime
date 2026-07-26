@@ -264,10 +264,18 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B), rotaryEncoder, CHANGE);
 
   // Connect WiFi, if necessary
+#ifndef AIRTIME
   netInit(wifiModeIdx);
+#endif
 
   // Start Bluetooth LE, if necessary
   bleInit(bleModeIdx);
+
+#ifdef AIRTIME
+  // AirTime owns the radio and WiFi from here on; see AirTimeMode.cpp.
+  extern void airtimeSetup();
+  airtimeSetup();
+#endif
 }
 
 
@@ -756,6 +764,12 @@ void loop()
   airtimeIo11Probe();
 #endif
 
+#ifdef AIRTIME
+  // The AirTime app gets a slice of every pass; see AirTimeMode.cpp.
+  extern void airtimeLoop();
+  airtimeLoop();
+#endif
+
   uint32_t currentTime = millis();
   bool needRedraw = false;
 
@@ -965,7 +979,11 @@ void loop()
   // Periodically check received RDS information
   if((currentTime - lastRDSCheck) > RDS_CHECK_TIME)
   {
+#ifndef AIRTIME
+    // Under AIRTIME the Esp32RdsSource adapter is the chip's only RDS
+    // consumer — two readers would each see half the FIFO.
     needRedraw |= (currentMode == FM) && (snr >= 12) && checkRds();
+#endif
     lastRDSCheck = currentTime;
   }
 
@@ -987,8 +1005,11 @@ void loop()
   // been no activity for a while
   prefsTickTime();
 
+#ifndef AIRTIME
   // Tick NETWORK time, connecting to WiFi if requested
+  // (under AIRTIME, WiFi belongs to the app — the ADC2 rule)
   netTickTime();
+#endif
 
   // Run clock
   needRedraw |= clockTickTime();

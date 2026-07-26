@@ -11,6 +11,9 @@ profiles:
       - Async TCP (3.4.10)
       - ESP Async WebServer (3.11.0)
       - NTPClient (3.2.1)
+      # AirTime: local libraries, only linked by -DAIRTIME builds (arduino-cli >= 1.1)
+      - dir: ../../../lib/airtime_core
+      - dir: ../../../lib/airtime_esp32
 
   esp32s3-qspi:
     # If you change this line, change it in build.yml as well
@@ -24,5 +27,8 @@ profiles:
       - Async TCP (3.4.10)
       - ESP Async WebServer (3.11.0)
       - NTPClient (3.2.1)
+      # AirTime: local libraries, only linked by -DAIRTIME builds (arduino-cli >= 1.1)
+      - dir: ../../../lib/airtime_core
+      - dir: ../../../lib/airtime_esp32
 
 default_profile: esp32s3-ospi

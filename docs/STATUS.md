@@ -51,12 +51,12 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
 - [x] Multi‑station **voting** logic — `station_vote` ✅ host-tested (scan is hardware)
 - [ ] Minute‑boundary set *(needs disciplined clock — batch 2)*
 - [ ] Timezone config
-- [ ] Persist last‑known date/time to NVS *(needs `TimeStore` adapter)*
+- [x] Persist last‑known date/time to NVS — `NvsTimeStore` ✍️ written, compiles for target; on‑device verify pending
 
 ## 🟡 Milestone 2 — Serve
 **Deliverable: laptop runs FT8 synced to the radio, no internet.**
 
-- [ ] SoftAP up *(WiFi adapter — device)*
+- [x] SoftAP up + UDP/123 socket — `Esp32WiFiControl` ✍️ written, compiles for target; on‑device verify pending
 - [x] NTP/SNTP responder — `sntp` ✅ host-tested (packet layer; UDP socket is the adapter)
 - [x] Client counting — `sntp::ClientCounter` ✅ host-tested
 - [x] Unsynchronized flagging (LI=3 / stratum 16; uncertainty published as root dispersion) — `sntp` ✅
@@ -99,15 +99,18 @@ owner. The pure logic of the spec is written and host-tested.
 [`hal.h`](../lib/airtime_core/src/airtime/hal.h) and *faked* in [`fakes.h`](../test/fakes.h),
 so each one is a fill-in-the-blank against a contract the tests already exercise:
 
-| Interface | Device implementation |
-|---|---|
-| `IMonotonicClock` | `esp_timer_get_time()` |
-| `IRdsSource` | SI4732 RDS group registers |
-| `IWwvSampler` | ADC2_CH0 on IO11 + our `Goertzel`, pinned to core 2 |
-| `IWiFiControl` | SoftAP up/down |
-| `ITimeStore` | NVS |
-| *(not an interface)* | UDP/123 socket → `AirTimeApp::handleNtpRequest` |
-| *(not an interface)* | TFT + encoder → `AirTimeApp::displayState` / operator calls |
+| Interface | Device implementation | Status |
+|---|---|---|
+| `IMonotonicClock` | `esp_timer_get_time()` — `esp_clock.h` | ✍️ written |
+| `IRdsSource` | SI4732 RDS FIFO via chip-ops seam — `rds_source` | ✍️ written |
+| `IWwvSampler` | ADC2_CH0 on IO11 + our `Goertzel`, task on core 0 — `wwv_sampler` | ✍️ written |
+| `IWiFiControl` | SoftAP up/down + the UDP/123 socket — `wifi_control` | ✍️ written |
+| `ITimeStore` | NVS via Preferences — `time_store` | ✍️ written |
+| *(glue)* | `AirTimeMode.cpp` in the sketch, `-DAIRTIME` builds | ✍️ written |
+| *(not an interface)* | TFT + encoder → `AirTimeApp::displayState` / operator calls | ⬜ next |
+
+All of the above **compiles and links for the esp32s3 target** (verified in the dev
+container — see "Firmware integration" below). None of it has run on the device yet.
 
 **Genuinely hardware-dependent** — the calibration constant (§4: SI4732 DSP group
 delay + amp + ADC latency, est. 10–40 ms), the local FM station survey (M1), and
@@ -118,8 +121,60 @@ zero — the floor `wwv_marker` thresholds against.
 
 **Firmware base** — `esp32-si4732/ats-mini` is vendored at `firmware/ats-mini/` as a
 git subtree. It builds with **Arduino CLI**, not PlatformIO as PLAN.md §6 assumed; the
-repo's own `platformio.ini` covers the host test build only. Integrating `airtime_core`
-into an Arduino sketch build is a Milestone 1 task.
+repo's own `platformio.ini` covers the host test build only.
+
+## Firmware integration — WRITTEN AND COMPILING (2026-07-26)
+
+`AirTimeApp` is wired into the ats-mini sketch behind a **`-DAIRTIME`** compile flag
+(same pattern as the Milestone 0 probe): without the flag the build is byte-for-byte
+stock; with it, `AirTimeMode.cpp` instantiates the app plus all five adapters and
+ats-mini hands over RDS polling, WiFi ownership and a slice of every `loop()` pass.
+Build commands:
+
+    tools/build_fw.sh                 # in-container (see script header for why)
+    arduino-cli compile --clean -e --build-property \
+      "compiler.cpp.extra_flags=-DAIRTIME" -p "$PORT" -u ats-mini   # on the Mac
+
+Decisions and facts encoded in this layer, so they are not re-derived later:
+
+- **The vendored diff is tiny and all guarded.** Three `#ifndef AIRTIME` guards in
+  `ats-mini.ino` (boot `netInit`, periodic `checkRds`, `netTickTime`) plus two guarded
+  hook calls, and one additive accessor in `SI4735-fixed.h` (`getRdsRawGroup`). Stock
+  `checkRds` must be off under AIRTIME because each `FM_RDS_STATUS` read *pops* the
+  chip's group FIFO — two readers would each see half the groups.
+- **RDS arrival stamps are backdated 87.6 ms** (104 bits ÷ 1187.5 bps): IEC 62106
+  aligns the minute edge with the *start* of the 4A group, and the chip can only hand
+  a group over once it has received all of it. Deterministic physics, corrected in the
+  adapter — unlike per-station bias, which stays a survey question.
+- **CT groups are gated at BLE ≤ 1 per block** (up to 2 corrected bits), stricter than
+  the chip config (≤ 5): a miscorrected block can move a clock or credit the wrong PI.
+- **Tuning bypasses ats-mini's band table** (`rx.setFM/setAM` directly): `useBand`
+  writes `band->currentFreq`, and a 75 s station rotation through it would thrash the
+  settings save path. Cost: the stock UI's frequency readout goes stale in AIRTIME
+  builds, and knob tuning is undone at the next retune. Resolved when the §5 UI lands.
+- **SI4732 GPIO1 is the FM/AM antenna switch** (G8PTN, `useBand`) — the glue sets it
+  per mode; forgetting it means WWV silence.
+- **WWV listening forces volume 35** (the IO11 tap is downstream of the DSP volume;
+  Milestone 0 calibrated `tone_power` at exactly that level) and restores the user's
+  volume after. The radio is audible while listening — accepted for v1. AM bandwidth
+  is pinned to 3 kHz so the Milestone 3 level calibration has a reproducible filter.
+- **Open questions for the device session**: whether `PIN_AMP_EN` (GPIO10) can mute
+  the speaker without killing the tap, and whether an active BLE radio disturbs IO11
+  (Milestone 0 measured with BLE idle — leave BLE Off in settings for now).
+- **Umbrella headers** `<airtime_core.h>` / `<airtime_esp32.h>` exist solely because
+  arduino-cli's library discovery only matches headers at a library's `src/` root —
+  the namespaced `airtime/...` headers are invisible to it. Sketch code must include
+  an umbrella first; everything else may then use the prefixed paths.
+
+**The dev container now compiles for the target** (arduino-cli + esp32 3.3.11 +
+the sketch.yaml-pinned libraries), so firmware changes get compile-checked before
+they ever reach the user's Mac. The egress policy blocks `downloads.arduino.cc` and
+`espressif.github.io`; setup works around it with the index from the `gh-pages`
+mirror, tools/libraries from their github.com homes, a manually placed `ctags`, and
+a clearly-labeled local stub for `dfu-util` (an upload-only tool, never run here —
+flashing always happens from the Mac). `tools/build_fw.sh` sets `sketch.yaml` aside
+during container builds because a present `default_profile` re-resolves dependencies
+from the blocked URLs even when `--fqbn` is given.
 
 ## Uncertainty-weighted steering — IMPLEMENTED, with a caveat
 
@@ -166,7 +221,7 @@ repeated fixes from one station as independent evidence — floor the posterior 
 station's own accuracy, so N reports from a biased station never make us more certain
 than that station is.
 
-## Setup decisions## Setup decisions
+## Setup decisions
 
 1. **How the `ats-mini` base lives in git → `git subtree` at `firmware/ats-mini/`.**
    Pulled directly from upstream `esp32-si4732/ats-mini` (no GitHub fork needed unless we
