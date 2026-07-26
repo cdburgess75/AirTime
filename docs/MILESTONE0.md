@@ -548,10 +548,12 @@ time.
 ### 6d. Watch the numbers
 
 ```sh
-python3 -m serial.tools.miniterm "$PORT" 115200
+python3 -m serial.tools.miniterm --exit-char 3 "$PORT" 115200
 ```
 
-Exit with **Ctrl-]**. `pyserial` arrives as an esptool dependency, so it is already
+`--exit-char 3` makes plain **Ctrl-C** quit. Miniterm's default is `29` (Ctrl-]), which
+is awkward on many keyboard layouts — if you get stuck in it, closing the terminal window
+also works, or `pkill -f miniterm` from another shell. `pyserial` arrives as an esptool dependency, so it is already
 installed. `arduino-cli monitor` also works, but **only if given the board** — without
 `-b` it fails with `No monitor available for the port protocol serial`:
 
