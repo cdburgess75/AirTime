@@ -161,6 +161,14 @@ void Esp32WwvSampler::run()
       dc_ = dc;              // publish diagnostics once per block, not per sample
       blocks_ = blocks;
       dropped_ = dropped;
+
+      // One tick of air between blocks, or the idle task on this core starves
+      // and the task watchdog reboots the chip (observed on first boot: abort
+      // ~16 s in, "IDLE0 ... CPU 0: airtime_wwv"). The pause sits BETWEEN
+      // blocks, so within-block sample spacing — what the Goertzel bin and the
+      // measured rate describe — is untouched, and marker durations come from
+      // block timestamps, which keep counting through the gap.
+      vTaskDelay(1);
     }
   }
 

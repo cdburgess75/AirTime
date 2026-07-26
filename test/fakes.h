@@ -67,8 +67,12 @@ inline void buildCtGroup(int64_t utc_epoch_s, uint16_t pi, RdsGroup* g) {
 class FakeRdsSource : public IRdsSource {
  public:
   std::vector<FakeStation> stations;
+  int tune_count = 0;  // retunes are observable: the real radio has ONE tuner
 
-  void tuneKhz(int32_t khz) override { tuned_ = khz; }
+  void tuneKhz(int32_t khz) override {
+    tuned_ = khz;
+    ++tune_count;
+  }
   int32_t tunedKhz() const override { return tuned_; }
 
   bool poll(RdsGroup* out) override {

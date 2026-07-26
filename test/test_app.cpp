@@ -259,6 +259,72 @@ AT_TEST(app_serves_accurate_ntp) {
   AT_CHECK_EQ(app.displayState().ntp_clients, 2);
 }
 
+// The device has ONE tuner. Before the arbiter is seeded, WWV listening must
+// not run at all: markers are ±30 s ambiguous (pollWwv discards them unseeded),
+// and on hardware a pre-seed listen window starves the RDS path that CAN seed.
+// First real boot showed the old behaviour: chip parked on AM from t=0.
+AT_TEST(app_wwv_defers_until_seeded) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  // No RDS stations: nothing can seed, so listening must never start.
+  AirTimeApp app(sim.deps());
+  app.begin();
+
+  for (int i = 0; i < 30; ++i) {
+    sim.advance(kMin, &app);
+    AT_CHECK(!sim.wwv.isRunning());
+  }
+
+  // A manual seed makes WWV useful — and allowed.
+  app.operatorSetTime(sim.true_utc_us);
+  app.operatorListenNow();
+  sim.advance(30 * kS, &app);
+  AT_CHECK(sim.wwv.isRunning());
+}
+
+// While a WWV listen window owns the tuner, the FM dwell rotation must hold
+// still. (Ungated, it retuned FM 75 s into every real listen window.)
+AT_TEST(app_fm_holds_still_during_wwv_listen) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  FakeStation a{8990, 0xA920, true, 0};
+  FakeStation b{10470, 0x6E47, true, 0};
+  sim.rds.stations = {a, b};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {8990, 10470};
+  app.setFmStations(fm, 2);
+  app.begin();
+
+  sim.advance(4 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+
+  app.operatorListenNow();
+  sim.advance(kS, &app);
+  AT_CHECK(app.directive().wwv_listening);
+
+  // The window may end EARLY — a marker fix sends the scheduler back to
+  // serving — so assert the invariant while it holds: zero retunes for as
+  // long as the window owns the tuner (dwell is 75 s, so any rotation would
+  // land inside these two minutes).
+  const int tunes_at_window_start = sim.rds.tune_count;
+  int64_t listened = 0;
+  while (app.directive().wwv_listening && listened < 2 * kMin) {
+    AT_CHECK_EQ(sim.rds.tune_count, tunes_at_window_start);
+    sim.advance(5 * kS, &app);
+    listened += 5 * kS;
+  }
+  // Either we out-waited the dwell inside the window, or the window closed
+  // early because a WWV fix landed — both prove the tuner was left alone.
+  AT_CHECK(listened >= 80 * kS || (app.displayState().sources & kSrcWwv));
+
+  // Serving again: rotation resumes.
+  sim.advance(3 * kMin, &app);
+  AT_CHECK(sim.rds.tune_count > tunes_at_window_start);
+}
+
 // Operator manual set works when nothing is on the air.
 AT_TEST(app_manual_set) {
   Sim sim;

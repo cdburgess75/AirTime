@@ -38,8 +38,19 @@ void AirTimeApp::begin() {
   last_persist_ = now;
   if (station_count_ > 0) deps_.rds->tuneKhz(stations_[0]);
 
-  directive_ = sched_.tick(now);
+  directive_ = effectiveDirective(sched_.tick(now));
   applyDirective(directive_);
+}
+
+Directive AirTimeApp::effectiveDirective(Directive d) const {
+  // See the declaration for the reasoning: unseeded, WWV can neither help
+  // (markers are ±30 s ambiguous; pollWwv discards them) nor be afforded —
+  // on the single-tuner radio it would starve the RDS path that CAN seed.
+  if (!arbiter_.isSet() && d.wwv_listening) {
+    d.wwv_listening = false;
+    d.wwv_band_khz = 0;
+  }
+  return d;
 }
 
 void AirTimeApp::applyDirective(const Directive& d) {
@@ -64,7 +75,7 @@ void AirTimeApp::applyDirective(const Directive& d) {
 void AirTimeApp::loop() {
   const int64_t now = deps_.clock->nowUs();
 
-  directive_ = sched_.tick(now);
+  directive_ = effectiveDirective(sched_.tick(now));
   applyDirective(directive_);
 
   pollRds(now);
@@ -93,8 +104,12 @@ void AirTimeApp::pollRds(int64_t now) {
     have_new_ct_ = true;
   }
 
-  // Rotate the FM scan so every receivable station gets a chance to report.
-  if (station_count_ > 1 && (now - fm_dwell_start_) >= cfg_.fm_dwell_us) {
+  // Rotate the FM scan so every receivable station gets a chance to report —
+  // but never while a WWV listen window owns the tuner. The fakes are two
+  // independent radios; the device has ONE, and an ungated rotation here
+  // yanked the chip from AM back to FM 75 s into every real listen window.
+  if (!directive_.wwv_listening && station_count_ > 1 &&
+      (now - fm_dwell_start_) >= cfg_.fm_dwell_us) {
     station_idx_ = (station_idx_ + 1) % station_count_;
     deps_.rds->tuneKhz(stations_[station_idx_]);
     fm_dwell_start_ = now;

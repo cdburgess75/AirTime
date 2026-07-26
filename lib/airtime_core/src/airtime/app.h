@@ -113,6 +113,14 @@ class AirTimeApp {
   const Directive& directive() const { return directive_; }
 
  private:
+  // The scheduler's directive, adjusted for what only the app knows. Today
+  // that is one rule: no WWV listening before the arbiter has a time at all.
+  // WWV markers are ±30 s ambiguous — pollWwv discards them unseeded — and on
+  // the real single-tuner radio a pre-seed listen window would also starve
+  // the RDS acquisition that CAN seed. (A warm boot restores the arbiter, so
+  // WWV listening is available immediately then — exactly right: the minute
+  // is known, only phase needs refining.)
+  Directive effectiveDirective(Directive d) const;
   void applyDirective(const Directive& d);
   void pollRds(int64_t now);
   void pollWwv(int64_t now);
