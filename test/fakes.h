@@ -39,7 +39,12 @@ struct FakeStation {
   int32_t khz = 0;
   uint16_t pi = 0;
   bool sends_ct = true;    // many US stations send no CT group at all (§4)
-  int64_t error_us = 0;    // some stations send wrong/offset CT (§4)
+  // Some stations send wrong/offset CT (§4). Modelled as a TIMING offset: the
+  // group asserts minute M but arrives error_us away from it. That is both the
+  // physical error mode and the only one that survives — RDS CT carries hours
+  // and minutes only, so encoding an error into the content silently discards
+  // anything under 60 s.
+  int64_t error_us = 0;
 };
 
 // Encode a UTC instant as an RDS group 4A (the inverse of decodeRdsClockTime).
@@ -81,9 +86,10 @@ class FakeRdsSource : public IRdsSource {
       for (const FakeStation& s : stations) {
         if (s.khz != tuned_ || !s.sends_ct) continue;
         RdsGroup g;
-        buildCtGroup((m + s.error_us) / 1000000, s.pi, &g);
-        // Received now; the group asserts the minute boundary it was sent on.
-        g.mono_us = mono_us - (true_utc_us - m);
+        buildCtGroup(m / 1000000, s.pi, &g);   // asserts the exact minute
+        // ...but arrives error_us away from it, which is what makes the station
+        // wrong. Offset seen by the voter is therefore -error_us.
+        g.mono_us = mono_us - (true_utc_us - m) + s.error_us;
         queue_.push_back(g);
       }
     }
@@ -105,8 +111,12 @@ class FakeWwvSampler : public IWwvSampler {
   int64_t block_us = 20000;
   int64_t chain_delay_us = 0;   // SI4732 DSP + amp + ADC latency
   int64_t marker_us = 800000;   // WWV minute marker length
-  real tone_power = 1.0f;
-  real noise_power = 0.002f;
+  // Defaults are the levels MEASURED on the owner's ATS Mini (Milestone 0 §6),
+  // normalised by half ADC scale — not round numbers. Simulating at realistic
+  // levels is what catches threshold bugs like the min_power default that was
+  // 5x above real signal.
+  real tone_power = 1.9e-3f;
+  real noise_power = 7.7e-5f;
   std::vector<int32_t> propagating_bands;  // empty => nothing is heard
 
   void tuneKhz(int32_t khz) override { tuned_ = khz; }

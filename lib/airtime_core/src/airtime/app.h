@@ -40,9 +40,22 @@ struct AppConfig {
   int64_t wwv_uncertainty_us = 30000;    // ±30 ms — marker edge detection
   int64_t rds_uncertainty_us = 250000;   // ±250 ms — RDS CT is coarse
   int64_t rds_vote_tolerance_us = 400000;
-  int64_t rds_report_ttl_us = 10LL * 60 * 1000000;   // stale stations stop voting
+  // A station's report must outlive a full scan cycle, or stations drop out of
+  // the voter before the rotation returns to them and voting degrades to one
+  // source. Keep this > station_count * fm_dwell_us.
+  int64_t rds_report_ttl_us = 15LL * 60 * 1000000;
   int64_t rds_submit_interval_us = 30LL * 1000000;   // don't spam the arbiter
-  int64_t fm_dwell_us = 20LL * 1000000;              // per-station scan dwell
+
+  // Per-station scan dwell. MUST exceed the RDS clock-time repeat interval —
+  // group 4A is transmitted about once a MINUTE, so a shorter dwell only
+  // sometimes catches one. Worse, a dwell that divides evenly into 60 s tunes
+  // the *same* station at every minute boundary, so only one station is ever
+  // heard and the multi-station voting §4 calls mandatory silently never
+  // happens. (Observed with a 20 s dwell: the voter held exactly one report
+  // forever, and the clock locked onto a station that was 7 s wrong while
+  // reporting itself synced.) 75 s clears the minute with margin and is not a
+  // divisor of it.
+  int64_t fm_dwell_us = 75LL * 1000000;
   int64_t drift_save_interval_us = 60LL * 60 * 1000000;
   int64_t restore_uncertainty_us = 3600LL * 1000000; // warm boot is a memory
   int64_t ntp_client_window_us = 5LL * 60 * 1000000;

@@ -83,6 +83,11 @@ void AirTimeApp::pollRds(int64_t now) {
     CtReport r;
     r.pi = g.a;
     r.asserted_utc_us = t.utc_epoch_s * 1000000;
+    // Compare against the clock AT RECEPTION, so the implied offset carries no
+    // drift term. See the note on CtReport::reference_us — projecting to "now"
+    // instead creates a bias proportional to the rate error, which blinds the
+    // drift estimator to the very thing it is measuring.
+    r.reference_us = arbiter_.isSet() ? arbiter_.utcAt(g.mono_us) : g.mono_us;
     r.rx_monotonic_us = g.mono_us;
     voter_.add(r);
     have_new_ct_ = true;
@@ -109,19 +114,14 @@ void AirTimeApp::submitRdsVote(int64_t now) {
   have_new_ct_ = false;
   last_rds_submit_ = now;
 
-  // The vote yields a constant monotonic->UTC mapping, so UTC at `now` is just
-  // the consensus offset projected forward.
-  //
-  // Known, measured bias: the median mixes reports of differing ages, so the
-  // consensus mapping lags by roughly (mean report age x drift rate). Simulated
-  // at 28 ppm with ~60 s station spacing this is a steady -840 µs — 0.4% of the
-  // ±250 ms we already declare for RDS, and immaterial to FT8. Voting is kept
-  // median-based because its job (§4) is outlier rejection, not precision; WWV
-  // supplies the precision.
+  // vr.offset_us is the consensus clock ERROR (see CtReport::reference_us), so
+  // the asserted UTC at `now` is our own estimate plus that error. Once the
+  // clock is set this is drift-free; before it is set the reports carry the raw
+  // monotonic->UTC mapping, which is exactly what seeds it.
   TimeFix f;
   f.source = Source::Rds;
   f.mono_us = now;
-  f.utc_us = vr.offset_us + now;
+  f.utc_us = (arbiter_.isSet() ? arbiter_.utcAt(now) : now) + vr.offset_us;
   f.uncertainty_us = cfg_.rds_uncertainty_us;
   f.independent_support = vr.agreeing_stations;
 

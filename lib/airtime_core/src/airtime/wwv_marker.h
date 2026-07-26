@@ -23,7 +23,13 @@ namespace airtime {
 struct WwvMarkerConfig {
   real on_ratio = 6.0f;     // enter TONE when power > noise_floor * on_ratio ...
   real off_ratio = 3.0f;    // ... and leave when power < noise_floor * off_ratio (hysteresis)
-  real min_power = 0.01f;   // absolute floor so quiet noise can never trigger
+  // Absolute floor, so quiet noise can never trigger regardless of the ratio
+  // test. MEASURED on the ATS Mini (Milestone 0 §6, samples normalised by half
+  // ADC scale): in-bin noise power ~7.7e-5, a usable tone ~3.8e-4 to 1.9e-3.
+  // This sits between them. The original 0.01 was a guess made before any
+  // hardware existed and was ~5x ABOVE real signal — the detector would never
+  // have fired. Worth re-validating against a genuine WWV marker in the field.
+  real min_power = 2.0e-4f;
   real noise_alpha = 0.05f; // EMA coefficient for noise-floor tracking (IDLE only)
   int64_t gate_min_us = 700000;  // accept marker durations in [700, 900] ms
   int64_t gate_max_us = 900000;

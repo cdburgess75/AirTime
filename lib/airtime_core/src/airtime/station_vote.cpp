@@ -32,7 +32,7 @@ VoteResult StationVoter::vote(int64_t tolerance_us) const {
 
   int64_t off[kMaxReports];
   for (std::size_t i = 0; i < count_; ++i) {
-    off[i] = reports_[i].asserted_utc_us - reports_[i].rx_monotonic_us;
+    off[i] = reports_[i].asserted_utc_us - reports_[i].reference_us;
   }
 
   // Pick the cluster center (an existing offset) that gathers the most members

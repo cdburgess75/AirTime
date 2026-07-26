@@ -52,10 +52,23 @@ AT_TEST(wwv_rejects_long_tone) {
   AT_CHECK(!f.got);
 }
 
-// Low-level continuous energy below the absolute floor never triggers.
-AT_TEST(wwv_ignores_low_power) {
+// A burst of exactly marker length, but below the absolute power floor, is
+// rejected — the ratio test alone must not be able to promote noise.
+AT_TEST(wwv_ignores_subfloor_burst) {
   Feeder f;
-  for (int i = 0; i < 40; ++i) f.feed(i, 0.005f);  // under min_power (0.01)
+  for (int i = 0; i < 10; ++i) f.feed(i, 1e-5f);    // quiet
+  for (int i = 10; i < 18; ++i) f.feed(i, 8e-5f);   // 800 ms, still under min_power
+  f.feed(18, 1e-5f);
   AT_CHECK(!f.got);
   AT_CHECK(!f.det.inTone());
+}
+
+// Levels as actually measured on hardware (Milestone 0 §6) must detect.
+AT_TEST(wwv_detects_at_measured_levels) {
+  Feeder f;
+  for (int i = 0; i < 10; ++i) f.feed(i, 7.7e-5f);   // measured in-bin noise
+  for (int i = 10; i < 18; ++i) f.feed(i, 1.9e-3f);  // measured tone level
+  f.feed(18, 7.7e-5f);
+  AT_CHECK(f.got);
+  AT_CHECK_EQ(f.marker.duration_us, 800000LL);
 }

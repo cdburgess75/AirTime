@@ -8,10 +8,10 @@
 // latest CT report from each receivable station and reports the consensus clock
 // offset plus how many distinct stations agree.
 //
-// A "report" says: at local monotonic time rx_monotonic_us, station `pi`
-// asserted UTC was asserted_utc_us. The implied clock offset is therefore
-// (asserted_utc_us - rx_monotonic_us). Stations that agree produce offsets that
-// cluster; a lone wrong station sits alone and is outvoted.
+// A "report" says: station `pi` asserted UTC was asserted_utc_us at a moment
+// when our own reference read reference_us. The implied clock offset is their
+// difference. Stations that agree produce offsets that cluster; a lone wrong
+// station sits alone and is outvoted.
 //
 // Fixed-capacity, zero-heap — suitable for the firmware as-is.
 
@@ -23,7 +23,24 @@ namespace airtime {
 struct CtReport {
   uint16_t pi;             // station PI code (station identity; dedup key)
   int64_t asserted_utc_us; // UTC the station reported (µs)
-  int64_t rx_monotonic_us; // local monotonic time at reception (µs)
+
+  // What our clock believed at the instant this group arrived. The implied
+  // offset is `asserted_utc_us - reference_us`, i.e. the clock's error measured
+  // *at reception*.
+  //
+  // This must NOT be a value projected forward to "now". Doing so makes the
+  // implied offset carry (report age x clock rate error), and since that bias is
+  // itself proportional to the rate error, it cancels exactly the quantity the
+  // drift estimator is trying to observe. Measured consequence: the estimator
+  // converged to 21.2 ppm against a true 28 ppm and froze there, with a constant
+  // -813 us error, because ~120 s mean report age x 6.8 ppm residual = 812 us.
+  //
+  // Before the clock is set there is nothing to compare against, so callers pass
+  // the monotonic reception time instead; the offset is then the raw
+  // monotonic->UTC mapping, which is what seeds the clock.
+  int64_t reference_us;
+
+  int64_t rx_monotonic_us; // monotonic reception time — used only for ageing
 };
 
 struct VoteResult {

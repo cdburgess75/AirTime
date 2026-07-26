@@ -121,6 +121,29 @@ git subtree. It builds with **Arduino CLI**, not PlatformIO as PLAN.md §6 assum
 repo's own `platformio.ini` covers the host test build only. Integrating `airtime_core`
 into an Arduino sketch build is a Milestone 1 task.
 
+## Open design question: uncertainty-weighted steering
+
+**`TimeFix.uncertainty_us` is carried but never used to weight a correction.** The
+arbiter applies every accepted fix in full, so **the source that reports more often
+wins, regardless of which is more precise** — the opposite of what §4's tiering intends.
+
+Demonstrated in simulation: one RDS station biased 220 ms late, submitting every ~75 s,
+against WWV landing once an hour. WWV is accepted and credited, but the clock settles at
+RDS's 220 ms bias — even though RDS declares ±250 ms and WWV ±30 ms, and §4 puts WWV
+above RDS *precisely* for phase accuracy.
+
+The principled fix is a variance-weighted gain, applying a fraction of each correction:
+
+    gain = our_variance / (our_variance + source_variance)
+
+With our uncertainty at 30 ms and RDS claiming 250 ms, that gain is ~0.014 — RDS barely
+moves a WWV-disciplined clock, while still dominating when we are badly out. It also
+makes §4 rule 5's "uncertainty is first-class state" load-bearing rather than decorative.
+
+This changes the arbiter — "the heart" — and PLAN.md does not specify it, so it is
+flagged rather than assumed. `app_wwv_refines_phase` asserts today's real behaviour and
+carries a pointer here.
+
 ## Setup decisions
 
 1. **How the `ats-mini` base lives in git → `git subtree` at `firmware/ats-mini/`.**
