@@ -443,9 +443,29 @@ arduino-cli lib update-index
 
 **PSRAM variant.** `sketch.yaml` defines two profiles — `esp32s3-ospi` (`PSRAM=opi`) and
 `esp32s3-qspi` (`PSRAM=enabled`). §1 measured **8 MB PSRAM (AP_3v3)** on this unit, i.e.
-the `R8` part, which is octal — matching upstream's own default. Confirm on the device:
-**Settings → About**, where **PSRAM must be non-zero**. If it reads zero, build the other
-profile and re-check:
+the `R8` part, which is octal — matching upstream's own default.
+
+*Exactly how to check* (from `About.cpp`, `drawAbout()`): the About screen has **three
+pages** — `0` Help (the QR-code splash shown at boot), `1` Authors, `2` System. **PSRAM is
+on the System page.** From the boot splash, **rotate the encoder clockwise twice**; the
+arrows at the top right indicate available directions (splash right-only, System
+left-only). If you have already dismissed the splash, reach it via
+**Menu → Settings → About**.
+
+Look for the line beginning `MEM:`:
+
+```
+MEM: HEAP ...k (...k), PSRAM ...k (...k)
+```
+
+**PSRAM should read ~8192k.** Zero means the wrong profile.
+
+Two values on that page look wrong but are not: `FLASH: 8M` (the profile sets
+`FlashSize=8M`, consistent with the partition table ending at 0x800000, even though the
+chip is 16 MB) and `CPU: … 80 MHz` (the profile sets `CPUFreq=80` for battery life). The
+page also shows the WiFi MAC, which should match what `flash_id` reported in §1.
+
+If PSRAM reads zero, build the other profile and re-check:
 
 ```sh
 arduino-cli compile --clean -e -m esp32s3-qspi -p /dev/cu.usbmodem14401 -u ats-mini
