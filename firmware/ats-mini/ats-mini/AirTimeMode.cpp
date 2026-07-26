@@ -194,13 +194,20 @@ void airtimeLoop()
     airtime::formatStatusLine(st, l2, sizeof(l2));
     Serial.printf("AirTime %s | %s\n", l1, l2);
     const airtime::WwvMarkerDiag md = atApp->wwvMarker().diag();
+    // ap[] tells the truth about the radio, not our intent: DOWN* means the
+    // directive wants the AP up but esp_wifi refused (it retries every 500 ms
+    // and afail counts the refusals). Field-earned: the AP was once silently
+    // dead for most of an hour while this line looked healthy.
+    const bool apWanted = atApp->directive().wifi_up;
     Serial.printf(
         "  wwv[fs=%.0f dc=%.0f blk=%lu drop=%lu] rds[ok=%lu rej=%lu] "
-        "ap[%d joined, %lu served]\n",
+        "ap[%s %d joined, %lu served, afail=%lu]\n",
         (double)atWwv.sampleRateHz(), (double)atWwv.dcLevel(),
         (unsigned long)atWwv.blocksProduced(), (unsigned long)atWwv.blocksDropped(),
         (unsigned long)atRds.groupsAccepted(), (unsigned long)atRds.groupsRejected(),
-        atWifi.stationCount(), (unsigned long)atWifi.requestsServed());
+        atWifi.isUp() ? "up" : (apWanted ? "DOWN*" : "down"),
+        atWifi.stationCount(), (unsigned long)atWifi.requestsServed(),
+        (unsigned long)atWifi.upFailures());
     // The marker detector's view — the number that decides the next move.
     // flr/pk: current noise floor and strongest block seen (normalised power).
     // st: bursts that crossed the on-threshold; run: last/longest burst ms;

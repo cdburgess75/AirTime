@@ -104,6 +104,11 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   std::atomic<bool> running_{false};
   std::atomic<bool> quit_{false};
   std::atomic<bool> finished_{false};
+  // True while the task is parked outside the sampling loop — i.e. guaranteed
+  // not inside an analogRead on ADC2. stop() waits for this before returning,
+  // because the caller's next act is typically to start the WiFi radio that
+  // ADC2 contends with.
+  std::atomic<bool> parked_{true};
   bool begun_ = false;
 
   int32_t tuned_khz_ = 0;

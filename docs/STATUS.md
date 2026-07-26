@@ -96,8 +96,21 @@ of ms. Remaining below is WSJT-X itself.
 - [x] Unsynchronized flagging (LI=3 / stratum 16; uncertainty published as root dispersion) — `sntp` ✅
 - [x] OS client setup documented (README; revisit after real testing)
 
-## 🟡 Milestone 3 — WWV phase lock
+## 🟢 Milestone 3 — WWV phase lock — **VERIFIED OVER THE AIR (2026-07-26)**
 **Deliverable: clock disciplines itself from HF with FM absent.**
+
+**The reading: `sntp 192.168.4.1` → `-0.005106 ± 0.070630`.** Five
+milliseconds against the laptop's own NTP-disciplined clock, no internet, no
+GPS. The log for the same run: `sources RDS+WWV`, `fix[wwv +207ms pair=n A]`
+(marker detected on 15 MHz, correction under the step threshold, applied
+directly), `mk=4`, base uncertainty ≈30 ms. The same evening the three FM
+stations drifted to **−728 ms** consensus lateness — double the survey — and it
+no longer mattered: WWV owns the phase, and uncertainty weighting + the RDS
+throttle keep the biased crowd to a whisper.
+
+The −5 ms residual bounds the receive-chain calibration constant: it is
+smaller than one sntp reading's noise. `wwv_calibration_us = 0` stands until a
+multi-reading average says otherwise — a refinement, not a blocker.
 
 - [x] Goertzel 1000 Hz detector — `goertzel` ✅ host-tested (core‑2/IO11 wiring is the `Sampler` adapter)
 - [x] Minute‑marker detection: duration gate (700–900 ms) + noise‑floor threshold + leading‑edge timestamp — `wwv_marker` ✅ host-tested
@@ -433,6 +446,26 @@ fix, a phase bias read as a frequency, an accepted correction assumed applied,
 and a marker that knows only the minute's edge allowed to assert which minute
 it was. The uncertainty machinery of §5 is only honest if every claim behind it
 is.
+
+### The last silent liar: the AP adapter (fixed, flash at leisure)
+
+During the successful soak the SSID vanished for the better part of an hour
+while the `ap[]` line looked healthy, then returned on its own. Cause:
+`Esp32WiFiControl::bringUp()` ignored the return values of `WiFi.mode()` and
+`WiFi.softAP()` and set `up_ = true` regardless, so one refused start became an
+outage that lasted until the *next listen-window cycle* happened to retry. The
+likeliest trigger is the architecture's own founding constraint: bringUp runs
+moments after the WWV sampler is told to stop, and `stop()` returned while the
+task could still be inside an `analogRead` on ADC2 — which contends with the
+WiFi radio in silicon.
+
+Hardened (same one-honesty rule as the arbiter fixes): the sampler now *parks*
+before `stop()` returns, so ADC2 is quiet before esp_wifi starts; `bringUp()`
+checks its return values, leaves `up_` false on refusal, and retries every
+500 ms; `service()` notices a dead AP-mode bit and re-raises; and the status
+line prints truth, not intent — `ap[up ...]` / `ap[DOWN* ... afail=N]`. A
+silent AP outage is no longer possible: it either self-heals within a second
+or the log says exactly why not.
 
 ## Field variability — the survey is a probe, not the config (2026-07-26)
 

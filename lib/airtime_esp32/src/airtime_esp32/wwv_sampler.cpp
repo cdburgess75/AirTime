@@ -66,7 +66,16 @@ void Esp32WwvSampler::start()
   running_ = true;
 }
 
-void Esp32WwvSampler::stop() { running_ = false; }
+void Esp32WwvSampler::stop()
+{
+  running_ = false;
+  // Do not return while the task might still be inside an analogRead: ADC2 and
+  // the WiFi radio contend in silicon (PLAN.md §2 — the same constraint that
+  // forces the teardown ordering), and this adapter's caller brings WiFi up as
+  // its very next act. The task parks within a couple of samples of observing
+  // the flag; wait for that, bounded so a wedged task cannot hang the loop.
+  for(int i = 0 ; i < 25 && begun_ && !parked_ ; i++) vTaskDelay(pdMS_TO_TICKS(2));
+}
 
 bool Esp32WwvSampler::isRunning() const { return running_; }
 
@@ -113,10 +122,12 @@ void Esp32WwvSampler::run()
   {
     if(!running_)
     {
+      parked_ = true;   // guaranteed: no ADC activity until running_ again
       armed = false;
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
+    parked_ = false;
 
     if(!armed)
     {

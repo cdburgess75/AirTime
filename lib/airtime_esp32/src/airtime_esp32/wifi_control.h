@@ -65,11 +65,18 @@ class Esp32WiFiControl : public airtime::IWiFiControl {
   // --- Diagnostics -----------------------------------------------------------
   int stationCount() const;       // clients currently joined to the AP
   uint32_t requestsServed() const { return served_; }
+  // bringUp attempts that esp_wifi refused, plus liveness checks that found the
+  // AP dead. Nonzero is worth a look; climbing means the radio cannot start —
+  // and the status line prints it, so a silent outage can no longer happen.
+  uint32_t upFailures() const { return failures_; }
 
  private:
   WiFiControlConfig cfg_;
   bool up_ = false;
   uint32_t served_ = 0;
+  uint32_t attempts_ = 0;
+  uint32_t failures_ = 0;
+  uint32_t last_attempt_ms_ = 0;
 };
 
 }  // namespace airtime_esp32

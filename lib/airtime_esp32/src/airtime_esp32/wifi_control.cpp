@@ -19,14 +19,37 @@ WiFiUDP g_udp;
 void Esp32WiFiControl::bringUp() {
   if (up_) return;
 
+  // Called every loop pass while the directive wants WiFi and it is not up, so
+  // a failed attempt retries itself — but at a civilised rate, not per-pass.
+  const uint32_t now = millis();
+  if (attempts_ > 0 && (now - last_attempt_ms_) < 500) return;
+  last_attempt_ms_ = now;
+  ++attempts_;
+
   WiFi.persistent(false);  // never write AP config to the chip's own NVS
-  WiFi.mode(WIFI_AP);
+  bool ok = WiFi.mode(WIFI_AP);
 
   const char* pass = cfg_.password;
   if (pass != nullptr && std::strlen(pass) < 8) pass = nullptr;
-  WiFi.softAP(cfg_.ssid, pass, cfg_.channel, /*ssid_hidden=*/0, cfg_.max_clients);
-  WiFi.setTxPower(static_cast<wifi_power_t>(cfg_.tx_power));
+  ok = WiFi.softAP(cfg_.ssid, pass, cfg_.channel, /*ssid_hidden=*/0,
+                   cfg_.max_clients) && ok;
 
+  // These calls DO fail in this design, and claiming up_ regardless made one
+  // transient failure into a silent outage: the AP only retried at the next
+  // listen-window cycle, minutes to an hour later, while the app printed a
+  // healthy status line throughout (observed in the field — the operator's
+  // laptop saw no SSID for the better part of an hour). The likeliest trigger
+  // is the one the architecture itself warns about: bringUp runs moments after
+  // the WWV sampler is told to stop, and ADC2 contends with the WiFi radio in
+  // silicon. The sampler now parks before stop() returns; this check is the
+  // seatbelt for every other way esp_wifi can say no.
+  if (!ok) {
+    ++failures_;
+    WiFi.mode(WIFI_MODE_NULL);  // clean slate for the retry
+    return;                     // up_ stays false; applyDirective retries us
+  }
+
+  WiFi.setTxPower(static_cast<wifi_power_t>(cfg_.tx_power));
   g_udp.begin(cfg_.ntp_port);
   up_ = true;
 }
@@ -44,6 +67,16 @@ void Esp32WiFiControl::tearDown() {
 
 void Esp32WiFiControl::service(airtime::AirTimeApp& app) {
   if (!up_) return;
+
+  // Liveness: if esp_wifi died underneath us (the AP mode bit is gone), admit
+  // it, so applyDirective re-raises the AP instead of serving into the void.
+  const wifi_mode_t m = WiFi.getMode();
+  if (m != WIFI_MODE_AP && m != WIFI_MODE_APSTA) {
+    ++failures_;
+    g_udp.stop();
+    up_ = false;
+    return;
+  }
 
   // Bounded per pass: real traffic is one client asking every few seconds.
   for (int i = 0; i < 4; ++i) {
