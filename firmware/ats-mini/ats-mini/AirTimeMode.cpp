@@ -168,31 +168,113 @@ void airtimeSetup()
   Serial.println("AirTime: up. NTP at 192.168.4.1:123 while serving.");
 }
 
-// The §5 display. ats-mini's drawScreen() already takes two status lines and
-// AirTime's display module already produces exactly two, so the clock lands in
-// the stock layout with no new drawing code and no fight with the existing UI.
+// ── The §5 screen ───────────────────────────────────────────────────────────
+// Layout-AirTime.cpp draws; this assembles what it draws. Kept apart so the
+// layout file needs no AirTime headers and this file needs no TFT ones.
 //
-// This matters more than it looks. In this build the frequency readout is
-// actively misleading — the scheduler retunes the chip constantly, so whatever
-// the dial says is a leftover. That cost a whole debugging session once: the
-// display read "9999" from an earlier probe build and sent us hunting a
-// jamming theory that did not exist. A time appliance should show the time and
-// how much it can be trusted, and nothing it cannot stand behind.
-//
-// Buffers are static because drawScreen keeps the pointers only for the length
-// of the call, but the caller reads them after we return.
+// Everything here is ASCII. The core's display module formats for a terminal
+// and spends "±" and "·" freely; the TFT fonts have neither, and the first
+// photo back from the device showed them as gaps ("250 ms  RDS  sync 26s
+// ago"). Screen strings are therefore built here rather than reused.
+
+struct AirTimeScreen {
+  const char *clock;
+  const char *status;
+  const char *tuned;
+  const char *clients;
+  bool synced;
+  bool valid;
+};
+
+void airtimeScreen(AirTimeScreen *out)
+{
+  // Static: the layout holds these pointers only for the length of one draw,
+  // but it does read them after this returns.
+  static char clockBuf[16]   = "--:--:--";
+  static char statusBuf[64]  = "starting";
+  static char tunedBuf[40]   = "";
+  static char clientsBuf[24] = "";
+
+  if(atApp == nullptr)
+  {
+    out->clock = clockBuf; out->status = statusBuf;
+    out->tuned = tunedBuf; out->clients = clientsBuf;
+    out->synced = false;   out->valid = false;
+    return;
+  }
+
+  const airtime::DisplayState st = atApp->displayState();
+
+  if(st.clock_valid)
+  {
+    const int64_t sod = (st.utc_us / 1000000) % 86400;
+    snprintf(clockBuf, sizeof(clockBuf), "%02d:%02d:%02d",
+             (int)(sod / 3600), (int)((sod % 3600) / 60), (int)(sod % 60));
+  }
+  else
+  {
+    snprintf(clockBuf, sizeof(clockBuf), "--:--:--");
+  }
+
+  // Uncertainty in whichever unit reads naturally, then who has been steering
+  // and how long ago. "UNSYNCED" earns the whole line when the estimate has
+  // gone stale — that is the one state the operator must not misread.
+  char unc[16];
+  const int64_t u = st.uncertainty_us;
+  if(u >= 10000000)     snprintf(unc, sizeof(unc), "+/-%llds", (long long)(u / 1000000));
+  else if(u >= 1000000) snprintf(unc, sizeof(unc), "+/-%.1fs", (double)u / 1e6);
+  else                  snprintf(unc, sizeof(unc), "+/-%lldms", (long long)(u / 1000));
+
+  char src[16] = "no source";
+  const uint8_t m = st.sources;
+  if(m) snprintf(src, sizeof(src), "%s%s%s",
+                 (m & airtime::kSrcRds) ? "RDS" : "",
+                 ((m & airtime::kSrcRds) && (m & (airtime::kSrcWwv | airtime::kSrcManual))) ? "+" : "",
+                 (m & airtime::kSrcWwv) ? "WWV" : ((m & airtime::kSrcManual) ? "SET" : ""));
+
+  char age[16] = "";
+  if(st.ever_synced)
+  {
+    const int64_t a = st.since_sync_us / 1000000;
+    if(a < 90)          snprintf(age, sizeof(age), "%llds ago", (long long)a);
+    else if(a < 5400)   snprintf(age, sizeof(age), "%lldm ago", (long long)(a / 60));
+    else                snprintf(age, sizeof(age), "%lldh ago", (long long)(a / 3600));
+  }
+
+  if(!st.clock_valid)
+    snprintf(statusBuf, sizeof(statusBuf), "ACQUIRING - no time yet");
+  else if(!st.synced)
+    snprintf(statusBuf, sizeof(statusBuf), "UNSYNCED - last known %s", age);
+  else
+    snprintf(statusBuf, sizeof(statusBuf), "%s   %s   sync %s", unc, src, age);
+
+  // The honest dial, replacing a frequency readout this build cannot keep
+  // truthful. Without it the screen cannot explain why the radio is playing
+  // music (an FM station being harvested for RDS clock time, ~95% of the hour)
+  // or why the audio has become a 1000 Hz beep.
+  if(atApp->directive().wwv_listening)
+    snprintf(tunedBuf, sizeof(tunedBuf), "WWV %ld kHz  LISTENING",
+             (long)atApp->directive().wwv_band_khz);
+  else
+    snprintf(tunedBuf, sizeof(tunedBuf), "FM %.1f MHz  RDS",
+             (double)atRds.tunedKhz() / 100.0);
+
+  snprintf(clientsBuf, sizeof(clientsBuf), "NTP: %d client%s",
+           st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
+
+  out->clock  = clockBuf;
+  out->status = statusBuf;
+  out->tuned  = tunedBuf;
+  out->clients = clientsBuf;
+  out->synced = st.synced;
+  out->valid  = st.clock_valid;
+}
+
+// The serial console keeps the richer UTF-8 formatting from the core module.
 void airtimeStatusLines(const char **l1, const char **l2)
 {
-  static char line1[32] = "AirTime";
-  static char line2[96] = "starting...";
-  if(atApp != nullptr)
-  {
-    const airtime::DisplayState st = atApp->displayState();
-    airtime::formatUtcLine(st, line1, sizeof(line1));
-    airtime::formatStatusLine(st, line2, sizeof(line2));
-  }
-  *l1 = line1;
-  *l2 = line2;
+  *l1 = nullptr;   // no override: let the AirTime layout draw its own screen
+  *l2 = nullptr;
 }
 
 void airtimeLoop()

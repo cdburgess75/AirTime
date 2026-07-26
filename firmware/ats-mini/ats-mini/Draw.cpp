@@ -441,6 +441,12 @@ void drawScreen(const char *statusLine1, const char *statusLine2)
     return;
   }
 
+#ifdef AIRTIME
+  // The clock appliance owns the screen (§5). The stock layouts lead with a
+  // frequency readout that this build cannot keep truthful — AirTime retunes
+  // the chip continuously and currentFrequency never learns of it.
+  drawLayoutAirTime(statusLine1, statusLine2);
+#else
   switch(uiLayoutIdx)
   {
     case UI_SMETER:
@@ -450,6 +456,7 @@ void drawScreen(const char *statusLine1, const char *statusLine2)
       drawLayoutDefault(statusLine1, statusLine2);
       break;
   }
+#endif
 
   spr.pushSprite(0, 0);
 }
