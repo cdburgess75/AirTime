@@ -208,18 +208,33 @@ void airtimeLoop()
         (long)(md.last_tone_us / 1000), (long)(md.longest_tone_us / 1000),
         (unsigned long)md.rejected_short, (unsigned long)md.rejected_long,
         (unsigned long)md.markers);
-    // What the arbiter DID with the last marker — the half of the story the
-    // detector cannot tell. A detected marker that never moves the clock looks
-    // identical to no marker at all from the mkr line alone, which is exactly
-    // how three good markers hid a rejection loop for a whole session.
-    // off: implied correction. pair: this marker agreed with the previous
-    // minute's (submitted as two independent transmissions). act: A applied,
-    // R rejected and held for the next minute to confirm.
+    // What the arbiter DID with what it was told — the half of the story the
+    // source counters cannot tell. Both failures that cost a session here were
+    // invisible without this: three good WWV markers that were all rejected
+    // (identical to "no markers" from the mkr line), and an accepted +3765 s
+    // RDS correction that was never actually applied (identical to "the clock
+    // is fine" from the status line).
+    //   wwv off/pair/act : implied correction; agreed with the previous
+    //                      minute's marker; Applied or Rejected-and-held.
+    //   rds off/n/act    : consensus correction; agreeing stations; ditto.
+    //   pend             : correction accepted but not yet slewed in. This is
+    //                      known error on top of the ± figure above, and it
+    //                      should fall to 0. If it sits there, the clock is
+    //                      crawling at its slew ceiling and is NOT synced,
+    //                      whatever the ± says.
     const airtime::WwvFixDiag fd = atApp->wwvFixDiag();
+    const airtime::RdsFixDiag rd = atApp->rdsFixDiag();
+    const int64_t pend =
+        atApp->arbiter().pendingCorrectionUs(atMono.nowUs()) / 1000;
+    Serial.printf("  fix[");
     if(fd.have)
-      Serial.printf("  fix[off=%+ldms pair=%c act=%c] rate=%+.1fppm\n",
-                    (long)(fd.offset_us / 1000), fd.corroborated ? 'Y' : 'n',
-                    fd.accepted ? 'A' : 'R', atApp->arbiter().ratePpm());
+      Serial.printf("wwv %+ldms pair=%c %c | ", (long)(fd.offset_us / 1000),
+                    fd.corroborated ? 'Y' : 'n', fd.accepted ? 'A' : 'R');
+    if(rd.have)
+      Serial.printf("rds %+ldms n=%d %c | ", (long)(rd.offset_us / 1000),
+                    rd.stations, rd.accepted ? 'A' : 'R');
+    Serial.printf("pend=%ldms] rate=%+.1fppm\n", (long)pend,
+                  atApp->arbiter().ratePpm());
   }
 }
 

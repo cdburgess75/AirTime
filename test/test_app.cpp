@@ -318,6 +318,48 @@ AT_TEST(app_warm_boot_restores_unsynced) {
   AT_CHECK(!st.synced);
 }
 
+// Warm boot after a long power-down — the normal way this device gets used.
+//
+// THE field failure, end to end: switched off for an hour, NVS hands back an
+// hour-old time, and every station on the dial is telling it the truth. It must
+// be right within minutes. Observed before the fix: the correction was accepted
+// and then slewed at the 500 ppm ceiling, so the device sat 3764 s wrong for the
+// entire session while serving NTP at stratum 1 claiming ±110 ms.
+AT_TEST(app_warm_boot_stale_by_an_hour_recovers) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.crystal_ppm = -20.0;
+  sim.store.has_utc = true;
+  sim.store.last_utc_us = startUtcUs() - kHour;  // powered down an hour ago
+  sim.store.has_drift = true;
+  sim.store.drift_ppm = 20.0;
+
+  FakeStation a{9110, 0x1001, true, 0};
+  FakeStation b{9550, 0x1002, true, 0};
+  sim.rds.stations = {a, b};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110, 9550};
+  app.setFmStations(fm, 2);
+  app.begin();
+
+  AT_CHECK(iabs(sim.clockErrorUs(app)) > 59 * kMin);   // wakes up an hour out
+  AT_CHECK(!app.displayState().synced);                // and admits it
+
+  sim.advance(3 * kMin, &app);
+
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 300000);      // fixed, within RDS
+  AT_CHECK(app.displayState().synced);
+
+  // And the time it hands a laptop is the corrected one, not a promise to be
+  // correct in 87 days.
+  uint8_t req[kNtpPacketSize], resp[kNtpPacketSize];
+  makeNtpRequest(req);
+  AT_CHECK(app.handleNtpRequest(req, sizeof(req), 0xC0A80402, resp));
+  AT_CHECK_EQ(resp[1], kNtpStratumPrimary);
+  AT_CHECK(iabs(ntpToUnixUs(rd64(resp + 40)) - sim.true_utc_us) < 500000);
+}
+
 // A laptop asking for NTP gets an accurate, stratum-1 answer.
 AT_TEST(app_serves_accurate_ntp) {
   Sim sim;

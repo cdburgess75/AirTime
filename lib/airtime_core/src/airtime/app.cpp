@@ -146,6 +146,12 @@ void AirTimeApp::submitRdsVote(int64_t now) {
   f.independent_support = vr.agreeing_stations;
 
   const ArbiterUpdate u = arbiter_.update(f);
+
+  rds_diag_.have = true;
+  rds_diag_.offset_us = u.offset_us;
+  rds_diag_.stations = vr.agreeing_stations;
+  rds_diag_.accepted = u.action != Action::Rejected;
+
   if (u.action != Action::Rejected) noteAccepted(Source::Rds, now);
 }
 
@@ -267,7 +273,8 @@ DisplayState AirTimeApp::displayState() const {
   st.synced = arbiter_.isSynced(now);
   st.ever_synced = ever_synced_;
   st.utc_us = arbiter_.utcAt(now);
-  st.uncertainty_us = arbiter_.uncertaintyUs(now);
+  // What we serve is off by the un-slewed remainder too; say so (§5 honesty).
+  st.uncertainty_us = arbiter_.uncertaintyUs(now) + arbiter_.pendingCorrectionUs(now);
   st.since_sync_us = ever_synced_ ? now - last_sync_mono_ : 0;
   st.sources = recentSourceMask(now);
   st.ntp_clients = clients_.countActive(now, cfg_.ntp_client_window_us);
@@ -281,7 +288,9 @@ bool AirTimeApp::handleNtpRequest(const uint8_t* req, std::size_t len,
 
   SntpServerState st;
   st.synced = arbiter_.isSynced(now);
-  st.uncertainty_us = arbiter_.uncertaintyUs(now);
+  // Root dispersion must cover the correction still being slewed in: the client
+  // is reading a clock we already know is that far out.
+  st.uncertainty_us = arbiter_.uncertaintyUs(now) + arbiter_.pendingCorrectionUs(now);
   st.last_sync_utc_us = last_sync_utc_;
   st.source = last_source_;
 

@@ -41,14 +41,22 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
 
   const int si = sourceIndex(fix.source);
 
-  // Rule 1 exception: cold seed of an unset clock.
-  if (!clock_.isSet()) {
+  // Rule 1 exception: cold seed of an unset clock — or of one holding nothing
+  // but a restored memory, which is the same situation with a stale number in
+  // it. See restore(): defending a warm-boot value against the first source
+  // that actually heard the time is how a device that slept overnight stays
+  // hours wrong all morning.
+  if (!clock_.isSet() || !source_synced_) {
+    // How far the memory turned out to be wrong, for the log. Zero on a genuine
+    // cold start, where there was nothing to be wrong.
+    const int64_t was_off = clock_.isSet() ? fix.utc_us - clock_.utcAt(mono) : 0;
     clock_.set(mono, fix.utc_us);
+    source_synced_ = true;
     track_[si] = SourceTrack{true, mono, 0, clock_.totalInjectedUs()};
     last_sync_mono_ = mono;
     last_source_unc_ = fix.uncertainty_us;
     r.action = Action::Seeded;
-    r.offset_us = 0;
+    r.offset_us = was_off;
     r.synced = isSynced(mono);
     r.uncertainty_us = uncertaintyUs(mono);
     return r;
@@ -79,6 +87,24 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
   }
 
   if (accept) {
+    // Too big to slew in any useful time? Then apply it outright. See
+    // ArbiterConfig::step_apply_us — the alternative is a clock that creeps at
+    // its slew ceiling for weeks while claiming to be synced. The gates above
+    // already decided this correction is trustworthy.
+    if (mag > cfg_.step_apply_us) {
+      clock_.set(mono, fix.utc_us);
+      // A step is a phase discontinuity, not evidence about frequency: the
+      // interval that just ended was measured against a clock we have now
+      // thrown away. Restart this source's rate measurement from here.
+      track_[si] = SourceTrack{true, mono, 0, clock_.totalInjectedUs()};
+      last_sync_mono_ = mono;
+      last_source_unc_ = fix.uncertainty_us;
+      operator_confirm_ = false;
+      r.synced = isSynced(mono);
+      r.uncertainty_us = uncertaintyUs(mono);
+      return r;
+    }
+
     // Rule 4: learn the crystal from the residual frequency error, adding back
     // the slew we deliberately injected so only genuine drift is measured.
     // Measured against THIS source's own previous fix — see SourceTrack.
@@ -134,6 +160,7 @@ void Arbiter::restore(int64_t mono_us, int64_t utc_us, int64_t uncertainty_us) {
   // from each source starts a clean rate measurement rather than differencing
   // against a remembered time.
   for (SourceTrack& t : track_) t = SourceTrack{};
+  source_synced_ = false;  // a memory; the first real fix re-seeds it
   last_sync_mono_ = mono_us;
   // Deliberately large: this is a memory, not a measurement. isSynced() stays
   // false until a real source lands.
@@ -157,6 +184,11 @@ int64_t Arbiter::uncertaintyUs(int64_t mono_us) const {
   if (rate_ppm < cfg_.min_unc_growth_ppm) rate_ppm = cfg_.min_unc_growth_ppm;
   const double growth = static_cast<double>(dt) * rate_ppm / 1e6;
   return last_source_unc_ + static_cast<int64_t>(llround(growth));
+}
+
+int64_t Arbiter::pendingCorrectionUs(int64_t mono_us) const {
+  const int64_t p = clock_.slewRemainingUs(mono_us);
+  return p < 0 ? -p : p;
 }
 
 bool Arbiter::isSynced(int64_t mono_us) const {

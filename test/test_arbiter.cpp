@@ -122,6 +122,61 @@ AT_TEST(arb_learns_drift_closed_loop) {
   AT_CHECK(iabs(last_offset) < 20000);  // tracking to well under 20 ms/hour
 }
 
+// A correction too large to slew is applied outright, not crawled in.
+//
+// The slew ceiling is 500 ppm, so applying an offset takes offset x 2000: a 10 s
+// error would take 5.5 hours, an hour's error takes 87 DAYS. Measured on the
+// device: a warm boot restored an NVS time from an hour-old power-down, RDS
+// correctly asked for +3765 s, the arbiter accepted it — and 38 minutes later
+// the clock was still 3764 s out, closing at its 563 ppm ceiling while
+// reporting itself synced to ±110 ms. Accepting a correction has to mean
+// applying it.
+AT_TEST(arb_unslewable_correction_is_stepped) {
+  Arbiter a;
+  const int64_t kS = 1000000;
+  a.update(fix(Source::Rds, 0, T0, 250000, 2));           // seed
+  a.update(fix(Source::Rds, 60 * kS, T0 + 60 * kS, 250000, 2));  // sync properly
+
+  // Now a corroborated 10-second correction.
+  const int64_t mono = 120 * kS;
+  const ArbiterUpdate r = a.update(fix(Source::Rds, mono, T0 + mono + 10 * kS, 250000, 2));
+  AT_CHECK(r.action != Action::Rejected);
+  AT_CHECK_EQ(a.utcAt(mono), T0 + mono + 10 * kS);   // applied NOW, in full
+  AT_CHECK_EQ(a.pendingCorrectionUs(mono), 0);
+}
+
+// A sub-threshold correction still slews (rule 1) — clients must never see time
+// jump backwards for an error small enough to walk off.
+AT_TEST(arb_small_correction_still_slews) {
+  Arbiter a;
+  const int64_t kS = 1000000;
+  a.update(fix(Source::Rds, 0, T0, 250000, 2));
+  a.update(fix(Source::Rds, 60 * kS, T0 + 60 * kS, 250000, 2));
+
+  const int64_t mono = 120 * kS;
+  a.update(fix(Source::Rds, mono, T0 + mono + 300000, 30000, 1));  // 300 ms
+  AT_CHECK(iabs(a.utcAt(mono) - (T0 + mono)) < 50000);  // barely moved yet
+  AT_CHECK(a.pendingCorrectionUs(mono) > 100000);       // ...and says so
+}
+
+// Warm boot: what NVS remembers is a memory, not a measurement. The first real
+// fix replaces it outright rather than being gated as a "large correction" —
+// otherwise a device switched off overnight defends yesterday's time against
+// the station telling it today's.
+AT_TEST(arb_restored_memory_yields_to_first_fix) {
+  Arbiter a;
+  const int64_t hour = 3600LL * 1000000;
+  a.restore(0, T0 - hour, hour);      // stale by an hour, honestly unsynced
+  AT_CHECK(a.isSet());
+  AT_CHECK(!a.isSynced(0));
+
+  const ArbiterUpdate r = a.update(fix(Source::Rds, 1000, T0 + 1000, 250000, 1));
+  AT_CHECK(r.action == Action::Seeded);
+  AT_CHECK_EQ(a.utcAt(1000), T0 + 1000);   // the memory is simply replaced
+  AT_CHECK(a.isSynced(1000));
+  AT_CHECK_EQ(r.offset_us, hour);          // and it reports how wrong it was
+}
+
 // Two sources that disagree about PHASE must not be read as a FREQUENCY error.
 //
 // The clock here is perfect: no drift to find, so the honest answer is 0 ppm.

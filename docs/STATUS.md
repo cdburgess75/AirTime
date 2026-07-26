@@ -336,6 +336,62 @@ tests: `arb_source_bias_is_not_a_drift`, `app_wwv_pair_corrects_large_rds_bias`.
 slews rather than steps, and at the 500 ppm ceiling a 700 ms correction takes
 ~23 minutes to inject. The display walks to the right time; it never jumps.
 
+## The clock was an hour wrong and said ±110 ms (2026-07-26, second session)
+
+The `fix[]` line paid for itself immediately, and not the way anyone expected:
+`off=-15245ms`. Not a phase error — a **15-second** one. Three independent
+readings of the same log agreed on what had happened:
+
+| evidence | value |
+|---|---|
+| device UTC vs the logging laptop's stamps | **3765 s behind**, constant |
+| WWV implied phase correction | −15.245 s = 3765 s **mod 60** ✔ |
+| drift of that correction between two markers 34 min apart | **563 ppm** — the 500 ppm slew ceiling |
+
+So: the marker detector was right, the phase math was right, and RDS was
+telling the device the correct time and *being accepted*. The clock simply
+could not get there. **A slew is capped at `max_slew_ppm`, so applying an
+offset takes `offset × 2000`**: 2 s takes 67 minutes, an hour takes **87 days**.
+The device had warm-booted from an NVS time saved an hour earlier, accepted
+RDS's entirely correct +3765 s correction, and spent the session creeping
+toward it at its ceiling while reporting itself synced to ±110 ms and serving
+stratum-1 NTP. It would have done that until October.
+
+Three changes, all in the arbiter:
+
+1. **A correction too large to slew is stepped** (`step_apply_us`, 2 s ≈ 67 min
+   of slewing). The accept/reject gates are untouched — two agreeing sources or
+   an operator, exactly as before. This only decides *how* an already-trusted
+   correction is applied. Below the threshold it still slews, so NTP clients
+   never see time run backwards.
+2. **A restored clock yields to the first real fix.** What NVS remembers is a
+   memory, not a measurement; `isSynced()` is already false for it. Making a
+   source *corroborate its way past* yesterday's saved time is defending the
+   wrong value — the cold-seed exception applies to a memory too.
+3. **Pending correction is reported, not hidden** — added to the displayed and
+   NTP-served uncertainty, so "accepted but not yet applied" cannot masquerade
+   as accuracy. Deliberately **not** added to `Arbiter::uncertaintyUs()`, which
+   also sets the blend gain: folding it in there raises a coarse source's pull
+   exactly while a better source's correction is landing, and measurably undid
+   every WWV fix within ten minutes.
+
+Regression tests: `arb_unslewable_correction_is_stepped`,
+`arb_small_correction_still_slews`, `arb_restored_memory_yields_to_first_fix`,
+`app_warm_boot_stale_by_an_hour_recovers` (the field case end to end — verified
+to fail without each fix, not merely to pass with it).
+
+**Observability lesson, twice over.** Both bugs were invisible from the status
+line: rejected markers look exactly like no markers, and an unapplied
+correction looks exactly like a correct clock. The `fix[]` line now reports
+what the arbiter *did* with both sources and what it still owes:
+
+```
+fix[wwv +687ms pair=Y A | rds -12ms n=3 A | pend=0ms] rate=+18.2ppm
+```
+
+`pend` must fall to zero. If it sits, the clock is crawling and is not synced,
+whatever the ± says.
+
 ## Field variability — the survey is a probe, not the config (2026-07-26)
 
 Owner direction: location, antenna, propagation, and time of day are all

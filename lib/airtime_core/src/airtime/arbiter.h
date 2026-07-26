@@ -40,6 +40,26 @@ struct TimeFix {
 
 struct ArbiterConfig {
   int64_t step_threshold_us = 500000;                       // 500 ms (rule 2/3 boundary)
+  // Above this, an ACCEPTED correction is applied as a step instead of a slew.
+  //
+  // Rule 1 says slew, never step — but a slew is capped at max_slew_ppm, so the
+  // time to apply a correction is offset / 500 ppm = offset x 2000. A 2 s error
+  // takes 67 minutes. An hour's error takes 87 DAYS, during which the clock
+  // creeps toward truth at its ceiling and reports itself synced to ±110 ms the
+  // whole way. That is not conservatism, it is a lie with a slow leak.
+  //
+  // Measured on the device, and the reason this exists: a warm boot restored an
+  // NVS time from an hour-old power-down; RDS immediately and correctly asked
+  // for +3765 s; the arbiter accepted it; and the clock was still 3764 s out
+  // 38 minutes later, closing at 563 ppm. Three separate signatures in one log
+  // (device-vs-laptop offset, the WWV phase 3765 s mod 60 = 15 s, and the
+  // 563 ppm closing rate) all agreed.
+  //
+  // The accept/reject gates are untouched: a large correction still needs two
+  // agreeing sources or an operator. This only decides HOW an already-accepted
+  // correction is applied. Below the threshold a slew is still strictly better —
+  // NTP clients never see time go backwards.
+  int64_t step_apply_us = 2000000;                          // 2 s (~67 min of slewing)
   int64_t corroboration_window_us = 15LL * 60 * 1000000;    // window to corroborate a big jump across sources
   int64_t sync_threshold_us = 1000000;                      // "synced" while uncertainty < 1 s (FT8 needs < 1 s)
   // Uncertainty growth between syncs. Starts at the crystal's ±20 ppm spec, but
@@ -97,6 +117,12 @@ class Arbiter {
   // device honestly reports "UNSYNCED — last-known + drift" (§5) and NTP keeps
   // flagging itself unusable until a real source arrives. Enough to let WWV
   // phase-lock work, which needs the clock within half a minute.
+  //
+  // A restored clock is a MEMORY, not a measurement, and the first real fix
+  // re-seeds it outright (see update()): there is nothing here worth defending
+  // against a source that actually heard the time. Without that, a device
+  // switched off overnight wakes up hours wrong and the corroboration gate
+  // protects the wrong value.
   void restore(int64_t mono_us, int64_t utc_us, int64_t uncertainty_us);
 
   // Seed the learned crystal correction from NVS (PLAN.md §4 rule 4) so a
@@ -110,7 +136,20 @@ class Arbiter {
   // Read side.
   bool isSet() const { return clock_.isSet(); }
   int64_t utcAt(int64_t mono_us) const { return clock_.utcAt(mono_us); }
+
+  // The source-and-drift uncertainty model of §4 rule 5. This is also what
+  // weights every correction (see uncertainty_weighting), so it must describe
+  // how good our ESTIMATE is — nothing else belongs in it.
   int64_t uncertaintyUs(int64_t mono_us) const;
+
+  // Correction already accepted but not yet slewed in: error we know we still
+  // carry, with a known sign. Deliberately NOT part of uncertaintyUs — folding
+  // it in raises a coarse source's blend gain, so a biased station gets to pull
+  // hardest exactly while a better source's correction is landing, and undoes
+  // it (measured: WWV's fix reverted within ten minutes, every time). It is
+  // reported to the operator and to NTP clients instead, where it is honest
+  // without being in the loop.
+  int64_t pendingCorrectionUs(int64_t mono_us) const;
   bool isSynced(int64_t mono_us) const;
   double ratePpm() const { return clock_.ratePpm(); }
 
@@ -144,6 +183,10 @@ class Arbiter {
     int64_t injected = 0;
   };
   SourceTrack track_[4];  // indexed by Source
+
+  // False until a real source has been accepted since power-on. A clock that is
+  // only `restore()`d has this false, which is what makes the first fix re-seed.
+  bool source_synced_ = false;
 
   int64_t last_sync_mono_ = 0;
   int64_t last_source_unc_ = 0;

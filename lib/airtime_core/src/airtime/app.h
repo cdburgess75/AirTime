@@ -100,6 +100,18 @@ struct WwvFixDiag {
   bool accepted = false;      // arbiter action != Rejected
 };
 
+// The same for the RDS side. Without it the arbiter's whole RDS conversation is
+// invisible from a serial log: the device that sat an hour wrong for a session
+// was, the entire time, being told the correct time by three stations and
+// accepting it — the only missing number was how big the correction was, and
+// whether it ever actually landed.
+struct RdsFixDiag {
+  bool have = false;
+  int64_t offset_us = 0;   // consensus clock error the voter reported
+  int stations = 0;        // agreeing stations behind it (= independent support)
+  bool accepted = false;
+};
+
 struct AppDeps {
   IMonotonicClock* clock = nullptr;
   IRdsSource* rds = nullptr;
@@ -139,6 +151,7 @@ class AirTimeApp {
   const Directive& directive() const { return directive_; }
   const WwvMarkerDetector& wwvMarker() const { return marker_; }
   const WwvFixDiag& wwvFixDiag() const { return wwv_diag_; }
+  const RdsFixDiag& rdsFixDiag() const { return rds_diag_; }
 
  private:
   // The scheduler's directive, adjusted for what only the app knows. Today
@@ -181,6 +194,7 @@ class AirTimeApp {
   int64_t prev_wwv_mono_ = 0;
   int64_t prev_wwv_offset_us_ = 0;
   WwvFixDiag wwv_diag_;
+  RdsFixDiag rds_diag_;
   bool have_new_ct_ = false;
   int64_t last_rds_submit_ = 0;
   int64_t last_persist_ = 0;
