@@ -32,7 +32,7 @@ AT_TEST(sched_never_wifi_and_adc_together) {
     AT_CHECK(!(d.wifi_up && d.wwv_listening));
     if (t == 90 * kS) s.onRdsFix(t);            // fix during acquisition
     if (t == 2 * 3600 * kS) s.requestListenNow();
-    if (t == 4 * 3600 * kS) s.onWwvFix(t, 12.0f);
+    if (t == 4 * 3600 * kS) { s.onWwvMarker(12.0f); s.onWwvFix(t); }
     if (t == 5 * 3600 * kS) s.requestServeNow();
   }
 }
@@ -89,9 +89,33 @@ AT_TEST(sched_wwv_fix_ends_window_early) {
   s.tick(kS);
   s.tick(61 * kMin);
   AT_CHECK(s.phase() == Phase::Listening);
-  s.onWwvFix(61 * kMin + 30 * kS, 9.0f);
+  s.onWwvMarker(9.0f);
+  s.onWwvFix(61 * kMin + 30 * kS);
   AT_CHECK(s.phase() == Phase::Serving);
   AT_CHECK(s.tick(61 * kMin + 31 * kS).wifi_up);
+}
+
+// The marker/fix split. A DETECTED marker teaches the propagation log but must
+// not end the window: when the arbiter rejects the implied correction (lone
+// source, ≥500 ms), the next minute's marker is the only possible corroborator,
+// and ending the window early discards it. Exactly the first-day field bug —
+// three genuine 800 ms markers, each one closing its own window, zero applied.
+AT_TEST(sched_marker_learns_without_ending_window) {
+  Scheduler s;
+  s.start(0);
+  s.onRdsFix(0);
+  s.tick(kS);
+  s.tick(61 * kMin);
+  AT_CHECK(s.phase() == Phase::Listening);
+
+  s.onWwvMarker(7.0f);                       // detection; arbiter said no
+  AT_CHECK(s.phase() == Phase::Listening);   // the window stays open
+  AT_CHECK(s.tick(61 * kMin + kS).wwv_listening);
+  AT_CHECK_EQ(s.bandStats(0).successes, 1);  // ...but the band got credit
+  AT_CHECK_NEAR(s.bandStats(0).best_snr, 7.0, 1e-6);
+
+  s.onWwvFix(61 * kMin + 90 * kS);           // the accepted pair, a minute on
+  AT_CHECK(s.phase() == Phase::Serving);
 }
 
 // Operator overrides from the encoder (§5).
@@ -132,7 +156,8 @@ AT_TEST(sched_learns_preferred_band) {
   // Succeed on 10 MHz (index 1) during acquisition.
   s.tick(2 * kMin);
   AT_CHECK_EQ(s.currentBandKhz(), 10000);
-  s.onWwvFix(2 * kMin, 14.0f);
+  s.onWwvMarker(14.0f);
+  s.onWwvFix(2 * kMin);
   AT_CHECK_EQ(s.bandStats(1).successes, 1);
   AT_CHECK_NEAR(s.bandStats(1).best_snr, 14.0, 1e-6);
   AT_CHECK_EQ(s.preferredBandIndex(), 1u);

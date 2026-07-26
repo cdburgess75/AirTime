@@ -102,7 +102,10 @@ of ms. Remaining below is WSJT-X itself.
 - [x] Goertzel 1000 Hz detector — `goertzel` ✅ host-tested (core‑2/IO11 wiring is the `Sampler` adapter)
 - [x] Minute‑marker detection: duration gate (700–900 ms) + noise‑floor threshold + leading‑edge timestamp — `wwv_marker` ✅ host-tested
 - [x] WiFi‑down listen windows (NTP clients coast through) — `scheduler` ✅ host-tested
-- [x] Band stepping 5/10/15 MHz with per‑band success + SNR logging and learned band preference — `scheduler` ✅
+- [x] Band stepping 5/10/15 MHz with per‑band success + SNR logging and learned band preference — `scheduler` ✅ (holds a band that is producing markers; the dwell bounds patience with a *silent* band)
+- [x] Markers detected over the air ✅ (`run=798–800 ms`, tone ~400× floor, ticks duration-rejected)
+- [x] Marker → accepted fix chain ✅ host-tested (consecutive-marker self-corroboration; see "three bugs in one chain")
+- [ ] **Accepted fix verified ON DEVICE** — awaiting the next log with the `fix[]` line
 - [ ] Calibration constant *(genuinely hardware-dependent: measure once on-device, validate via WSJT‑X DT)*
 
 ## 🟡 Milestone 4 — Arbiter + confidence
@@ -110,7 +113,7 @@ of ms. Remaining below is WSJT-X itself.
 
 - [x] Slew/step rules (<500 ms slew; ≥500 ms needs 2 sources or operator confirm) — `arbiter` ✅
 - [x] Two‑source requirement for large corrections (own support ≥2, cross-source corroboration, or operator confirm) — `arbiter` ✅
-- [x] Drift learning (residual-frequency integrator w/ injected-slew compensation) — `drift` + `arbiter` ✅ (NVS *persistence* still needs `DriftStore` adapter)
+- [x] Drift learning (residual-frequency integrator w/ injected-slew compensation, **measured per source** — cross-source differencing turns a phase bias into a fake rate) — `drift` + `arbiter` ✅
 - [x] Uncertainty computation (±(elapsed × drift + source unc); sync flag) — `arbiter` ✅ (display is the `Ui` adapter)
 - [x] Boot‑time parallel acquisition (RDS vote + WWV band‑step, WiFi down) — `scheduler` ✅ host-tested
 - [x] Hourly listen scheduler + operator "listen now"/"serve now" overrides — `scheduler` ✅ host-tested
@@ -268,14 +271,70 @@ fast-build listen windows firing on cadence with the single-tuner rules
 visible (RDS counters freeze during windows); the watchdog fix holding
 (zero resets across hours); and the serial-backpressure fix (drop=0).
 
-**Open: zero WWV marker detections across many clean windows.** The sampler
-streams perfectly; the detector never fires. Three candidate causes with
-different fixes — tone below threshold, AGC chopping the 800 ms beep under
-the 700 ms gate, or dead/jammed bands — now discriminated by the `mkr[]`
-diag line (band-tagged floor/peak/burst/reject counters). Field lesson
-already paid for: the stale stock display misled the operator into a false
-jamming theory (the "9999" readout was a probe-era leftover; the music was
-our own FM rotation) — the §5 display is promoted in priority.
+**RESOLVED: WWV markers ARE detected.** The `mkr[]` diag line settled it in
+one window: `run=798–800 ms`, `mk=3`, 58 second-ticks correctly rejected by
+the duration gate, tone peak `5.2e-2` against a `1.2e-4` floor — about 400×.
+Detection was never the problem. Field lesson already paid for: the stale
+stock display misled the operator into a false jamming theory (the "9999"
+readout was a probe-era leftover; the music was our own FM rotation) — the
+§5 display is promoted in priority.
+
+## Why three good markers changed nothing — three bugs in one chain (2026-07-26)
+
+The markers were detected and then thrown away. Each of the three faults
+below is individually sufficient to keep WWV out of the clock forever, and
+none is visible from the `mkr[]` line — which is why the `fix[]` line now
+reports what the *arbiter* did, not just what the detector saw.
+
+**1. A rejected fix still closed the listen window.** The station holding the
+clock was biased past the 500 ms step threshold, so every marker implied a
+large correction. §4 rule 3 rightly refuses a large step from one source —
+but `pollWwv` called `sched_.onWwvFix` unconditionally, so a *rejected* fix
+set `has_fix_`, ended the window, and discarded the next minute's marker:
+the only evidence that could ever have corroborated it. Split into
+`onWwvMarker` (detection → band propagation stats) and `onWwvFix`
+(acceptance → end the window).
+
+**2. Nothing could corroborate a WWV fix.** `Arbiter::corroborate()` requires
+a *different* source, and on the single-tuner radio no other source exists
+during a listen window. But WWV corroborates itself: it transmits an
+independent marker every minute. Two markers 50–190 s apart implying the same
+correction within ±120 ms are two independent measurements — random audio
+that survives the 700–900 ms duration gate lands anywhere in the ±30 s phase
+window, so agreeing twice is a ~0.4% coincidence. Such a pair is submitted
+with `independent_support = 2`, which the existing rule-3 gate already
+accepts. **No arbiter change** — the spec had the door open.
+
+**3. The band rotation stepped mid-measurement.** A fixed 2-minute band dwell
+inside a 3-minute window put the retune squarely on the second marker of
+every window, and retuning resets the detector, so the tone in flight was
+lost (`tone_starts` incremented, `markers` did not). The dwell now bounds
+patience with a *silent* band: a band that has produced a marker holds until
+the window ends. This is also just better radio — it is the same rule as the
+FM dwell gating.
+
+### And a fourth, found by the test written for the first three
+
+With all of the above fixed, WWV got in — and the clock then **lost ~285 ms
+an hour**, worse than leaving the crystal alone. The drift estimator was
+differencing each fix's offset against *whichever source spoke last*. RDS and
+WWV disagree by a constant (the station's bias); dividing a constant by the
+seconds between the two sources manufactures a rate error. Measured: a
+correctly learned **+17.9 ppm was railed to the ±100 ppm clamp by the first
+WWV fix** and stayed there, sawtoothing the clock between −135 and −420 ms —
+and that poisoned figure is what gets written to NVS for the next boot.
+
+A frequency error is only observable by watching **one** source's offset
+evolve over time. Drift bookkeeping is now per-source (`Arbiter::track_[4]`).
+End-to-end result against a station biased 700 ms: converges to **±16 ms and
+stays**, rate settles at ~+20 ppm, and the biased station drops out of the
+source mask entirely — once the clock is disciplined every correction it asks
+for is ≥500 ms, so the arbiter simply stops listening to the liar. Regression
+tests: `arb_source_bias_is_not_a_drift`, `app_wwv_pair_corrects_large_rds_bias`.
+
+**Field note:** an accepted correction is *not* an applied one. §4 rule 1
+slews rather than steps, and at the 500 ppm ceiling a 700 ms correction takes
+~23 minutes to inject. The display walks to the right time; it never jumps.
 
 ## Field variability — the survey is a probe, not the config (2026-07-26)
 

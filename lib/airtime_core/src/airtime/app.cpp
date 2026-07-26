@@ -156,6 +156,10 @@ void AirTimeApp::pollWwv(int64_t now) {
   while (deps_.wwv->nextPower(&t, &p)) {
     if (!marker_.process(t, p, &m)) continue;
 
+    // A detection teaches the band table regardless of what the arbiter makes
+    // of the implied correction — propagation is real either way.
+    sched_.onWwvMarker(m.peak_power);
+
     // WWV carries no date (PLAN.md §3): it can only pull an already-roughly-right
     // clock onto the exact minute boundary. It cannot cold-start one.
     if (!arbiter_.isSet()) continue;
@@ -171,10 +175,38 @@ void AirTimeApp::pollWwv(int64_t now) {
     f.uncertainty_us = cfg_.wwv_uncertainty_us;
     f.independent_support = 1;
 
-    const ArbiterUpdate u = arbiter_.update(f);
-    if (u.action != Action::Rejected) noteAccepted(Source::Wwv, now);
+    // Self-corroboration (§4 rule 3). On the single-tuner radio no other
+    // source can second a big WWV correction inside the listen window — but
+    // WWV seconds itself: if the previous minute's rejected marker implied
+    // the same correction, this one is an independent transmission agreeing
+    // within tolerance. See AppConfig::wwv_pair_* for why that agreement is
+    // not coincidence.
+    if (have_prev_wwv_) {
+      const int64_t dt = m.leading_edge_us - prev_wwv_mono_;
+      int64_t dof = off - prev_wwv_offset_us_;
+      if (dof < 0) dof = -dof;
+      if (dt >= cfg_.wwv_pair_min_dt_us && dt <= cfg_.wwv_pair_max_dt_us &&
+          dof <= cfg_.wwv_pair_agree_us) {
+        f.independent_support = 2;
+      }
+    }
 
-    sched_.onWwvFix(now, m.peak_power);
+    const ArbiterUpdate u = arbiter_.update(f);
+
+    wwv_diag_.have = true;
+    wwv_diag_.offset_us = off;
+    wwv_diag_.corroborated = f.independent_support >= 2;
+    wwv_diag_.accepted = u.action != Action::Rejected;
+
+    if (u.action != Action::Rejected) {
+      have_prev_wwv_ = false;  // consumed: the clock moved
+      noteAccepted(Source::Wwv, now);
+      sched_.onWwvFix(now);    // only an ACCEPTED fix may end the window
+    } else {
+      have_prev_wwv_ = true;   // hold the window; next minute decides
+      prev_wwv_mono_ = m.leading_edge_us;
+      prev_wwv_offset_us_ = off;
+    }
   }
 }
 

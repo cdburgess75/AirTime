@@ -6,6 +6,11 @@ namespace airtime {
 
 static inline int64_t iabs64(int64_t v) { return v < 0 ? -v : v; }
 
+static inline int sourceIndex(Source s) {
+  const int i = static_cast<int>(s);
+  return (i >= 0 && i < 4) ? i : 0;
+}
+
 Arbiter::Arbiter(const ArbiterConfig& cfg)
     : cfg_(cfg),
       clock_(cfg.max_slew_ppm),
@@ -34,12 +39,12 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
   ArbiterUpdate r{};
   const int64_t mono = fix.mono_us;
 
+  const int si = sourceIndex(fix.source);
+
   // Rule 1 exception: cold seed of an unset clock.
   if (!clock_.isSet()) {
     clock_.set(mono, fix.utc_us);
-    last_accepted_mono_ = mono;
-    last_offset_ = 0;
-    last_injected_ = clock_.totalInjectedUs();
+    track_[si] = SourceTrack{true, mono, 0, clock_.totalInjectedUs()};
     last_sync_mono_ = mono;
     last_source_unc_ = fix.uncertainty_us;
     r.action = Action::Seeded;
@@ -76,11 +81,13 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
   if (accept) {
     // Rule 4: learn the crystal from the residual frequency error, adding back
     // the slew we deliberately injected so only genuine drift is measured.
-    const int64_t dmono = mono - last_accepted_mono_;
-    const int64_t injected = clock_.totalInjectedUs() - last_injected_;
-    if (dmono > 0) {
+    // Measured against THIS source's own previous fix — see SourceTrack.
+    const SourceTrack& prev = track_[si];
+    const int64_t dmono = mono - prev.mono;
+    if (prev.have && dmono > 0) {
+      const int64_t injected = clock_.totalInjectedUs() - prev.injected;
       const double residual_ppm =
-          (static_cast<double>(offset - last_offset_) +
+          (static_cast<double>(offset - prev.offset) +
            static_cast<double>(injected)) /
           static_cast<double>(dmono) * 1e6;
       const double ppm = drift_.integrate(residual_ppm);
@@ -110,9 +117,7 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
 
     clock_.steer(mono, applied);        // slew, never step (rule 1)
 
-    last_accepted_mono_ = mono;
-    last_offset_ = offset;
-    last_injected_ = clock_.totalInjectedUs();
+    track_[si] = SourceTrack{true, mono, offset, clock_.totalInjectedUs()};
     last_sync_mono_ = mono;
     last_source_unc_ = posterior;
     operator_confirm_ = false;          // confirmation is single-use
@@ -125,9 +130,10 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
 
 void Arbiter::restore(int64_t mono_us, int64_t utc_us, int64_t uncertainty_us) {
   clock_.set(mono_us, utc_us);
-  last_accepted_mono_ = mono_us;
-  last_offset_ = 0;
-  last_injected_ = clock_.totalInjectedUs();
+  // No source has spoken yet: leave every track empty so the first real fix
+  // from each source starts a clean rate measurement rather than differencing
+  // against a remembered time.
+  for (SourceTrack& t : track_) t = SourceTrack{};
   last_sync_mono_ = mono_us;
   // Deliberately large: this is a memory, not a measurement. isSynced() stays
   // false until a real source lands.

@@ -68,10 +68,36 @@ struct AppConfig {
   // reporting itself synced.) 75 s clears the minute with margin and is not a
   // divisor of it.
   int64_t fm_dwell_us = 75LL * 1000000;
+
+  // WWV self-corroboration. A lone marker implying a ≥500 ms correction is
+  // rightly rejected (§4 rule 3: one source cannot step the clock) — but WWV
+  // transmits an INDEPENDENT marker every minute. Two markers about a minute
+  // apart implying the SAME correction are two independent measurements:
+  // random audio that survives the 700–900 ms duration gate lands anywhere in
+  // the ±30 s phase window, so agreeing twice within ±120 ms is a ~0.4%
+  // coincidence. Such a pair is submitted with independent_support = 2, which
+  // the arbiter's rule-3 gate already accepts — no arbiter change. dt spans
+  // one to three minutes so a missed marker (band step mid-window, hour tone
+  // at 1500 Hz) doesn't break the pair; it does NOT reach across listen
+  // windows, where RDS may have moved the clock in between.
+  int64_t wwv_pair_min_dt_us = 50LL * 1000000;
+  int64_t wwv_pair_max_dt_us = 190LL * 1000000;
+  int64_t wwv_pair_agree_us = 120000;
+
   int64_t drift_save_interval_us = 60LL * 60 * 1000000;
   int64_t restore_uncertainty_us = 3600LL * 1000000; // warm boot is a memory
   int64_t ntp_client_window_us = 5LL * 60 * 1000000;
   int64_t source_recent_us = 2LL * 3600 * 1000000;   // for the "RDS+WWV" display
+};
+
+// What became of the last WWV marker that yielded a phase measurement — the
+// piece of the story the detector's own diag cannot tell (it sees tones, not
+// the arbiter's verdicts). Drives the serial/§5 status line.
+struct WwvFixDiag {
+  bool have = false;          // false until a marker survives phase correction
+  int64_t offset_us = 0;      // implied clock correction at the marker edge
+  bool corroborated = false;  // submitted as a two-marker pair (support = 2)
+  bool accepted = false;      // arbiter action != Rejected
 };
 
 struct AppDeps {
@@ -112,6 +138,7 @@ class AirTimeApp {
   const Scheduler& scheduler() const { return sched_; }
   const Directive& directive() const { return directive_; }
   const WwvMarkerDetector& wwvMarker() const { return marker_; }
+  const WwvFixDiag& wwvFixDiag() const { return wwv_diag_; }
 
  private:
   // The scheduler's directive, adjusted for what only the app knows. Today
@@ -147,6 +174,13 @@ class AirTimeApp {
   int64_t fm_dwell_start_ = 0;
 
   int32_t tuned_wwv_khz_ = 0;
+  // The previous minute's rejected marker, waiting for this minute's to agree
+  // with it (see AppConfig::wwv_pair_*). Cleared on acceptance: the clock
+  // moved, so the stored offset no longer describes it.
+  bool have_prev_wwv_ = false;
+  int64_t prev_wwv_mono_ = 0;
+  int64_t prev_wwv_offset_us_ = 0;
+  WwvFixDiag wwv_diag_;
   bool have_new_ct_ = false;
   int64_t last_rds_submit_ = 0;
   int64_t last_persist_ = 0;

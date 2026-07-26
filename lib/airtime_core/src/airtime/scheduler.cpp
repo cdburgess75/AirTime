@@ -27,7 +27,30 @@ void Scheduler::start(int64_t mono_us) {
   has_fix_ = false;
   want_listen_ = false;
   want_serve_ = false;
+  band_productive_ = false;
   if (band_count_ > 0) bands_[band_idx_].attempts++;
+}
+
+// Rotate to the next band once the dwell expires — but ONLY off a band that
+// has gone silent. A band that is delivering markers is the one we came for,
+// and leaving it costs more than the dwell was ever meant to buy:
+//
+//   * a phase fix beyond the step threshold needs TWO markers a minute apart
+//     (app.cpp, WWV self-corroboration), so a step mid-window destroys the
+//     pair and the correction can never be applied; and
+//   * retuning resets the marker detector — a tone in flight when the step
+//     lands is lost outright, its leading edge never timestamped.
+//
+// Observed in simulation with the fixed 2-minute dwell inside a 3-minute
+// window: the step landed on the second marker of every window, forever. The
+// dwell now bounds patience with a DEAD band, which is what §4 meant by it.
+void Scheduler::maybeStepBand(int64_t mono_us) {
+  if (band_count_ == 0 || band_productive_) return;
+  if ((mono_us - band_start_) < cfg_.band_dwell_us) return;
+  band_idx_ = (band_idx_ + 1) % band_count_;
+  band_start_ = mono_us;
+  band_productive_ = false;
+  bands_[band_idx_].attempts++;
 }
 
 int32_t Scheduler::currentBandKhz() const {
@@ -87,6 +110,9 @@ void Scheduler::enterListening(int64_t mono_us) {
   if (band_count_ > 0) bands_[band_idx_].attempts++;
   want_listen_ = false;
   want_serve_ = false;
+  // Each window re-earns its band: propagation at 03:00 says little about
+  // propagation at noon, and the preferred band must be able to lose.
+  band_productive_ = false;
 }
 
 Directive Scheduler::tick(int64_t mono_us) {
@@ -100,11 +126,7 @@ Directive Scheduler::tick(int64_t mono_us) {
         enterServing(mono_us);
         break;
       }
-      if (band_count_ > 0 && (mono_us - band_start_) >= cfg_.band_dwell_us) {
-        band_idx_ = (band_idx_ + 1) % band_count_;
-        band_start_ = mono_us;
-        bands_[band_idx_].attempts++;
-      }
+      maybeStepBand(mono_us);
       break;
     }
 
@@ -122,11 +144,7 @@ Directive Scheduler::tick(int64_t mono_us) {
         enterServing(mono_us);
         break;
       }
-      if (band_count_ > 0 && (mono_us - band_start_) >= cfg_.band_dwell_us) {
-        band_idx_ = (band_idx_ + 1) % band_count_;
-        band_start_ = mono_us;
-        bands_[band_idx_].attempts++;
-      }
+      maybeStepBand(mono_us);
       break;
     }
   }
@@ -134,13 +152,17 @@ Directive Scheduler::tick(int64_t mono_us) {
   return directive();
 }
 
-void Scheduler::onWwvFix(int64_t mono_us, real snr) {
-  has_fix_ = true;
+void Scheduler::onWwvMarker(real snr) {
+  band_productive_ = true;  // hold this band; see maybeStepBand
   if (band_count_ > 0) {
     BandStats& b = bands_[band_idx_];
     b.successes++;
     if (snr > b.best_snr) b.best_snr = snr;
   }
+}
+
+void Scheduler::onWwvFix(int64_t mono_us) {
+  has_fix_ = true;
   if (phase_ == Phase::Listening && cfg_.exit_listen_on_fix) {
     enterServing(mono_us);
   }

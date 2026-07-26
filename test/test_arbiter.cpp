@@ -121,3 +121,35 @@ AT_TEST(arb_learns_drift_closed_loop) {
   AT_CHECK_NEAR(a.ratePpm(), 25.0, 2.0);
   AT_CHECK(iabs(last_offset) < 20000);  // tracking to well under 20 ms/hour
 }
+
+// Two sources that disagree about PHASE must not be read as a FREQUENCY error.
+//
+// The clock here is perfect: no drift to find, so the honest answer is 0 ppm.
+// But RDS insists on 400 ms late and WWV on the true minute, and each fix's
+// offset is measured against a shared "previous fix" unless the estimator is
+// careful. Differencing an RDS offset against a WWV offset yields the two
+// sources' constant mutual bias divided by the seconds between them — a
+// fictitious rate, and a huge one: 0.4 s over the 30 s that separates them
+// reads as 13000 ppm.
+//
+// This is not hypothetical. In simulation it railed a correctly-learned
+// +17.9 ppm to the ±100 ppm clamp on the first WWV fix and left the clock
+// losing ~285 ms an hour — worse than no drift correction at all — and the
+// poisoned figure is what gets written to NVS for the next boot.
+AT_TEST(arb_source_bias_is_not_a_drift) {
+  Arbiter a;
+  const int64_t kS = 1000000, kMin = 60 * kS;
+  const int64_t bias = 400000;  // RDS station 400 ms late, consistently
+
+  a.update(fix(Source::Rds, 0, T0 + bias, 250000, 2));  // seed
+
+  // An hour of alternating sources over a drift-free clock.
+  for (int k = 1; k <= 60; ++k) {
+    const int64_t mono = static_cast<int64_t>(k) * kMin;
+    a.update(fix(Source::Rds, mono, T0 + mono + bias, 250000, 2));
+    a.update(fix(Source::Wwv, mono + 30 * kS, T0 + mono + 30 * kS, 30000, 2));
+  }
+
+  // The crystal is perfect; anything large here is manufactured bias.
+  AT_CHECK(std::fabs(a.ratePpm()) < 5.0);
+}

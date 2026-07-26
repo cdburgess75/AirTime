@@ -126,9 +126,25 @@ class Arbiter {
 
   bool operator_confirm_ = false;
 
-  int64_t last_accepted_mono_ = 0;
-  int64_t last_offset_ = 0;
-  int64_t last_injected_ = 0;
+  // Drift bookkeeping is PER SOURCE, and that is load-bearing (§4 rule 4).
+  // A frequency error is only observable by watching ONE source's offset
+  // evolve over time. Comparing an RDS fix against a WWV fix measures the two
+  // sources' MUTUAL BIAS — a constant — and dividing a constant by the elapsed
+  // time between them manufactures a rate error out of nothing.
+  //
+  // Measured, with a station biased 700 ms and WWV landing 30 s later: a
+  // correctly learned +17.9 ppm was destroyed by the first WWV fix (0.7 s /
+  // 30 s = 23000 ppm) and the estimator sat on its ±100 ppm rail from then on,
+  // costing ~285 ms an hour — worse than leaving the crystal uncorrected. The
+  // poisoned value is persisted to NVS, so it survives a power cycle too.
+  struct SourceTrack {
+    bool have = false;
+    int64_t mono = 0;
+    int64_t offset = 0;
+    int64_t injected = 0;
+  };
+  SourceTrack track_[4];  // indexed by Source
+
   int64_t last_sync_mono_ = 0;
   int64_t last_source_unc_ = 0;
 

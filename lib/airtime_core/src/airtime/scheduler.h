@@ -37,7 +37,10 @@ struct SchedulerConfig {
   int64_t acquire_timeout_us = 5LL * 60 * 1000000;   // §5 default, configurable
   int64_t listen_interval_us = 60LL * 60 * 1000000;  // hourly listen window
   int64_t listen_duration_us = 3LL * 60 * 1000000;   // long enough for 2-3 markers
-  int64_t band_dwell_us = 2LL * 60 * 1000000;        // §4: dwell >= 2 min per band
+  // §4: dwell >= 2 min per band. This is a dwell on a SILENT band — the
+  // rotation holds still once a band produces a marker (see onWwvMarker), so
+  // the step never lands mid-measurement.
+  int64_t band_dwell_us = 2LL * 60 * 1000000;
   bool exit_listen_on_fix = true;  // got what we came for; resume serving early
 };
 
@@ -75,9 +78,18 @@ class Scheduler {
   // Drive the machine. Call from the main loop; returns the current directive.
   Directive tick(int64_t mono_us);
 
-  // A WWV minute-marker fix landed: credits the current band and (by default)
-  // ends the listen window early.
-  void onWwvFix(int64_t mono_us, real snr = 0.0f);
+  // A WWV minute marker was DETECTED on the current band. Credits the band's
+  // propagation log (§4) and pins the rotation to this band for the rest of
+  // the window — detection is evidence about the BAND even when the arbiter
+  // rejects the implied correction.
+  void onWwvMarker(real snr = 0.0f);
+
+  // A WWV fix was ACCEPTED by the arbiter: (by default) ends the listen window
+  // early. Call only for accepted fixes. A rejected large correction must
+  // leave the window OPEN — the next minute's marker is the only evidence
+  // that can corroborate it, and closing early discards it (first-day field
+  // bug: three genuine markers detected, zero applied).
+  void onWwvFix(int64_t mono_us);
 
   // An RDS fix landed (can happen in any phase; RDS never needs WiFi down).
   void onRdsFix(int64_t mono_us);
@@ -98,6 +110,7 @@ class Scheduler {
   Directive directive() const;
   void enterServing(int64_t mono_us);
   void enterListening(int64_t mono_us);
+  void maybeStepBand(int64_t mono_us);
 
   SchedulerConfig cfg_;
   Phase phase_ = Phase::Acquiring;
@@ -111,6 +124,7 @@ class Scheduler {
 
   bool want_listen_ = false;
   bool want_serve_ = false;
+  bool band_productive_ = false;  // current band has yielded a marker
 
   BandStats bands_[kMaxBands];
   std::size_t band_count_ = 0;

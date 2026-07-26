@@ -114,16 +114,12 @@ AT_TEST(app_outvotes_bad_station) {
 
 // WWV is accepted alongside RDS and contributes fixes.
 //
-// NOTE — a design gap this test deliberately does NOT paper over. TimeFix carries
-// `uncertainty_us` (RDS ±250 ms, WWV ±30 ms), but the arbiter does not use it to
-// weight how far a fix steers the clock: every accepted fix is applied in full.
-// So the source that reports MORE OFTEN wins, regardless of which is more
-// precise. Here a single RDS station biased 220 ms late submits roughly every
-// 75 s while WWV lands once an hour, and the clock settles at RDS's bias — even
-// though §4 tiers WWV above RDS precisely for phase accuracy.
-//
-// The assertion below therefore checks what the design actually guarantees
-// today. See STATUS.md "Open design question: uncertainty-weighted steering".
+// The station's 220 ms bias is INSIDE the step threshold, so every marker slews
+// directly, no corroboration needed — this is the easy half of the WWV story.
+// Uncertainty weighting plus the RDS discipline throttle keep the biased
+// station from dragging phase back off the minute between windows; the bound
+// asserted below is the conservative one (never worse than the RDS bias). The
+// hard half — a bias BEYOND the step threshold — is app_wwv_pair_* below.
 AT_TEST(app_wwv_refines_phase) {
   Sim sim;
   sim.true_utc_us = startUtcUs();
@@ -152,11 +148,110 @@ AT_TEST(app_wwv_refines_phase) {
   AT_CHECK(app.displayState().sources & kSrcWwv);
   AT_CHECK(app.displayState().sources & kSrcRds);
 
-  // ...and the clock stays within the RDS station's own bias, which is what the
-  // unweighted arbiter yields when the biased source updates 48x more often.
-  // Once corrections are uncertainty-weighted this should tighten to WWV's own
-  // accuracy; that is the open design question referenced above.
+  // ...and the clock never settles at the station's bias.
   AT_CHECK(iabs(sim.clockErrorUs(app)) <= 250000);
+}
+
+// THE first-day field bug, reproduced end to end. A station biased BEYOND the
+// step threshold holds the clock ≥500 ms off true; every WWV marker then
+// implies a large correction, which a lone source rightly cannot apply (§4
+// rule 3). The old code still told the scheduler "fix!", the window closed,
+// and the one piece of evidence that could corroborate — the NEXT minute's
+// marker — was discarded. Observed on air: three genuine 800 ms markers,
+// three closed windows, sources stuck at "RDS". This test walks the repaired
+// chain marker by marker.
+AT_TEST(app_lone_large_wwv_marker_keeps_listening) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.crystal_ppm = -18.0;
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  sim.wwv.chain_delay_us = 25000;
+
+  // 700 ms late — past the step threshold, well inside RDS's real failure
+  // modes (measured on this dial: +0.9 s to +3.2 s CT is common).
+  FakeStation s1{9110, 0x1001, true, 700000};
+  sim.rds.stations = {s1};
+
+  AppConfig cfg;
+  cfg.wwv_calibration_us = 25000;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  // Seed from the liar: the cold seed takes anything, so the trap is armed.
+  sim.advance(4 * kMin + 30 * kS, &app);
+  AT_CHECK(app.arbiter().isSet());
+  AT_CHECK(iabs(sim.clockErrorUs(app)) > 500000);
+
+  // Open a window mid-minute so the marker arrivals are unambiguous.
+  app.operatorListenNow();
+  sim.advance(kS, &app);
+  AT_CHECK(app.directive().wwv_listening);
+
+  // First marker (~30 s in): implied correction ~700 ms, single source →
+  // rejected. The window must survive it, and the clock must not move.
+  sim.advance(60 * kS, &app);
+  AT_CHECK(app.wwvFixDiag().have);
+  AT_CHECK(!app.wwvFixDiag().accepted);
+  AT_CHECK(!(app.displayState().sources & kSrcWwv));
+  AT_CHECK(app.directive().wwv_listening);
+  AT_CHECK(iabs(sim.clockErrorUs(app)) > 500000);
+
+  // Second marker, one minute later, implies the same correction: two
+  // independent transmissions agree → support=2 → accepted → NOW the window
+  // closes and the clock leaves the bias for the minute edge.
+  sim.advance(65 * kS, &app);
+  AT_CHECK(app.wwvFixDiag().accepted);
+  AT_CHECK(app.wwvFixDiag().corroborated);
+  AT_CHECK(app.displayState().sources & kSrcWwv);
+  AT_CHECK(!app.directive().wwv_listening);
+
+  // Accepted is not yet applied: §4 rule 1 slews, never steps, and 700 ms at
+  // the 500 ppm slew ceiling takes ~23 minutes to inject. (Worth knowing in
+  // the field — a big correction does NOT snap in; the display walks to it.)
+  sim.advance(30 * kMin, &app);
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 250000);
+}
+
+// The same trap left to run for hours on the normal schedule: the hourly
+// windows alone must be enough for WWV to get in and stay in.
+AT_TEST(app_wwv_pair_corrects_large_rds_bias) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.crystal_ppm = -18.0;
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  sim.wwv.chain_delay_us = 25000;
+
+  FakeStation s1{9110, 0x1001, true, 700000};
+  sim.rds.stations = {s1};
+
+  AppConfig cfg;
+  cfg.wwv_calibration_us = 25000;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  sim.advance(4 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+  AT_CHECK(iabs(sim.clockErrorUs(app)) > 500000);
+
+  sim.advance(3 * kHour, &app);
+
+  AT_CHECK(app.displayState().sources & kSrcWwv);
+
+  // Off the 700 ms trap and onto the minute edge. The bound is tight on
+  // purpose: with per-source drift learning the clock converges to a few ms
+  // and STAYS there, so a regression in either half of this fix (the pair
+  // never forms → ~700 ms; the rate is poisoned by source bias → a sawtooth
+  // of hundreds of ms between windows) fails here loudly.
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 100000);
+
+  // And the liar loses its vote: once the clock is disciplined, every
+  // correction that station asks for is ≥500 ms, so the arbiter rejects it
+  // and RDS quietly stops counting as a live source.
+  AT_CHECK_NEAR(app.arbiter().ratePpm(), 18.0, 12.0);
 }
 
 // The ADC2/WiFi invariant holds in the real app, not just the scheduler.

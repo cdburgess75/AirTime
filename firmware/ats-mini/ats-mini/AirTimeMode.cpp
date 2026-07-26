@@ -208,6 +208,18 @@ void airtimeLoop()
         (long)(md.last_tone_us / 1000), (long)(md.longest_tone_us / 1000),
         (unsigned long)md.rejected_short, (unsigned long)md.rejected_long,
         (unsigned long)md.markers);
+    // What the arbiter DID with the last marker — the half of the story the
+    // detector cannot tell. A detected marker that never moves the clock looks
+    // identical to no marker at all from the mkr line alone, which is exactly
+    // how three good markers hid a rejection loop for a whole session.
+    // off: implied correction. pair: this marker agreed with the previous
+    // minute's (submitted as two independent transmissions). act: A applied,
+    // R rejected and held for the next minute to confirm.
+    const airtime::WwvFixDiag fd = atApp->wwvFixDiag();
+    if(fd.have)
+      Serial.printf("  fix[off=%+ldms pair=%c act=%c] rate=%+.1fppm\n",
+                    (long)(fd.offset_us / 1000), fd.corroborated ? 'Y' : 'n',
+                    fd.accepted ? 'A' : 'R', atApp->arbiter().ratePpm());
   }
 }
 
