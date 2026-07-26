@@ -548,8 +548,21 @@ time.
 ### 6d. Watch the numbers
 
 ```sh
-arduino-cli monitor -p "$PORT" -c baudrate=115200
+python3 -m serial.tools.miniterm "$PORT" 115200
 ```
+
+Exit with **Ctrl-]**. `pyserial` arrives as an esptool dependency, so it is already
+installed. `arduino-cli monitor` also works, but **only if given the board** — without
+`-b` it fails with `No monitor available for the port protocol serial`:
+
+```sh
+arduino-cli monitor -p "$PORT" -b esp32:esp32:esp32s3 -c baudrate=115200
+```
+
+macOS's built-in `screen "$PORT" 115200` is a third option (exit: Ctrl-A, K, y).
+
+> Only one program may hold the serial port. **Close the monitor before reflashing**, or
+> the upload cannot connect.
 
 One line per second:
 
