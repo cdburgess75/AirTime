@@ -212,6 +212,45 @@ static const MenuItem atRootMenu[] =
   {"Settings", CMD_SETTINGS},
 };
 
+// The root menu when the dial is the operator's (Radio, CW copy, Waterfall).
+// Field report, verbatim: "i cant figure out how to change bands" — because
+// the declutter moved every radio control under Settings, which is the right
+// place for them exactly as long as the radio is being a clock. When it is
+// being a RADIO, the tuning controls are the front page. Everything here
+// remains in Settings too; this is a shortcut, not a move.
+//
+// "AirTime" is the way back — the same Clock/Radio/CW/Waterfall list that
+// "Mode" opens from the clock root. It cannot also be called "Mode" here,
+// because on this page that word belongs to the demodulator (FM/LSB/USB/AM),
+// as it has on every radio the operator has ever held.
+static const MenuItem atRadioRootMenu[] =
+{
+  {"Volume",    CMD_VOLUME},
+  {"Band",      CMD_BAND},
+  {"Mode",      CMD_MODE},
+  {"Step",      CMD_STEP},
+  {"Bandwidth", CMD_BANDWIDTH},
+  {"AGC/ATTN",  CMD_AGC},
+  {"Seek",      CMD_SEEK},
+  {"Nets",      CMD_AT_NETS},
+  {"AirTime",   CMD_AT_MODE},
+  {"Settings",  CMD_SETTINGS},
+};
+
+// Which root is live right now. The count can differ between them, so the
+// cursor is clamped at the door (doMenu / clickMenu) rather than trusted.
+static inline const MenuItem *atRoot()
+{
+  const bool operator_mode =
+      airtimeRadioMode() || airtimeCwMode() || airtimeSpectrumMode();
+  return operator_mode ? atRadioRootMenu : atRootMenu;
+}
+static inline int atRootCount()
+{
+  return atRoot() == atRadioRootMenu ? (int)ITEM_COUNT(atRadioRootMenu)
+                                     : (int)ITEM_COUNT(atRootMenu);
+}
+
 static const MenuItem atSettingsMenu[] =
 {
   // The radio controls, relocated from the stock root menu. Same commands,
@@ -254,7 +293,8 @@ static const MenuItem atSettingsMenu[] =
 };
 
 // The cursors are int8_t.
-static_assert(ITEM_COUNT(atRootMenu) < 128 && ITEM_COUNT(atSettingsMenu) < 128,
+static_assert(ITEM_COUNT(atRootMenu) < 128 && ITEM_COUNT(atSettingsMenu) < 128 &&
+                  ITEM_COUNT(atRadioRootMenu) < 128,
               "menu tables must fit an int8_t cursor");
 
 // The label a command is listed under, wherever it is listed. Panels that
@@ -265,6 +305,8 @@ static const char *atLabelFor(uint16_t cmd)
 {
   for(size_t i = 0 ; i < ITEM_COUNT(atRootMenu) ; i++)
     if(atRootMenu[i].cmd == cmd) return atRootMenu[i].label;
+  for(size_t i = 0 ; i < ITEM_COUNT(atRadioRootMenu) ; i++)
+    if(atRadioRootMenu[i].cmd == cmd) return atRadioRootMenu[i].label;
   for(size_t i = 0 ; i < ITEM_COUNT(atSettingsMenu) ; i++)
     if(atSettingsMenu[i].cmd == cmd) return atSettingsMenu[i].label;
   return "?";
@@ -277,8 +319,8 @@ static const char *atLabelFor(uint16_t cmd)
 // upstream wrote, so the stock binary stays byte-identical — the proof that
 // this restructure touched nothing it did not mean to.
 #ifdef AIRTIME
-#define MENU_ROWS         ITEM_COUNT(atRootMenu)
-#define MENU_LABEL(i)     (atRootMenu[i].label)
+#define MENU_ROWS         ((size_t)atRootCount())
+#define MENU_LABEL(i)     (atRoot()[i].label)
 #define SETTINGS_ROWS     ITEM_COUNT(atSettingsMenu)
 #define SETTINGS_LABEL(i) (atSettingsMenu[i].label)
 #else
@@ -992,6 +1034,11 @@ void doBandwidth(int16_t enc)
 
 static void doMenu(int16_t enc)
 {
+#ifdef AIRTIME
+  // The live root can SHRINK when the mode changes underneath the cursor
+  // (radio root is longer than the clock root); rehome rather than index air.
+  if(menuIdx >= (int)MENU_ROWS) menuIdx = 0;
+#endif
   menuIdx = wrap_range(menuIdx, enc, 0, MENU_ROWS - 1);
 }
 
@@ -1078,7 +1125,7 @@ static void clickMenu(int cmd, bool shortPress)
 
 #ifdef AIRTIME
   (void)shortPress;
-  if(cmd >= 0 && cmd < (int)MENU_ROWS) atActivate(atRootMenu[cmd].cmd);
+  if(cmd >= 0 && cmd < (int)MENU_ROWS) atActivate(atRoot()[cmd].cmd);
 #else
   switch(cmd)
   {
