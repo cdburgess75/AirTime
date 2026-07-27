@@ -109,8 +109,21 @@ static const char *menu[] =
   "AGC/ATTN",
   "AVC",
   "SoftMute",
+#ifdef AIRTIME
+  "Clock/Radio",
+  "Nets",
+#endif
   "Settings",
 };
+
+// The index defines above and this array are two halves of one thing, and
+// nothing in C makes them agree. They already disagreed once: a patch that
+// looked for "Soft Mute" found "SoftMute", so the defines moved and the array
+// did not. MENU_MODE_AT then pointed at "Settings", and choosing Settings
+// opened the Clock/Radio list -- a bug that compiled, ran, and simply lied
+// about where things were. Make the mismatch a build error instead.
+static_assert(ITEM_COUNT(menu) == MENU_SETTINGS + 1,
+              "menu[] and the MENU_* indices disagree");
 
 //
 // Settings Menu
@@ -170,6 +183,9 @@ static const char *settings[] =
 #endif
   "About",
 };
+
+static_assert(ITEM_COUNT(settings) == MENU_ABOUT + 1,
+              "settings[] and the MENU_* indices disagree");
 
 //
 // FM Region Menu
