@@ -442,11 +442,17 @@ void drawScreen(const char *statusLine1, const char *statusLine2)
   }
 
 #ifdef AIRTIME
-  // The clock appliance owns the screen (§5). The stock layouts lead with a
-  // frequency readout that this build cannot keep truthful — AirTime retunes
-  // the chip continuously and currentFrequency never learns of it.
-  drawLayoutAirTime(statusLine1, statusLine2);
-#else
+  // The clock appliance owns the screen (§5) — unless the operator has asked
+  // for the radio back, in which case the stock layout is correct again:
+  // AirTime has stopped retuning, so the frequency readout is true.
+  if(!airtimeRadioMode())
+  {
+    drawLayoutAirTime(statusLine1, statusLine2);
+    spr.pushSprite(0, 0);
+    return;
+  }
+#endif
+
   switch(uiLayoutIdx)
   {
     case UI_SMETER:
@@ -456,7 +462,6 @@ void drawScreen(const char *statusLine1, const char *statusLine2)
       drawLayoutDefault(statusLine1, statusLine2);
       break;
   }
-#endif
 
   spr.pushSprite(0, 0);
 }

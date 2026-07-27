@@ -129,7 +129,8 @@ static const char *menu[] =
 #define MENU_AT_ZONE     15
 #define MENU_AT_BAND     16
 #define MENU_AT_HF       17
-#define MENU_ABOUT       18
+#define MENU_AT_MODE     18
+#define MENU_ABOUT       19
 #else
 #define MENU_ABOUT       15
 #endif
@@ -161,6 +162,7 @@ static const char *settings[] =
   "Time Zone",
   "WWV Band",
   "HF Listen",
+  "Mode",
 #endif
   "About",
 };
@@ -928,6 +930,7 @@ static void doSettings(int16_t enc)
 static void doAtZone(int16_t enc) { atSetZoneIdx(wrap_range(atZoneIdx(), enc, 0, atZoneCount() - 1)); }
 static void doAtBand(int16_t enc) { atSetBandIdx(wrap_range(atBandIdx(), enc, 0, atBandCount() - 1)); }
 static void doAtHf(int16_t enc)   { atSetHfIdx(wrap_range(atHfIdx(), enc, 0, atHfCount() - 1)); }
+static void doAtMode(int16_t enc) { atSetModeIdx(wrap_range(atModeIdx(), enc, 0, atModeCount() - 1)); }
 
 #endif
 
@@ -957,6 +960,7 @@ static void clickSettings(int cmd, bool shortPress)
     case MENU_AT_ZONE:    currentCmd = CMD_AT_ZONE;    break;
     case MENU_AT_BAND:    currentCmd = CMD_AT_BAND;    break;
     case MENU_AT_HF:      currentCmd = CMD_AT_HF;      break;
+    case MENU_AT_MODE:    currentCmd = CMD_AT_MODE;    break;
 #endif
     case MENU_FM_REGION:
       // Only in FM mode
@@ -1007,6 +1011,7 @@ bool doSideBar(uint16_t cmd, int16_t enc, int16_t enca)
     case CMD_AT_ZONE:    doAtZone(scrollDirection * enc);break;
     case CMD_AT_BAND:    doAtBand(scrollDirection * enc);break;
     case CMD_AT_HF:      doAtHf(scrollDirection * enc);break;
+    case CMD_AT_MODE:    doAtMode(scrollDirection * enc);break;
 #endif
     case CMD_SQUELCH:    doSquelch(enca);break;
     case CMD_ABOUT:      doAbout(enc);break;
@@ -1766,6 +1771,7 @@ void drawSideBar(uint16_t cmd, int x, int y, int sx)
     case CMD_AT_ZONE:    drawAtList(MENU_AT_ZONE, atZoneCount(), atZoneIdx(), atZoneName, x, y, sx); break;
     case CMD_AT_BAND:    drawAtList(MENU_AT_BAND, atBandCount(), atBandIdx(), atBandName, x, y, sx); break;
     case CMD_AT_HF:      drawAtList(MENU_AT_HF,   atHfCount(),   atHfIdx(),   atHfName,   x, y, sx); break;
+    case CMD_AT_MODE:    drawAtList(MENU_AT_MODE, atModeCount(), atModeIdx(), atModeName, x, y, sx); break;
 #endif
     case CMD_MENU:       drawMenu(x, y, sx);       break;
     case CMD_SETTINGS:   drawSettings(x, y, sx);   break;

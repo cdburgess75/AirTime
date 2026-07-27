@@ -117,6 +117,18 @@ void AirTimeApp::adoptSurveyResult() {
 }
 
 Directive AirTimeApp::effectiveDirective(Directive d) const {
+  // Operator mode: the dial belongs to the human. Nothing here may retune, so
+  // the scheduler's listening plans are simply overruled — and with no ADC
+  // sampling there is no reason for WiFi to drop, so NTP serves continuously
+  // instead of coasting through a window every hour.
+  if (radio_mode_) {
+    d.wwv_listening = false;
+    d.wwv_band_khz = 0;
+    d.rds_scanning = false;
+    d.wifi_up = true;
+    return d;
+  }
+
   // See the declaration for the reasoning: unseeded, WWV can neither help
   // (markers are ±30 s ambiguous; pollWwv discards them) nor be afforded —
   // on the single-tuner radio it would starve the RDS path that CAN seed.
@@ -160,6 +172,14 @@ void AirTimeApp::loop() {
 
   directive_ = effectiveDirective(sched_.tick(now));
   applyDirective(directive_);
+
+  // In operator mode AirTime observes nothing and steers nothing. Reading RDS
+  // from whatever the operator happens to tune would let one unvetted station
+  // steer the clock, which is exactly the failure the voter exists to prevent.
+  if (radio_mode_) {
+    persist(now, /*force=*/false);
+    return;
+  }
 
   if (surveying()) {
     pollSurvey(now);

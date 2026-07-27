@@ -169,6 +169,24 @@ class AirTimeApp {
   // time must never be dragged off to go hunting. Started automatically only
   // when there is nothing to fall back on — no supplied list and nothing
   // stored. Timekeeping continues throughout; the survey only owns the dial.
+  // ── Operator mode ─────────────────────────────────────────────────────────
+  // Hand the dial back. AirTime stops tuning entirely — no FM rotation, no WWV
+  // windows, no survey — and coasts on the clock it has already disciplined.
+  //
+  // This costs far less than it sounds. Once the crystal is characterised the
+  // residual rate error is a couple of ppm, so an hour of listening costs
+  // single-digit milliseconds, and the uncertainty reported to NTP grows to
+  // match. The clock does not stop being right; it stops being re-checked, and
+  // says so.
+  //
+  // WiFi stays UP throughout, which makes NTP service better rather than worse
+  // in this mode: with no ADC sampling there is no §2 conflict to schedule
+  // around, so there are no listen windows to coast through.
+  //
+  // Never persisted: every power-on comes up as a clock (see begin()).
+  void setRadioMode(bool on) { radio_mode_ = on; }
+  bool radioMode() const { return radio_mode_; }
+
   void startSurvey();
   bool surveying() const { return survey_.phase() != SurveyPhase::Idle &&
                                   survey_.phase() != SurveyPhase::Done; }
@@ -253,6 +271,7 @@ class AirTimeApp {
   int64_t last_rds_submit_ = 0;
   int64_t last_persist_ = 0;
 
+  bool radio_mode_ = false;
   bool ever_synced_ = false;
   int64_t last_sync_mono_ = 0;
   int64_t last_sync_utc_ = 0;

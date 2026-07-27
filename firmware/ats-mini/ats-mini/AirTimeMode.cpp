@@ -106,6 +106,13 @@ static int atBandOpt = 0;
 // The §5 operator actions. Implemented and tested since Milestone 4 and until
 // now reachable from nothing at all.
 static const char* const kHfNames[] = {"Listen Now", "Serve Now", "Survey Dial"};
+
+// Clock or receiver. The clock is what this device IS, so it is what every
+// power-on comes up as; operator mode is a thing you ask for and it is not
+// remembered. While it is on, AirTime touches nothing — see
+// AirTimeApp::setRadioMode for why an hour of listening costs milliseconds.
+static const char* const kModeNames[] = {"Clock", "Radio"};
+static int atModeOpt = 0;
 static int atHfOpt = 0;
 
 // ── Nets worth knowing about ────────────────────────────────────────────────
@@ -232,6 +239,27 @@ void atSetBandIdx(int i)
   for(size_t k = 0 ; k < kWwvBandCount ; k++)
     if(kWwvBands[k] != order[0] && n < kWwvBandCount) order[n++] = kWwvBands[k];
   atApp->setWwvBands(order, n);
+}
+
+int atModeCount() { return (int)(sizeof(kModeNames) / sizeof(kModeNames[0])); }
+const char *atModeName(int i) { return (i >= 0 && i < atModeCount()) ? kModeNames[i] : "?"; }
+int atModeIdx() { return atModeOpt; }
+bool airtimeRadioMode() { return atApp != nullptr && atApp->radioMode(); }
+void atSetModeIdx(int i)
+{
+  if(i < 0 || i >= atModeCount() || i == atModeOpt) return;
+  atModeOpt = i;
+  if(atApp == nullptr) return;
+  atApp->setRadioMode(atModeOpt == 1);
+  if(atModeOpt == 1)
+  {
+    // Hand the dial back honestly. AirTime has been retuning the chip all
+    // along, so the stock UI's idea of the frequency is stale; useBand() puts
+    // the radio where the operator last left it and makes the readout true
+    // again. Volume too — a listen window may have left the calibrated level.
+    useBand(getCurrentBand());
+    rx.setVolume(volume);
+  }
 }
 
 int atHfCount() { return (int)(sizeof(kHfNames) / sizeof(kHfNames[0])); }

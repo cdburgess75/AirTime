@@ -651,3 +651,70 @@ AT_TEST(app_does_not_survey_when_it_has_stations) {
   AT_CHECK(app.arbiter().isSet());
   AT_CHECK(!app.surveying());
 }
+
+// Operator mode: the dial belongs to the human, and the clock keeps time
+// anyway. This is what lets the thing be a radio as well as a clock.
+AT_TEST(app_radio_mode_stops_tuning_but_keeps_serving) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.crystal_ppm = -18.0;
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  FakeStation a{9110, 0x1001, true, 0};
+  FakeStation b{9550, 0x1002, true, 0};
+  sim.rds.stations = {a, b};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110, 9550};
+  app.setFmStations(fm, 2);
+  app.begin();
+  sim.advance(4 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+
+  const int tunes_before = sim.rds.tune_count;
+  app.setRadioMode(true);
+  sim.advance(2 * kHour, &app);
+
+  // Two hours and it never touched the dial — including no WWV window, which
+  // on the one-tuner radio would have yanked the operator off their station.
+  AT_CHECK_EQ(sim.rds.tune_count, tunes_before);
+  AT_CHECK(!sim.wwv.isRunning());
+
+  // ...and WiFi never dropped, so NTP served the whole time. In clock mode an
+  // hourly listen window takes it down; here there is nothing to schedule
+  // around, so service is better, not worse.
+  AT_CHECK(sim.wifi.isUp());
+  uint8_t req[kNtpPacketSize], resp[kNtpPacketSize];
+  makeNtpRequest(req);
+  AT_CHECK(app.handleNtpRequest(req, sizeof(req), 0xC0A80402, resp));
+  AT_CHECK_EQ(resp[1], kNtpStratumPrimary);
+
+  // Coasting is cheap once the crystal is known: two hours costs milliseconds,
+  // not seconds. This is the number that makes operator mode affordable.
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 200000);
+
+  // Back to clock mode and it resumes disciplining itself.
+  app.setRadioMode(false);
+  sim.advance(10 * kMin, &app);
+  AT_CHECK(sim.rds.tune_count > tunes_before);
+}
+
+// The §2 invariant must hold in operator mode too — it is the one rule that
+// can damage a measurement rather than merely annoy the operator.
+AT_TEST(app_radio_mode_never_breaks_the_adc_rule) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  FakeStation a{9110, 0x1001, true, 0};
+  sim.rds.stations = {a};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  for (int i = 0; i < 12; ++i) {           // toggle across many listen windows
+    app.setRadioMode(i % 2 == 0);
+    sim.advance(25 * kMin, &app);
+  }
+  AT_CHECK(!sim.adc_wifi_conflict);
+}
