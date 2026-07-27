@@ -220,6 +220,16 @@ static void atHandleRoot()
   // ── What the radio is physically doing ───────────────────────────────────
   atSend("<h2>Receiver</h2><table>");
   atKv("dial", s.tuned);
+  // The dial row above is OUR CACHED CLAIM about the chip. These two are the
+  // chip's own story, and they exist because a field UNSYNCED came down to
+  // exactly this gap: zero RDS groups while the dial row confidently said
+  // "FM 89.9". "chip mode" says whether the tune actually took; "signal" says
+  // whether there is anything on the frequency to decode. Between them, "no
+  // signal here" and "chip is not where we think" stop being guesses.
+  atKv("chip mode", rx.isCurrentTuneFM() ? "FM" : "AM/SSB",
+       !rx.isCurrentTuneFM() && !app->radioMode() && !app->cwMode());
+  atRowf("<tr><th>signal</th><td class=\"%s\">RSSI %d dBuV, SNR %d dB</td></tr>",
+         rssi < 10 ? "w" : "", rssi, snr);
   const char *ph = app->cwMode()      ? "CW copy - NTP is off the air"
                  : app->radioMode()   ? "operator has the dial"
                  : app->surveying()   ? "surveying the FM band"
