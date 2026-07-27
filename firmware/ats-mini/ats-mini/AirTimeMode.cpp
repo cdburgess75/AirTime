@@ -38,6 +38,8 @@
 #ifdef AIRTIME
 
 #include "Common.h"
+#include "Menu.h"   // getCurrentUTCOffset(), utcOffsets[] — the device's own
+                    // timezone setting, so local time is adjustable in the field
 
 #include <WiFi.h>
 
@@ -177,8 +179,20 @@ void airtimeSetup()
 // photo back from the device showed them as gaps ("250 ms  RDS  sync 26s
 // ago"). Screen strings are therefore built here rather than reused.
 
+// Three-letter zone name shown beside the local time.
+//
+// This is a setting, not a derivation: a UTC offset cannot imply an
+// abbreviation. UTC-5 is CDT in July and EST in January, and the names are
+// political rather than arithmetic. The OFFSET is adjustable on the device
+// itself (the stock Settings > UTC offset menu, which this reads via
+// getCurrentUTCOffset() and which already defaults to UTC-5); this is only
+// what to call it. Set it empty to fall back to the menu's own "UTC-5" label.
+static const char* kLocalZoneLabel = "CDT";
+
 struct AirTimeScreen {
   const char *clock;
+  const char *local;
+  const char *zone;
   const char *status;
   const char *tuned;
   const char *clients;
@@ -191,13 +205,16 @@ void airtimeScreen(AirTimeScreen *out)
   // Static: the layout holds these pointers only for the length of one draw,
   // but it does read them after this returns.
   static char clockBuf[16]   = "--:--:--";
+  static char localBuf[16]   = "--:--:--";
+  static char zoneBuf[12]    = "";
   static char statusBuf[64]  = "starting";
   static char tunedBuf[40]   = "";
   static char clientsBuf[24] = "";
 
   if(atApp == nullptr)
   {
-    out->clock = clockBuf; out->status = statusBuf;
+    out->clock = clockBuf; out->local = localBuf; out->zone = zoneBuf;
+    out->status = statusBuf;
     out->tuned = tunedBuf; out->clients = clientsBuf;
     out->synced = false;   out->valid = false;
     return;
@@ -207,13 +224,29 @@ void airtimeScreen(AirTimeScreen *out)
 
   if(st.clock_valid)
   {
-    const int64_t sod = (st.utc_us / 1000000) % 86400;
+    const int64_t utc_s = st.utc_us / 1000000;
+    const int64_t sod = utc_s % 86400;
     snprintf(clockBuf, sizeof(clockBuf), "%02d:%02d:%02d",
              (int)(sod / 3600), (int)((sod % 3600) / 60), (int)(sod % 60));
+
+    // getCurrentUTCOffset() is in 15-minute units (it has to be: India is
+    // +5:30, Nepal +5:45). Floor-mod so zones west of Greenwich wrap the day
+    // correctly rather than printing a negative hour.
+    const int64_t local_s = utc_s + (int64_t)getCurrentUTCOffset() * 15 * 60;
+    int64_t lsod = local_s % 86400;
+    if(lsod < 0) lsod += 86400;
+    snprintf(localBuf, sizeof(localBuf), "%02d:%02d:%02d",
+             (int)(lsod / 3600), (int)((lsod % 3600) / 60), (int)(lsod % 60));
+
+    snprintf(zoneBuf, sizeof(zoneBuf), "%s",
+             (kLocalZoneLabel && *kLocalZoneLabel)
+                 ? kLocalZoneLabel
+                 : utcOffsets[utcOffsetIdx].desc);
   }
   else
   {
     snprintf(clockBuf, sizeof(clockBuf), "--:--:--");
+    snprintf(localBuf, sizeof(localBuf), "--:--:--");
   }
 
   // Uncertainty in whichever unit reads naturally, then who has been steering
@@ -263,6 +296,8 @@ void airtimeScreen(AirTimeScreen *out)
            st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
 
   out->clock  = clockBuf;
+  out->local  = localBuf;
+  out->zone   = zoneBuf;
   out->status = statusBuf;
   out->tuned  = tunedBuf;
   out->clients = clientsBuf;

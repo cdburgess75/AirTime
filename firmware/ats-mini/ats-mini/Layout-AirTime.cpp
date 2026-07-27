@@ -30,6 +30,8 @@
 // Supplied by AirTimeMode.cpp — the app's state, pre-formatted for this screen.
 struct AirTimeScreen {
   const char *clock;    // "23:31:26", or "--:--:--" before any fix
+  const char *local;    // same instant in the operator's zone
+  const char *zone;     // "CDT" — see kLocalZoneLabel in AirTimeMode.cpp
   const char *status;   // "+/-250 ms   RDS   sync 26s ago"
   const char *tuned;    // "FM 89.9 MHz" / "WWV 15000 kHz  LISTENING"
   const char *clients;  // "NTP: 2 clients"
@@ -53,47 +55,66 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
   const bool has_voltage = drawBattery(BATT_OFFSET_X, BATT_OFFSET_Y);
   drawWiFiIndicator(has_voltage ? WIFI_OFFSET_X : BATT_OFFSET_X - 13, WIFI_OFFSET_Y);
 
-  // "AirTime" wordmark, top left, where the band name sits in the stock layout.
+  // Wordmark. Sits in the gap between the S-meter (drawn from x=0) and the
+  // WiFi icon at x=237, which is where the stock layout puts the band name.
   spr.setTextDatum(TL_DATUM);
   spr.setTextColor(TH.text_muted);
-  spr.drawString("AirTime", 8, 6, 2);
+  spr.drawString("AirTime", 150, 3, 2);
 
-  // ── The clock ─────────────────────────────────────────────────────────────
-  // Font 7 is 48 px tall and about 32 px per character, so "23:31:26" spans
-  // roughly 250 px of the 320 px panel — centred, with room either side.
-  // Amber rather than green while unsynchronised: §5 requires the device to
-  // look different when it is coasting, not merely to say so in small print.
-  spr.setTextDatum(TC_DATUM);
-  spr.setTextColor(s.synced ? TH.text : TH.text_warn);
-  spr.drawString(s.clock, 160, 34, 7);
+  // ── The two clocks ────────────────────────────────────────────────────────
+  // UTC is the headline in font 7 — a 48-pixel seven-segment face whose whole
+  // character set is "1234567890:-.", i.e. a clock font. Local time sits under
+  // it in font 4 (26 px) and a different colour: same instant, plainly
+  // secondary, because UTC is what the radio serves and what FT8 runs on.
+  //
+  // Both are right-aligned to the same edge so the two labels stack in a tidy
+  // column. Amber instead of white while unsynchronised — §5 wants the device
+  // to LOOK wrong when it is coasting, not to explain itself in small print.
+  const uint16_t clock_colour = s.synced ? TH.text : TH.text_warn;
 
-  // "UTC" tucked under the seconds — font 7 has no letters at all.
   spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(clock_colour);
+  spr.drawString(s.clock, 248, 20, 7);
+
+  spr.setTextDatum(TL_DATUM);
   spr.setTextColor(TH.text_muted);
-  spr.drawString("UTC", 300, 86, 2);
+  spr.drawString("UTC", 254, 50, 2);
+
+  if(s.valid)
+  {
+    // The theme's meter green: every theme keeps it a legible accent, and it
+    // reads as clearly "not the UTC number" at a glance.
+    spr.setTextDatum(TR_DATUM);
+    spr.setTextColor(TH.smeter_bar);
+    spr.drawString(s.local, 248, 74, 4);
+
+    spr.setTextDatum(TL_DATUM);
+    spr.drawString(s.zone, 254, 80, 2);
+  }
 
   // ── What it can be trusted to, and what the radio is doing ────────────────
-  spr.setTextDatum(TC_DATUM);
   if(override_status)
   {
+    spr.setTextDatum(TC_DATUM);
     spr.setTextColor(TH.rds_text);
-    if(statusLine1) spr.drawString(statusLine1, 160, 112, 2);
-    if(statusLine2) spr.drawString(statusLine2, 160, 129, 2);
+    if(statusLine1) spr.drawString(statusLine1, 160, 108, 2);
+    if(statusLine2) spr.drawString(statusLine2, 160, 125, 2);
   }
   else
   {
-    spr.setTextColor(s.valid ? TH.text : TH.text_warn);
-    spr.drawString(s.status, 160, 112, 2);
+    spr.setTextDatum(TC_DATUM);
+    spr.setTextColor(s.valid && s.synced ? TH.text_muted : TH.text_warn);
+    spr.drawString(s.status, 160, 108, 2);
 
     // The honest dial. Without this line the screen cannot explain why the
     // radio is playing music (it is on an FM station, harvesting RDS clock
     // time — 95% of every hour) or why the audio just became a beep.
     spr.setTextDatum(TL_DATUM);
     spr.setTextColor(TH.text_muted);
-    spr.drawString(s.tuned, 8, 133, 2);
+    spr.drawString(s.tuned, 8, 132, 2);
 
     spr.setTextDatum(TR_DATUM);
-    spr.drawString(s.clients, 312, 133, 2);
+    spr.drawString(s.clients, 312, 132, 2);
   }
 
   // Signal strength stays: it is the one stock reading still true here, and it
