@@ -5,9 +5,12 @@
 #include <TFT_eSPI.h>
 
 #ifdef AIRTIME
-// AirTime firmware identity. Bump on anything an operator would notice.
-// Shown on the About screen and in the serial banner.
-#define AIRTIME_VERSION "0.9"
+// AirTime firmware identity: vYY.MM.DD.NNN — the date the build was cut, then
+// NNN counting that day's builds from 001. `tools/bump_version.sh` computes
+// the next value; run it before cutting anything an operator will see. Shown
+// on the About screen and in the serial banner, which is also how you tell
+// whether a flash actually took.
+#define AIRTIME_VERSION "v26.07.27.001"
 #endif
 #include <SI4735-fixed.h>
 

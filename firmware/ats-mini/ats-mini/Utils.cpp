@@ -30,14 +30,21 @@ static char    clockText[8] = {0};
 //
 const char *getVersion(bool shorter)
 {
-  static char versionString[35] = "\0";
-
 #ifdef AIRTIME
+  // 64, not upstream's 35, and snprintf, not sprintf: the long form
+  // "ATS-Mini AirTime v26.07.27.001 / ats-mini v2.35" is 47 characters, and
+  // even the old "AirTime 0.9" form was 37 — this build has been quietly
+  // writing 3 bytes past the buffer into whatever .bss neighbour followed
+  // since the version line was added. Found while adopting the dated version
+  // convention, which would have made the overrun 13 bytes.
+  static char versionString[64] = "\0";
+
   // An AirTime build must be identifiable from the About screen. Telling two
   // builds apart by comparing binary sizes has already produced one false
   // alarm in this project, and a bug report that cannot name its firmware is
   // most of a wasted evening.
-  sprintf(versionString, "%s%sAirTime %s / ats-mini v%1.1d.%2.2d",
+  snprintf(versionString, sizeof(versionString),
+    "%s%sAirTime %s / ats-mini v%1.1d.%2.2d",
     shorter ? "" : RECEIVER_NAME,
     shorter ? "" : " ",
     AIRTIME_VERSION,
@@ -45,6 +52,8 @@ const char *getVersion(bool shorter)
     VER_APP % 100
   );
 #else
+  static char versionString[35] = "\0";
+
   sprintf(versionString, "%s%sF/W: v%1.1d.%2.2d %s",
     shorter ? "" : RECEIVER_NAME,
     shorter ? "" : " ",
