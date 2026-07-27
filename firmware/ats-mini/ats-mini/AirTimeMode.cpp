@@ -73,6 +73,27 @@ static const size_t kFmStationCount =
 static const int32_t kWwvBands[] = {15000, 10000, 5000};
 static const size_t kWwvBandCount = sizeof(kWwvBands) / sizeof(kWwvBands[0]);
 
+// ── Nets worth knowing about ────────────────────────────────────────────────
+// The feature the clock earns: a receiver that knows UTC to milliseconds can
+// answer "is it on NOW", not merely "what frequency is it on".
+//
+// **VERIFY THESE AGAINST THE CURRENT PUBLISHED SCHEDULE BEFORE RELYING ON
+// THEM.** Net times and frequencies drift, move seasonally, and are changed by
+// their controls; W1AW's schedule in particular shifts with US daylight time
+// while these entries are fixed UTC. They are here as a working starting point
+// and an example of the format — edit freely, the table is plain data and the
+// logic that reads it is in airtime/nets.h.
+//
+// Times are UTC minutes past midnight, days are a UTC weekday mask.
+static const airtime::HamNet kNets[] = {
+  // name              kHz    mode                days       start        mins
+  {"Maritime Mobile", 14300, airtime::NetMode::Usb, airtime::kDaily, 12*60,   600},
+  {"40m Evening",      7200, airtime::NetMode::Lsb, airtime::kDaily,  1*60,   120},
+  {"W1AW CW Prac",     7047, airtime::NetMode::Cw,  airtime::kWeekdays, 14*60,  60},
+  {"W1AW Bulletin",    7047, airtime::NetMode::Cw,  airtime::kDaily,  0*60,    30},
+};
+static const size_t kNetCount = sizeof(kNets) / sizeof(kNets[0]);
+
 static const uint8_t kWwvListenVolume = 35; // the level Milestone 0 calibrated
 
 static airtime_esp32::EspMonotonicClock atMono;
@@ -198,6 +219,7 @@ struct AirTimeScreen {
   const char *status;
   const char *tuned;
   const char *clients;
+  const char *net;      // "NOW: Maritime Mobile 14300" / "Next: ... in 2h10"
   bool synced;
   bool valid;
 };
@@ -212,12 +234,13 @@ void airtimeScreen(AirTimeScreen *out)
   static char statusBuf[64]  = "starting";
   static char tunedBuf[40]   = "";
   static char clientsBuf[24] = "";
+  static char netBuf[40]     = "";
 
   if(atApp == nullptr)
   {
     out->clock = clockBuf; out->local = localBuf; out->zone = zoneBuf;
     out->status = statusBuf;
-    out->tuned = tunedBuf; out->clients = clientsBuf;
+    out->tuned = tunedBuf; out->clients = clientsBuf; out->net = netBuf;
     out->synced = false;   out->valid = false;
     return;
   }
@@ -294,12 +317,35 @@ void airtimeScreen(AirTimeScreen *out)
   snprintf(clientsBuf, sizeof(clientsBuf), "NTP: %d client%s",
            st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
 
+  // What is on the air. Only ever shown with a clock we trust — a net schedule
+  // read off a wrong clock is worse than no schedule, because it looks right.
+  netBuf[0] = 0;
+  if(st.clock_valid && st.synced)
+  {
+    const int64_t utc_s = st.utc_us / 1000000;
+    const int active = airtime::netActiveAt(kNets, kNetCount, utc_s);
+    if(active >= 0)
+    {
+      snprintf(netBuf, sizeof(netBuf), "NOW %s %ld", kNets[active].name,
+               (long)kNets[active].khz);
+    }
+    else
+    {
+      int wait = 0;
+      const int next = airtime::netNextAt(kNets, kNetCount, utc_s, &wait);
+      if(next >= 0 && wait < 24 * 60)   // beyond a day it is not news
+        snprintf(netBuf, sizeof(netBuf), "%s in %dh%02d", kNets[next].name,
+                 wait / 60, wait % 60);
+    }
+  }
+
   out->clock  = clockBuf;
   out->local  = localBuf;
   out->zone   = zoneBuf;
   out->status = statusBuf;
   out->tuned  = tunedBuf;
   out->clients = clientsBuf;
+  out->net    = netBuf;
   out->synced = st.synced;
   out->valid  = st.clock_valid;
 }

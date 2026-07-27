@@ -18,6 +18,8 @@
 #include "airtime/drift.h"
 #include "airtime/goertzel.h"
 #include "airtime/hal.h"
+#include "airtime/morse.h"
+#include "airtime/nets.h"
 #include "airtime/rds_ct.h"
 #include "airtime/scheduler.h"
 #include "airtime/sntp.h"

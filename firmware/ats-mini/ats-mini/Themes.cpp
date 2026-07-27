@@ -435,6 +435,66 @@ ColorTheme theme[] =
     0xD3F2, // scan_snr
     0xFD95, // scan_rssi
   },
+  {
+    // Daylight — for reading the thing outdoors in direct sun.
+    //
+    // Every other theme here is light-on-dark, which is the right choice
+    // indoors and the worst possible one in sunlight: a dark panel reflects
+    // the sky and the thin bright glyphs disappear into the glare. Inverted,
+    // the backlight works WITH the ambient light instead of against it and the
+    // black strokes stay black however bright it gets.
+    //
+    // So the rules here are not the usual palette taste. Nothing pale, nothing
+    // saturated-bright: yellows and mid-greens that read well on black vanish
+    // on white, so the accents are DARK red and DARK green. Highlights invert
+    // rather than tint, because a wash of colour behind black text loses
+    // contrast exactly when it is needed most.
+    "Daylight",
+    0xFFFF, // bg            — white; the panel's own brightness is the asset
+    0x0000, // text
+    0x4208, // text_muted    — dark grey, still legible at an angle
+    0xC000, // text_warn     — dark red, not 0xF800: pure red on white glares
+    0x4208, // smeter_icon
+    0x0400, // smeter_bar    — dark green (also the AirTime local-clock accent)
+    0xC000, // smeter_bar_plus
+    0xC618, // smeter_bar_empty
+    0xC000, // save_icon
+    0x4208, // stereo_icon
+    0xC000, // rf_icon
+    0x0400, // rf_icon_conn
+    0x0000, // batt_voltage
+    0x0000, // batt_border
+    0x0400, // batt_full
+    0xC000, // batt_low
+    0xFFFF, // batt_charge
+    0x0000, // batt_icon     — yellow here would be invisible
+    0x0000, // band_text
+    0x0000, // mode_text
+    0x4208, // mode_border
+    0xFFFF, // box_bg
+    0x0000, // box_border
+    0x0000, // box_text
+    0xC618, // box_off_bg
+    0x4208, // box_off_text
+    0xFFFF, // menu_bg
+    0x0000, // menu_border
+    0x0000, // menu_hdr
+    0x0000, // menu_item
+    0x0000, // menu_hl_bg    — inverted selection: black block...
+    0xFFFF, // menu_hl_text  — ...with white text, the strongest cue available
+    0x0000, // menu_param
+    0x0000, // freq_text
+    0x4208, // funit_text
+    0xC000, // freq_hl
+    0x0000, // freq_hl_sel
+    0x0000, // rds_text
+    0x0000, // scale_text
+    0xC000, // scale_pointer
+    0x8410, // scale_line
+    0x8410, // scan_grid
+    0x0400, // scan_snr
+    0xC000, // scan_rssi
+  },
 };
 
 uint8_t themeIdx = 0;

@@ -36,6 +36,7 @@ struct AirTimeScreen {
   const char *status;   // "+/-250 ms   RDS   sync 26s ago"
   const char *tuned;    // "FM 89.9 MHz" / "WWV 15000 kHz  LISTENING"
   const char *clients;  // "NTP: 2 clients"
+  const char *net;      // what is on the air, or "" 
   bool synced;          // false => clock drawn in the warning colour
   bool valid;           // false => no time at all yet
 };
@@ -121,6 +122,15 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
 
     spr.setTextDatum(TR_DATUM);
     spr.drawString(s.clients, 312, 132, 2);
+
+    // What is on the air right now — the line only an accurate clock can
+    // write. Shown in the accent colour so it reads as news, not status.
+    if(s.net[0])
+    {
+      spr.setTextDatum(TC_DATUM);
+      spr.setTextColor(TH.smeter_bar);
+      spr.drawString(s.net, 160, 150, 2);
+    }
   }
 
   // Signal strength stays: it is the one stock reading still true here, and it
