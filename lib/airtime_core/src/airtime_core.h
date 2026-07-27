@@ -22,5 +22,6 @@
 #include "airtime/scheduler.h"
 #include "airtime/sntp.h"
 #include "airtime/station_vote.h"
+#include "airtime/timezone.h"
 #include "airtime/types.h"
 #include "airtime/wwv_marker.h"

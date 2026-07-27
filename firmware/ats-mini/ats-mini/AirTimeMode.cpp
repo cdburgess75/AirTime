@@ -179,15 +179,16 @@ void airtimeSetup()
 // photo back from the device showed them as gaps ("250 ms  RDS  sync 26s
 // ago"). Screen strings are therefore built here rather than reused.
 
-// Three-letter zone name shown beside the local time.
+// The operator's time zone, as a RULE rather than an offset.
 //
-// This is a setting, not a derivation: a UTC offset cannot imply an
-// abbreviation. UTC-5 is CDT in July and EST in January, and the names are
-// political rather than arithmetic. The OFFSET is adjustable on the device
-// itself (the stock Settings > UTC offset menu, which this reads via
-// getCurrentUTCOffset() and which already defaults to UTC-5); this is only
-// what to call it. Set it empty to fall back to the menu's own "UTC-5" label.
-static const char* kLocalZoneLabel = "CDT";
+// A fixed label is wrong half the year and a fixed offset is wrong the other
+// half: Central is CST at UTC-6 in January and CDT at UTC-5 in July. So the
+// zone carries both names and its own DST rule, and the display follows the
+// calendar without anyone touching a menu twice a year. Swap this one line for
+// kZoneEastern / kZoneMountain / kZonePacific / kZoneArizona / kZoneAlaska /
+// kZoneHawaii / kZoneUtc — see airtime/timezone.h, which is host-tested
+// against the real 2026 transition instants.
+static const airtime::TimeZoneRule& kLocalZone = airtime::kZoneCentral;
 
 struct AirTimeScreen {
   const char *clock;
@@ -229,19 +230,16 @@ void airtimeScreen(AirTimeScreen *out)
     snprintf(clockBuf, sizeof(clockBuf), "%02d:%02d:%02d",
              (int)(sod / 3600), (int)((sod % 3600) / 60), (int)(sod % 60));
 
-    // getCurrentUTCOffset() is in 15-minute units (it has to be: India is
-    // +5:30, Nepal +5:45). Floor-mod so zones west of Greenwich wrap the day
-    // correctly rather than printing a negative hour.
-    const int64_t local_s = utc_s + (int64_t)getCurrentUTCOffset() * 15 * 60;
+    // Local time and its name for THIS instant — the name changes with the
+    // season, so both come from the same call. Floor-mod because zones west of
+    // Greenwich otherwise wrap into a negative hour.
+    const char* zone = "";
+    const int64_t local_s = airtime::localEpochS(kLocalZone, utc_s, &zone);
     int64_t lsod = local_s % 86400;
     if(lsod < 0) lsod += 86400;
     snprintf(localBuf, sizeof(localBuf), "%02d:%02d:%02d",
              (int)(lsod / 3600), (int)((lsod % 3600) / 60), (int)(lsod % 60));
-
-    snprintf(zoneBuf, sizeof(zoneBuf), "%s",
-             (kLocalZoneLabel && *kLocalZoneLabel)
-                 ? kLocalZoneLabel
-                 : utcOffsets[utcOffsetIdx].desc);
+    snprintf(zoneBuf, sizeof(zoneBuf), "%s", zone);
   }
   else
   {
