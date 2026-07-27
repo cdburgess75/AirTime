@@ -1,11 +1,30 @@
 #include "nets.h"
 
+#include "timezone.h"
+
 namespace airtime {
 
 namespace {
 
 constexpr int kMinutesPerDay = 1440;
 constexpr int kMinutesPerWeek = kMinutesPerDay * 7;
+
+// Seconds to add to UTC to land in a net's own frame, at this instant.
+//
+// Derived from the same rule the clock display uses, so a net's idea of "now"
+// and the operator's idea of "now" can never drift apart by a DST bug in one
+// of them.
+int32_t anchorOffsetS(NetAnchor a, int64_t utc_s) {
+  switch (a) {
+    case NetAnchor::UsEastern:
+      return static_cast<int32_t>(localEpochS(kZoneEastern, utc_s, nullptr) - utc_s);
+    case NetAnchor::UsCentral:
+      return static_cast<int32_t>(localEpochS(kZoneCentral, utc_s, nullptr) - utc_s);
+    case NetAnchor::Utc:
+    default:
+      return 0;
+  }
+}
 
 int64_t floorDiv(int64_t a, int64_t b) {
   int64_t q = a / b;
@@ -48,9 +67,12 @@ int utcWeekday(int64_t utc_s) {
 
 int netActiveAt(const HamNet* nets, std::size_t count, int64_t utc_s) {
   if (nets == nullptr) return -1;
-  const int now_wm = weekMinute(utc_s);
   for (std::size_t i = 0; i < count; ++i) {
-    if (nets[i].duration_min <= 0 || nets[i].days == 0) continue;
+    if (nets[i].duration_min <= 0 || nets[i].days == kOnDemand) continue;
+    // Each net is asked the question in its OWN frame: a schedule written as
+    // "6:30 PM Central, daily" is compared against Central local time, so both
+    // the hour and the weekday stay right across a DST boundary.
+    const int now_wm = weekMinute(utc_s + anchorOffsetS(nets[i].anchor, utc_s));
     if (sessionElapsed(nets[i], now_wm) >= 0) return static_cast<int>(i);
   }
   return -1;
@@ -60,13 +82,19 @@ int netNextAt(const HamNet* nets, std::size_t count, int64_t utc_s,
               int* minutes_until) {
   if (nets == nullptr || count == 0) return -1;
 
-  const int now_wm = weekMinute(utc_s);
   int best = -1;
   int best_wait = kMinutesPerWeek + 1;
 
   for (std::size_t i = 0; i < count; ++i) {
     const HamNet& n = nets[i];
-    if (n.duration_min <= 0 || n.days == 0) continue;
+    if (n.duration_min <= 0 || n.days == kOnDemand) continue;
+
+    // In the net's own frame, as in netActiveAt(). The wait that comes out is
+    // in local minutes, which equals the wait in UTC minutes unless a DST
+    // transition falls between now and then — an hour's error, twice a year,
+    // on a net up to a week away. Worth naming; not worth carrying a second
+    // clock to fix.
+    const int now_wm = weekMinute(utc_s + anchorOffsetS(n.anchor, utc_s));
 
     // On the air now counts as zero wait — the answer to "what is next" when
     // something is already running is that thing.

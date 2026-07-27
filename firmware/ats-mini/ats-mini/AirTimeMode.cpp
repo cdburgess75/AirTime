@@ -120,20 +120,62 @@ static int atHfOpt = 0;
 // The feature the clock earns: a receiver that knows UTC to milliseconds can
 // answer "is it on NOW", not merely "what frequency is it on".
 //
-// **VERIFY THESE AGAINST THE CURRENT PUBLISHED SCHEDULE BEFORE RELYING ON
-// THEM.** Net times and frequencies drift, move seasonally, and are changed by
-// their controls; W1AW's schedule in particular shifts with US daylight time
-// while these entries are fixed UTC. They are here as a working starting point
-// and an example of the format — edit freely, the table is plain data and the
-// logic that reads it is in airtime/nets.h.
+// Imported from the SkyWave built-in directory (cdburgess75/SkyWave, v2026.
+// 07.26.038) — a hand-curated list compiled from the nets' own published
+// schedules, biased toward national traffic/service nets plus Southeast-US
+// coverage. **VERIFY AGAINST THE NET'S OWN PAGE BEFORE OPERATIONAL USE**: it
+// carries no upstream feed, so times drift as nets change them.
 //
-// Times are UTC minutes past midnight, days are a UTC weekday mask.
+// ── Why these are not the UTC times SkyWave publishes ───────────────────────
+// SkyWave's table quotes UTC, and warns that its UTC columns are anchored to US
+// DAYLIGHT time and shift +1 h in winter — its local-anchor column is the
+// authoritative value. Copying the UTC numbers would have made this display an
+// hour wrong from November to March, which on a device built to be right about
+// time is the one mistake it cannot afford. So each net is stored in the frame
+// its schedule was actually written in, and airtime/nets.cpp converts using the
+// same DST rule the clock display uses.
+//
+// Where SkyWave gave no local anchor (ECARS, MIDCARS, both marked "hours
+// approximate"), the daylight-time UTC window lands on round local hours —
+// 0800-2200 Eastern and 0800-1800 Central — which is what a locally-anchored
+// net looks like, so they are recorded that way.
+//
+// Names are <=11 characters because that is what the side bar can draw; the
+// dial frequency and mode go on the detail line instead (atNetDetail).
+//
+// The two W1AW CW entries that used to sit here are gone. Their times were a
+// plausible-looking guess of mine, not a published schedule, and a wrong time
+// on this screen is worse than a missing one.
+// ── Order is load-bearing ───────────────────────────────────────────────────
+// netActiveAt() returns the FIRST listed net that is on the air, and that one
+// answer is what the clock screen shows. The wide-area service nets run 10 to
+// 14 hours a day, so listing them first would mean the screen reads "NOW ECARS"
+// through every regional net's hour and the short, scheduled nets — the ones
+// worth being told about — would never once appear. Shortest sessions first,
+// therefore: most specific wins.
+//
+// The same order drives the menu, where regional-first also suits a Gulf Coast
+// operator. Reorder freely if the QTH changes; nothing else depends on it.
 static const airtime::HamNet kNets[] = {
-  // name              kHz    mode                days       start        mins
-  {"Maritime Mobile", 14300, airtime::NetMode::Usb, airtime::kDaily, 12*60,   600},
-  {"40m Evening",      7200, airtime::NetMode::Lsb, airtime::kDaily,  1*60,   120},
-  {"W1AW CW Prac",     7047, airtime::NetMode::Cw,  airtime::kWeekdays, 14*60,  60},
-  {"W1AW Bulletin",    7047, airtime::NetMode::Cw,  airtime::kDaily,  0*60,    30},
+  // name           kHz   mode                  days              start (local)  mins  anchor
+  // ── southeast US: one hour each, on a schedule you can set a watch by ──
+  {"FL Phone",     3940, airtime::NetMode::Lsb, airtime::kDaily,   7*60,           60, airtime::NetAnchor::UsEastern},
+  {"Waterway",     7268, airtime::NetMode::Lsb, airtime::kDaily,   7*60 + 45,      60, airtime::NetAnchor::UsEastern},
+  {"FL Midday",    7242, airtime::NetMode::Lsb, airtime::kDaily,  12*60,           60, airtime::NetAnchor::UsEastern},
+  {"MS Phone",     3862, airtime::NetMode::Lsb, airtime::kDaily,  18*60,           60, airtime::NetAnchor::UsCentral},
+  {"LA Traffic",   3910, airtime::NetMode::Lsb, airtime::kDaily,  18*60 + 30,      60, airtime::NetAnchor::UsCentral},
+  {"AL Traffic",   3965, airtime::NetMode::Lsb, airtime::kDaily,  18*60 + 30,      60, airtime::NetAnchor::UsCentral},
+  {"TN Phone",     3980, airtime::NetMode::Lsb, airtime::kDaily,  18*60 + 30,      60, airtime::NetAnchor::UsCentral},
+  {"GA SSB",       3975, airtime::NetMode::Lsb, airtime::kDaily,  19*60,           60, airtime::NetAnchor::UsEastern},
+  {"SC SSB",       3915, airtime::NetMode::Lsb, airtime::kDaily,  19*60,           60, airtime::NetAnchor::UsEastern},
+  // ── wide-area service nets: long windows, informal start ──
+  {"SouthCARS",    7251, airtime::NetMode::Lsb, airtime::kDaily,   8*60,          300, airtime::NetAnchor::UsEastern},
+  {"Intercon",    14300, airtime::NetMode::Usb, airtime::kDaily,  11*60,          300, airtime::NetAnchor::Utc},
+  {"MIDCARS",      7258, airtime::NetMode::Lsb, airtime::kDaily,   8*60,          600, airtime::NetAnchor::UsCentral},
+  {"MMSN",        14300, airtime::NetMode::Usb, airtime::kDaily,  16*60,          600, airtime::NetAnchor::Utc},
+  {"ECARS",        7255, airtime::NetMode::Lsb, airtime::kDaily,   8*60,          840, airtime::NetAnchor::UsEastern},
+  // Listed, never scheduled: activated only for an Atlantic tropical system.
+  {"Hurricane",   14325, airtime::NetMode::Usb, airtime::kOnDemand,    0,         1440, airtime::NetAnchor::Utc},
 };
 static const size_t kNetCount = sizeof(kNets) / sizeof(kNets[0]);
 
@@ -269,32 +311,57 @@ const char *atNetName(int i)
   return b;
 }
 
-// The selected net in full, for the roomy area the menu leaves free.
+static const char *atModeLabel(airtime::NetMode m)
+{
+  switch(m)
+  {
+    case airtime::NetMode::Lsb: return "LSB";
+    case airtime::NetMode::Usb: return "USB";
+    case airtime::NetMode::Cw:  return "CW";
+    case airtime::NetMode::Fm:  return "FM";
+    default:                    return "AM";
+  }
+}
+
+// The selected net in full, for the roomy area the menu leaves free. The list
+// shows names alone -- 11 characters is all the side bar can draw -- so this is
+// where the dial frequency, the mode and the timing actually live.
 const char *atNetDetail()
 {
   static char b[48];
   if((size_t)atNetSel >= kNetCount) return "";
   const airtime::HamNet& n = kNets[atNetSel];
+  const char *mode = atModeLabel(n.mode);
+
+  // A net with no schedule has no timing to report and must not be made to look
+  // as though it does. SkyWave lists the Hurricane Watch Net as 0000-2400 so it
+  // never disappears from its UI; here that would read "ON AIR NOW" every hour
+  // of every day for a net that is almost never up.
+  if(n.days == airtime::kOnDemand)
+  {
+    snprintf(b, sizeof(b), "%ld kHz %s  when activated", (long)n.khz, mode);
+    return b;
+  }
 
   // No trustworthy clock, no timing claim -- a schedule read off a wrong clock
   // looks right, which is the worst way for this to fail.
   if(atApp == nullptr || !atApp->displayState().synced)
   {
-    snprintf(b, sizeof(b), "%s  %ld kHz", n.name, (long)n.khz);
+    snprintf(b, sizeof(b), "%ld kHz %s", (long)n.khz, mode);
     return b;
   }
 
   const int64_t utc_s = atApp->displayState().utc_us / 1000000;
-  if(airtime::netActiveAt(&kNets[atNetSel], 1, utc_s))
+  if(airtime::netActiveAt(&kNets[atNetSel], 1, utc_s) >= 0)
   {
-    snprintf(b, sizeof(b), "%ld kHz  ON AIR NOW", (long)n.khz);
+    snprintf(b, sizeof(b), "%ld kHz %s  ON AIR NOW", (long)n.khz, mode);
   }
   else
   {
     int wait = 0;
     airtime::netNextAt(&kNets[atNetSel], 1, utc_s, &wait);
-    if(wait >= 60) snprintf(b, sizeof(b), "%ld kHz  in %dh%02d", (long)n.khz, wait / 60, wait % 60);
-    else           snprintf(b, sizeof(b), "%ld kHz  in %dm", (long)n.khz, wait);
+    if(wait >= 60) snprintf(b, sizeof(b), "%ld kHz %s  in %dh%02d", (long)n.khz, mode, wait / 60, wait % 60);
+    else           snprintf(b, sizeof(b), "%ld kHz %s  in %dm", (long)n.khz, mode, wait);
   }
   return b;
 }

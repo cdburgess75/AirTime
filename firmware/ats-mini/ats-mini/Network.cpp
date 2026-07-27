@@ -119,6 +119,19 @@ char *getWiFiIPAddress()
 //
 void netStop()
 {
+#ifdef AIRTIME
+  // WiFi belongs to AirTime in this build (PLAN.md §2: the ADC2 rule means the
+  // app decides when the radio may be up at all). The boot call and the loop
+  // tick are compiled out at their call sites, but three more remain in stock
+  // code that has no reason to know about any of this: Settings->Wi-Fi, and
+  // both halves of light sleep. Any of them would take down the access point
+  // mid-service -- the sleep pair silently, on a timer -- and AirTime would go
+  // on reporting an AP that was no longer there.
+  //
+  // Guarding here rather than at each call site because this is the door, and
+  // the next call added upstream will not know to knock.
+  return;
+#else
   wifi_mode_t mode = WiFi.getMode();
 
   MDNS.end();
@@ -132,6 +145,7 @@ void netStop()
     WiFi.softAPdisconnect(true);
 
   WiFi.mode(WIFI_MODE_NULL);
+#endif
 }
 
 //
@@ -139,6 +153,10 @@ void netStop()
 //
 void netInit(uint8_t netMode, bool showStatus)
 {
+#ifdef AIRTIME
+  (void)netMode; (void)showStatus;
+  return;   // see netStop()
+#else
   // Always disable WiFi first
   netStop();
   wifiRegisterPowerLevelCallback();
@@ -197,6 +215,7 @@ void netInit(uint8_t netMode, bool showStatus)
     MDNS.begin("atsmini"); // Set the hostname to "atsmini.local"
     MDNS.addService("http", "tcp", 80);
   }
+#endif
 }
 
 //

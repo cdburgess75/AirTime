@@ -78,9 +78,13 @@ Band *getCurrentBand() { return(&bands[bandIdx]); }
 // receiver is still present and unchanged -- it has simply moved under
 // Settings, where configuration belongs. A clock appliance whose front page is
 // twelve radio controls is a radio with a clock bolted on.
-#define MENU_MODE_AT      0
-#define MENU_NETS         1
-#define MENU_SETTINGS     2
+// Volume leads, and is where the menu opens on a cold boot. It is the one
+// control an operator reaches for without planning to, and burying it under
+// Settings made the most-used knob the deepest one.
+#define MENU_VOLUME       0
+#define MENU_MODE_AT      1
+#define MENU_NETS         2
+#define MENU_SETTINGS     3
 #else
 #define MENU_MODE         0
 #define MENU_BAND         1
@@ -98,7 +102,7 @@ Band *getCurrentBand() { return(&bands[bandIdx]); }
 #endif
 
 #ifdef AIRTIME
-int8_t menuIdx = MENU_MODE_AT;
+int8_t menuIdx = MENU_VOLUME;
 #else
 int8_t menuIdx = MENU_VOLUME;
 #endif
@@ -106,6 +110,7 @@ int8_t menuIdx = MENU_VOLUME;
 static const char *menu[] =
 {
 #ifdef AIRTIME
+  "Volume",
   "Clock/Radio",
   "Nets",
 #else
@@ -143,18 +148,17 @@ static_assert(ITEM_COUNT(menu) == MENU_SETTINGS + 1,
 // only the door they are behind has changed.
 #define MENU_MODE         0
 #define MENU_BAND         1
-#define MENU_VOLUME       2
-#define MENU_STEP         3
-#define MENU_SEEK         4
-#define MENU_SCAN         5
-#define MENU_MEMORY       6
-#define MENU_SQUELCH      7
-#define MENU_BW           8
-#define MENU_AGC_ATT      9
-#define MENU_AVC         10
-#define MENU_SOFTMUTE    11
-#define MENU_BRIGHTNESS  12
-#define AT_SETTINGS_BASE 12
+#define MENU_STEP         2
+#define MENU_SEEK         3
+#define MENU_SCAN         4
+#define MENU_MEMORY       5
+#define MENU_SQUELCH      6
+#define MENU_BW           7
+#define MENU_AGC_ATT      8
+#define MENU_AVC          9
+#define MENU_SOFTMUTE    10
+#define MENU_BRIGHTNESS  11
+#define AT_SETTINGS_BASE 11
 #else
 #define MENU_BRIGHTNESS   0
 #define AT_SETTINGS_BASE  0
@@ -203,7 +207,6 @@ static const char *settings[] =
 #ifdef AIRTIME
   "Mode",
   "Band",
-  "Volume",
   "Step",
   "Seek",
   "Scan",
@@ -989,6 +992,7 @@ static void clickMenu(int cmd, bool shortPress)
     case MENU_BAND:     currentCmd = CMD_BAND;      break;
 #endif
 #ifdef AIRTIME
+    case MENU_VOLUME:   currentCmd = CMD_VOLUME;   break;
     case MENU_MODE_AT:  currentCmd = CMD_AT_MODE;  break;
     case MENU_NETS:     currentCmd = CMD_AT_NETS;  break;
 #endif
@@ -1073,7 +1077,6 @@ static void clickSettings(int cmd, bool shortPress)
     case MENU_AGC_ATT:  currentCmd = CMD_AGC;       break;
     case MENU_BAND:     currentCmd = CMD_BAND;      break;
     case MENU_SQUELCH:  currentCmd = CMD_SQUELCH;   break;
-    case MENU_VOLUME:   currentCmd = CMD_VOLUME;    break;
 
     case MENU_MEMORY:
       currentCmd = CMD_MEMORY;
@@ -1646,8 +1649,8 @@ static void drawMemory(int x, int y, int sx)
 
 static void drawVolume(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_VOLUME), x, y, sx);
-  drawZoomedMenu(RADIO_ITEM(MENU_VOLUME));
+  drawCommon(menu[MENU_VOLUME], x, y, sx);
+  drawZoomedMenu(menu[MENU_VOLUME]);
   spr.setTextDatum(MC_DATUM);
 
   spr.setTextColor(TH.menu_param);
