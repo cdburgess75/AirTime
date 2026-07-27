@@ -17,6 +17,7 @@
 #include "airtime/display.h"
 #include "airtime/drift.h"
 #include "airtime/goertzel.h"
+#include "airtime/fm_survey.h"
 #include "airtime/hal.h"
 #include "airtime/morse.h"
 #include "airtime/nets.h"
