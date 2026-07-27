@@ -777,12 +777,22 @@ void airtimeScreen(AirTimeScreen *out)
   // truthful. Without it the screen cannot explain why the radio is playing
   // music (an FM station being harvested for RDS clock time, ~95% of the hour)
   // or why the audio has become a 1000 Hz beep.
+  //
+  // Until the clock is trusted, the same line also says WHY the radio is
+  // there: it is hunting. Field request, during a stubborn UNSYNCED: "some
+  // kind of search indicator... to indicate where it's searching and the fact
+  // that it is searching". The frequency was already on screen; the missing
+  // word was SEARCHING — an amber screen that names its target reads as a
+  // process, where one that just sits there reads as a fault.
   if(atApp->directive().wwv_listening)
-    snprintf(tunedBuf, sizeof(tunedBuf), "WWV %ld kHz  LISTENING",
+    snprintf(tunedBuf, sizeof(tunedBuf), "%sWWV %ld kHz  LISTENING",
+             st.synced ? "" : "SEARCHING  ",
              (long)atApp->directive().wwv_band_khz);
   else
-    snprintf(tunedBuf, sizeof(tunedBuf), "FM %.1f MHz  RDS",
-             (double)atRds.tunedKhz() / 100.0);
+    snprintf(tunedBuf, sizeof(tunedBuf), "%sFM %.1f MHz  %s",
+             st.synced ? "" : "SEARCHING  ",
+             (double)atRds.tunedKhz() / 100.0,
+             st.synced ? "RDS" : "for RDS time");
 
   snprintf(clientsBuf, sizeof(clientsBuf), "NTP: %d client%s",
            st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
