@@ -41,6 +41,7 @@
 #include "Utils.h"  // loadSSB/unloadSSB — the SSB patch state the chip needs
 #include "Menu.h"   // getCurrentUTCOffset(), utcOffsets[] — the device's own
                     // timezone setting, so local time is adjustable in the field
+#include "EIBI.h"   // eibiInstallEmbedded — the schedule ships inside the image
 
 #include <WiFi.h>
 
@@ -587,6 +588,12 @@ void airtimeSetup()
   atStore.begin();
   atLoadSettings();
 
+  // The EiBi shortwave schedule ships inside this image, because the radio's
+  // network has no internet on purpose. First boot after a flash with new
+  // data parses it into LittleFS (a few seconds, with a progress screen);
+  // every boot after that is a version-string compare.
+  eibiInstallEmbedded(false);
+
   airtime_esp32::RdsSourceConfig rdsCfg;
   airtime_esp32::RdsChipOps rdsOps;
   rdsOps.tune = &atTuneFm;
@@ -812,6 +819,35 @@ void airtimeLoop()
 
   atApp->loop();
   atWifi.service(*atApp);
+
+  // Feed the stock clock from the disciplined one. Everything stock keys off
+  // clockGetHM() — most usefully the EiBi schedule lookups, which are UTC
+  // schedules on a radio that, uniquely, actually knows UTC — was dead in
+  // this build, because the paths that set the stock clock (NTP client, raw
+  // RDS CT) are exactly the ones AirTime replaced.
+  //
+  // Fed as UTC: clockGetHM() hands back the raw stored value (what EiBi
+  // needs), while the stock "Time:" display applies the operator's UTC-offset
+  // setting on top — both consumers get the frame they expect. clockSet() is
+  // set-once and free-runs on micros() thereafter, so a re-feed means
+  // clockReset() first; every 10 minutes bounds the stock clock's drift at
+  // ~20 ms, three orders of magnitude inside schedule resolution.
+  {
+    static uint32_t lastClockFeed = 0;
+    const uint32_t feedNow = millis();
+    if(!clockAvailable() || feedNow - lastClockFeed >= 600000)
+    {
+      const airtime::DisplayState cst = atApp->displayState();
+      if(cst.clock_valid)
+      {
+        const int64_t sod = (cst.utc_us / 1000000) % 86400;
+        clockReset();
+        clockSet((uint8_t)(sod / 3600), (uint8_t)((sod / 60) % 60),
+                 (uint8_t)(sod % 60));
+        lastClockFeed = feedNow;
+      }
+    }
+  }
 
   // The status page, after NTP and never before it. A client that opens a
   // socket and then says nothing can stall handleClient(); serving time is the

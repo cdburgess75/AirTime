@@ -20,6 +20,14 @@ struct StationSchedule
 
 bool eibiAvailable();
 bool eibiLoadSchedule();
+#ifdef AIRTIME
+// Install the schedule compiled into the image (EiBiData.h) into LittleFS.
+// force=false is a no-op when the installed dataset already matches — cheap
+// enough to call every boot. force=true reinstalls unconditionally (the
+// Settings -> Load EiBi item, whose download path cannot work on a radio
+// whose network has no internet on purpose).
+bool eibiInstallEmbedded(bool force = false);
+#endif
 const StationSchedule *eibiLookup(uint16_t freq, uint8_t hour, uint8_t minute, size_t *offset=NULL);
 const StationSchedule *eibiPrev(uint16_t freq, uint8_t hour, uint8_t minute, size_t *offset);
 const StationSchedule *eibiNext(uint16_t freq, uint8_t hour, uint8_t minute, size_t *offset);

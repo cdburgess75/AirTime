@@ -1,0 +1,14 @@
+; AirTime seed schedule: time stations only, 24 h, physically certain.
+; The full EiBi dataset replaces this via tools/eibi_embed.py --fetch.
+2500          0000-2400           WWV Fort Collins CO
+2500          0000-2400           WWVH Kauai HI
+3330          0000-2400           CHU Ottawa ON
+5000          0000-2400           WWV Fort Collins CO
+5000          0000-2400           WWVH Kauai HI
+7850          0000-2400           CHU Ottawa ON
+10000         0000-2400           WWV Fort Collins CO
+10000         0000-2400           WWVH Kauai HI
+14670         0000-2400           CHU Ottawa ON
+15000         0000-2400           WWV Fort Collins CO
+15000         0000-2400           WWVH Kauai HI
+20000         0000-2400           WWV Fort Collins CO

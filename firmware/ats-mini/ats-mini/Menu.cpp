@@ -1040,7 +1040,10 @@ static void atActivate(uint16_t cmd)
       break;
 
     case CMD_LOADEIBI:
-      eibiLoadSchedule();
+      // The stock item downloads from the internet, which this radio's
+      // network cannot reach by design. Reinstall from the copy compiled
+      // into the firmware instead.
+      eibiInstallEmbedded(true);
       break;
 
     case CMD_AT_MODE:
