@@ -150,6 +150,7 @@ int atZoneCount();  const char *atZoneName(int i);  int atZoneIdx();  void atSet
 int atBandCount();  const char *atBandName(int i);  int atBandIdx();  void atSetBandIdx(int i);
 int atHfCount();    const char *atHfName(int i);    int atHfIdx();    void atSetHfIdx(int i);
 int atModeCount();  const char *atModeName(int i);  int atModeIdx();  void atSetModeIdx(int i);
+const char *atNetDetail();
 int atNetCount();   const char *atNetName(int i);   int atNetIdx();   void atSetNetIdx(int i);
 bool airtimeRadioMode();
 #endif

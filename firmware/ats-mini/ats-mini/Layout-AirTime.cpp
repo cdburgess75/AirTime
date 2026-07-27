@@ -49,6 +49,13 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
   // under the clock.
   const bool override_status = statusLine1 || statusLine2;
 
+  // A menu needs the left half of the panel, and the 48 px clock starts at
+  // x=32 — they were drawing straight through each other, sidebar over digits.
+  // While a menu is open the time steps aside: smaller, top right, still
+  // readable, out of the way. (Seen on the device: the Nets box landed on top
+  // of "5:47:14" and the zoom overlay ran off the right edge.)
+  const bool menu_open = (currentCmd != CMD_NONE);
+
   AirTimeScreen s;
   airtimeScreen(&s);
 
@@ -78,6 +85,31 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
   // column. Amber instead of white while unsynchronised — §5 wants the device
   // to LOOK wrong when it is coasting, not to explain itself in small print.
   const uint16_t clock_colour = s.synced ? TH.text : TH.text_warn;
+
+  if(menu_open)
+  {
+    // Compact: time and zone on the right, clear of the side bar entirely.
+    spr.setTextDatum(TR_DATUM);
+    spr.setTextColor(clock_colour);
+    spr.drawString(s.valid ? s.local : s.clock, 312, 22, 4);
+    spr.setTextColor(TH.text_muted);
+    spr.drawString(s.valid ? s.zone : "UTC", 312, 48, 2);
+    spr.setTextColor(TH.smeter_bar);
+    spr.drawString(s.clock, 312, 66, 2);
+
+    // Whatever the open menu wants to say in full, in the space the side bar
+    // leaves free. The nets list shows names only; this is where the selected
+    // one gets its frequency and its timing.
+    if(currentCmd == CMD_AT_NETS)
+    {
+      spr.setTextDatum(BR_DATUM);
+      spr.setTextColor(TH.text);
+      spr.drawString(atNetDetail(), 312, 160, 2);
+    }
+    drawSMeter(getStrength(rssi), METER_OFFSET_X, METER_OFFSET_Y);
+    drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+    return;
+  }
 
   spr.setTextDatum(TR_DATUM);
   spr.setTextColor(clock_colour);

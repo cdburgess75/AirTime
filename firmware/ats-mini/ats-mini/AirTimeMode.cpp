@@ -241,6 +241,8 @@ void atSetBandIdx(int i)
   atApp->setWwvBands(order, n);
 }
 
+static int atNetSel = 0;
+
 // ── Nets list ───────────────────────────────────────────────────────────────
 // A schedule is only useful if you can look at it. The status line shows the
 // one net that matters right now; this shows the whole table with each entry's
@@ -251,39 +253,52 @@ void atSetBandIdx(int i)
 // has drawn them all — one shared buffer would draw the same string five times.
 const char *atNetName(int i)
 {
-  static char buf[5][40];
+  // Names ONLY, and short. The stock side bar is built for "Brightness" and
+  // "Theme" -- about a dozen characters -- and the first attempt put the name,
+  // frequency AND status in each row. On the device that truncated to
+  // "e Mobile 14300 NOW" and the zoom overlay ran off the right edge of the
+  // panel. Details for the selected net go to atNetDetail() instead, which is
+  // the usual list-plus-detail split and fits the space that actually exists.
+  static char buf[5][14];
   static uint8_t slot = 0;
   if(i < 0 || (size_t)i >= kNetCount) return "?";
-
   char *b = buf[slot];
   slot = (slot + 1) % 5;
+  snprintf(b, sizeof(buf[0]), "%s", kNets[i].name);
+  return b;
+}
 
-  const airtime::HamNet& n = kNets[i];
-  // Without a trustworthy clock, say so rather than implying a schedule is
-  // being tracked. A net time read off a wrong clock looks right, which is the
-  // worst way for this to fail.
+// The selected net in full, for the roomy area the menu leaves free.
+const char *atNetDetail()
+{
+  static char b[48];
+  if((size_t)atNetSel >= kNetCount) return "";
+  const airtime::HamNet& n = kNets[atNetSel];
+
+  // No trustworthy clock, no timing claim -- a schedule read off a wrong clock
+  // looks right, which is the worst way for this to fail.
   if(atApp == nullptr || !atApp->displayState().synced)
   {
-    snprintf(b, sizeof(buf[0]), "%s %ld", n.name, (long)n.khz);
+    snprintf(b, sizeof(b), "%s  %ld kHz", n.name, (long)n.khz);
     return b;
   }
 
   const int64_t utc_s = atApp->displayState().utc_us / 1000000;
-  if(airtime::netActiveAt(&kNets[i], 1, utc_s))
+  if(airtime::netActiveAt(&kNets[atNetSel], 1, utc_s))
   {
-    snprintf(b, sizeof(buf[0]), "%s %ld NOW", n.name, (long)n.khz);
+    snprintf(b, sizeof(b), "%ld kHz  ON AIR NOW", (long)n.khz);
   }
   else
   {
     int wait = 0;
-    airtime::netNextAt(&kNets[i], 1, utc_s, &wait);
-    if(wait >= 60) snprintf(b, sizeof(buf[0]), "%s %dh%02d", n.name, wait / 60, wait % 60);
-    else           snprintf(b, sizeof(buf[0]), "%s %dm", n.name, wait);
+    airtime::netNextAt(&kNets[atNetSel], 1, utc_s, &wait);
+    if(wait >= 60) snprintf(b, sizeof(b), "%ld kHz  in %dh%02d", (long)n.khz, wait / 60, wait % 60);
+    else           snprintf(b, sizeof(b), "%ld kHz  in %dm", (long)n.khz, wait);
   }
   return b;
 }
+
 int atNetCount() { return (int)kNetCount; }
-static int atNetSel = 0;
 int atNetIdx() { return atNetSel; }
 void atSetNetIdx(int i) { if(i >= 0 && i < (int)kNetCount) atNetSel = i; }
 

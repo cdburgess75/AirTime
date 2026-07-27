@@ -85,7 +85,13 @@ Band *getCurrentBand() { return(&bands[bandIdx]); }
 #define MENU_AGC_ATT      9
 #define MENU_AVC         10
 #define MENU_SOFTMUTE    11
+#ifdef AIRTIME
+#define MENU_MODE_AT     12
+#define MENU_NETS        13
+#define MENU_SETTINGS    14
+#else
 #define MENU_SETTINGS    12
+#endif
 
 int8_t menuIdx = MENU_VOLUME;
 
@@ -129,9 +135,7 @@ static const char *menu[] =
 #define MENU_AT_ZONE     15
 #define MENU_AT_BAND     16
 #define MENU_AT_HF       17
-#define MENU_AT_MODE     18
-#define MENU_AT_NETS     19
-#define MENU_ABOUT       20
+#define MENU_ABOUT       18
 #else
 #define MENU_ABOUT       15
 #endif
@@ -163,8 +167,6 @@ static const char *settings[] =
   "Time Zone",
   "WWV Band",
   "HF Listen",
-  "Mode",
-  "Nets",
 #endif
   "About",
 };
@@ -889,6 +891,10 @@ static void clickMenu(int cmd, bool shortPress)
     case MENU_BW:       currentCmd = CMD_BANDWIDTH; break;
     case MENU_AGC_ATT:  currentCmd = CMD_AGC;       break;
     case MENU_BAND:     currentCmd = CMD_BAND;      break;
+#ifdef AIRTIME
+    case MENU_MODE_AT:  currentCmd = CMD_AT_MODE;  break;
+    case MENU_NETS:     currentCmd = CMD_AT_NETS;  break;
+#endif
     case MENU_SETTINGS: currentCmd = CMD_SETTINGS;  break;
     case MENU_SQUELCH:  currentCmd = CMD_SQUELCH;   break;
     case MENU_VOLUME:   currentCmd = CMD_VOLUME;    break;
@@ -963,8 +969,6 @@ static void clickSettings(int cmd, bool shortPress)
     case MENU_AT_ZONE:    currentCmd = CMD_AT_ZONE;    break;
     case MENU_AT_BAND:    currentCmd = CMD_AT_BAND;    break;
     case MENU_AT_HF:      currentCmd = CMD_AT_HF;      break;
-    case MENU_AT_MODE:    currentCmd = CMD_AT_MODE;    break;
-    case MENU_AT_NETS:    currentCmd = CMD_AT_NETS;    break;
 #endif
     case MENU_FM_REGION:
       // Only in FM mode
@@ -1744,6 +1748,32 @@ static void drawInfo(int x, int y, int sx)
 // Draw side bar (menu or information)
 //
 #ifdef AIRTIME
+// Root-menu lists take their title by string rather than by settings[] index.
+static void drawAtRootList(const char *title, int count, int idx,
+                           const char *(*name)(int), int x, int y, int sx)
+{
+  drawCommon(title, x, y, sx, true);
+  if(count <= 0) return;
+  for(int i=-2 ; i<3 ; i++)
+  {
+    if(count < 5 && ((idx+i) < 0 || (idx+i) >= count)) continue;
+    const int j = abs((idx + count + i) % count);
+    if(i==0) {
+      if(strlen(name(j)) <= 12) drawZoomedMenu(name(j));
+      spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
+    } else {
+      spr.setTextColor(TH.menu_item);
+    }
+    spr.setTextDatum(MC_DATUM);
+    spr.drawString(name(j), 40+x+(sx/2), 64+y+(i*16), 2);
+  }
+}
+
+static void drawAtNets(int x, int y, int sx)
+{
+  drawAtRootList(menu[MENU_NETS], atNetCount(), atNetIdx(), atNetName, x, y, sx);
+}
+
 static void drawAtList(int title, int count, int idx, const char *(*name)(int),
                        int x, int y, int sx)
 {
@@ -1755,7 +1785,9 @@ static void drawAtList(int title, int count, int idx, const char *(*name)(int),
     if(count < 5 && ((idx+i) < 0 || (idx+i) >= count)) continue;
     const int j = abs((idx + count + i) % count);
     if(i==0) {
-      drawZoomedMenu(name(j));
+      // The zoom box is a fixed 152 px at font 4. Anything longer than it can
+      // hold spills off the panel, which is what the first nets build did.
+      if(strlen(name(j)) <= 12) drawZoomedMenu(name(j));
       spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
     } else {
       spr.setTextColor(TH.menu_item);
@@ -1776,8 +1808,8 @@ void drawSideBar(uint16_t cmd, int x, int y, int sx)
     case CMD_AT_ZONE:    drawAtList(MENU_AT_ZONE, atZoneCount(), atZoneIdx(), atZoneName, x, y, sx); break;
     case CMD_AT_BAND:    drawAtList(MENU_AT_BAND, atBandCount(), atBandIdx(), atBandName, x, y, sx); break;
     case CMD_AT_HF:      drawAtList(MENU_AT_HF,   atHfCount(),   atHfIdx(),   atHfName,   x, y, sx); break;
-    case CMD_AT_MODE:    drawAtList(MENU_AT_MODE, atModeCount(), atModeIdx(), atModeName, x, y, sx); break;
-    case CMD_AT_NETS:    drawAtList(MENU_AT_NETS, atNetCount(), atNetIdx(), atNetName, x, y, sx); break;
+    case CMD_AT_MODE:    drawAtRootList(menu[MENU_MODE_AT], atModeCount(), atModeIdx(), atModeName, x, y, sx); break;
+    case CMD_AT_NETS:    drawAtNets(x, y, sx); break;
 #endif
     case CMD_MENU:       drawMenu(x, y, sx);       break;
     case CMD_SETTINGS:   drawSettings(x, y, sx);   break;
