@@ -241,6 +241,52 @@ void atSetBandIdx(int i)
   atApp->setWwvBands(order, n);
 }
 
+// ── Nets list ───────────────────────────────────────────────────────────────
+// A schedule is only useful if you can look at it. The status line shows the
+// one net that matters right now; this shows the whole table with each entry's
+// standing, so the answer to "what is on later" does not require waiting.
+//
+// Names are built into a small rotating set of buffers because the menu
+// renderer asks for five entries per frame and holds every pointer until it
+// has drawn them all — one shared buffer would draw the same string five times.
+const char *atNetName(int i)
+{
+  static char buf[5][40];
+  static uint8_t slot = 0;
+  if(i < 0 || (size_t)i >= kNetCount) return "?";
+
+  char *b = buf[slot];
+  slot = (slot + 1) % 5;
+
+  const airtime::HamNet& n = kNets[i];
+  // Without a trustworthy clock, say so rather than implying a schedule is
+  // being tracked. A net time read off a wrong clock looks right, which is the
+  // worst way for this to fail.
+  if(atApp == nullptr || !atApp->displayState().synced)
+  {
+    snprintf(b, sizeof(buf[0]), "%s %ld", n.name, (long)n.khz);
+    return b;
+  }
+
+  const int64_t utc_s = atApp->displayState().utc_us / 1000000;
+  if(airtime::netActiveAt(&kNets[i], 1, utc_s))
+  {
+    snprintf(b, sizeof(buf[0]), "%s %ld NOW", n.name, (long)n.khz);
+  }
+  else
+  {
+    int wait = 0;
+    airtime::netNextAt(&kNets[i], 1, utc_s, &wait);
+    if(wait >= 60) snprintf(b, sizeof(buf[0]), "%s %dh%02d", n.name, wait / 60, wait % 60);
+    else           snprintf(b, sizeof(buf[0]), "%s %dm", n.name, wait);
+  }
+  return b;
+}
+int atNetCount() { return (int)kNetCount; }
+static int atNetSel = 0;
+int atNetIdx() { return atNetSel; }
+void atSetNetIdx(int i) { if(i >= 0 && i < (int)kNetCount) atNetSel = i; }
+
 int atModeCount() { return (int)(sizeof(kModeNames) / sizeof(kModeNames[0])); }
 const char *atModeName(int i) { return (i >= 0 && i < atModeCount()) ? kModeNames[i] : "?"; }
 int atModeIdx() { return atModeOpt; }

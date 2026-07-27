@@ -49,6 +49,7 @@
 #define CMD_AT_BAND    0x3100 // | AirTime: WWV band to try first
 #define CMD_AT_HF      0x3200 // | AirTime: listen now / serve now
 #define CMD_AT_MODE    0x3250 // | AirTime: clock or receiver
+#define CMD_AT_NETS    0x3280 // | AirTime: scheduled nets
 #endif
 #define CMD_ABOUT      0x3300 //-+
 
@@ -149,5 +150,6 @@ int atZoneCount();  const char *atZoneName(int i);  int atZoneIdx();  void atSet
 int atBandCount();  const char *atBandName(int i);  int atBandIdx();  void atSetBandIdx(int i);
 int atHfCount();    const char *atHfName(int i);    int atHfIdx();    void atSetHfIdx(int i);
 int atModeCount();  const char *atModeName(int i);  int atModeIdx();  void atSetModeIdx(int i);
+int atNetCount();   const char *atNetName(int i);   int atNetIdx();   void atSetNetIdx(int i);
 bool airtimeRadioMode();
 #endif
