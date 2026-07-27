@@ -290,7 +290,8 @@ void airtimeSetup()
   atApp->setWwvBands(kWwvBands, kWwvBandCount);
   atApp->begin();
 
-  Serial.println("AirTime: up. NTP at 192.168.4.1:123 while serving.");
+  Serial.printf("AirTime %s: up. NTP at 192.168.4.1:123 while serving.\n",
+                AIRTIME_VERSION);
 }
 
 // ── The §5 screen ───────────────────────────────────────────────────────────

@@ -32,3 +32,6 @@ scratch/
 # Full flash images are NEVER committed: they contain the settings NVS
 # partition, which holds live WiFi credentials. Checksums only.
 firmware/backup/*.bin
+
+# Release images (built by tools/release.sh, attached to releases not committed)
+dist/

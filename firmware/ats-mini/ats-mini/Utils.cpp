@@ -32,6 +32,19 @@ const char *getVersion(bool shorter)
 {
   static char versionString[35] = "\0";
 
+#ifdef AIRTIME
+  // An AirTime build must be identifiable from the About screen. Telling two
+  // builds apart by comparing binary sizes has already produced one false
+  // alarm in this project, and a bug report that cannot name its firmware is
+  // most of a wasted evening.
+  sprintf(versionString, "%s%sAirTime %s / ats-mini v%1.1d.%2.2d",
+    shorter ? "" : RECEIVER_NAME,
+    shorter ? "" : " ",
+    AIRTIME_VERSION,
+    VER_APP / 100,
+    VER_APP % 100
+  );
+#else
   sprintf(versionString, "%s%sF/W: v%1.1d.%2.2d %s",
     shorter ? "" : RECEIVER_NAME,
     shorter ? "" : " ",
@@ -39,6 +52,7 @@ const char *getVersion(bool shorter)
     VER_APP % 100,
     __DATE__
   );
+#endif
 
   return(versionString);
 }

@@ -467,6 +467,33 @@ line prints truth, not intent — `ap[up ...]` / `ap[DOWN* ... afail=N]`. A
 silent AP outage is no longer possible: it either self-heals within a second
 or the log says exactly why not.
 
+## Built after the clock worked (2026-07-27)
+
+With timekeeping verified, the work moved to what the device is like to *own*.
+Each item below is either host-tested or verified in the linked binary.
+
+| | |
+|---|---|
+| **WWV teaches RDS** | Each station's constant lateness is measured while WWV is fresh, then subtracted. The point is not the milliseconds: a station 700 ms late is *vetoed* once WWV pulls the clock onto the true minute, because every correction it asks for then exceeds the 500 ms gate. Correcting the bias hands the continuous source back. |
+| **Learning persists** | Station biases and band propagation survive power-off in NVS. Format is versioned, length-checked and all-or-nothing, because a corrupt blob that decodes *partially* would invent a station bias and poison a working clock. |
+| **Time zones as rules** | Eight zones with their own DST behaviour, host-tested against the real 2026 transition instants. A fixed label is wrong half the year; a fixed offset is wrong the other half. |
+| **The §5 screen** | Local time as the headline in a 48 px seven-segment face, UTC beneath it, honest dial line, and what is on the air right now. |
+| **Daylight theme** | Inverted for direct sun. Dark red and dark green accents — the bright ones that read well on black vanish on white. |
+| **AirTime menu** | Time Zone, WWV Band and the §5 operator actions, which had been implemented and tested since Milestone 4 and reachable from nothing. Choices persist in AirTime's own NVS namespace, so the build stays additive to upstream. |
+| **Net directory** | "Is it on NOW", answerable only by a radio that knows UTC. Shown solely while synced — a schedule read off a wrong clock looks right, which is worse than showing nothing. |
+| **CW decoder** | Core built and host-tested at 7–35 WPM. Not yet wired: it wants ~5 ms sampler blocks (a 40 WPM dit is 30 ms) and it needs the tuner, so it belongs behind an operator mode. |
+| **Release image** | `tools/release.sh` merges bootloader + partitions + application into one file at offset 0. Version on the About screen. |
+| **Client sync** | `tools/airtime-sync.sh`, including an install-once agent that tracks the radio when present and does nothing when absent. |
+
+**The pattern worth keeping.** Nearly every bug this project has produced was
+the device believing something it had no way to know, and nearly every one was
+caught by a test written to reproduce a real log rather than by inspection. The
+CW decoder alone yielded three: a noise floor seeded from a sample that turned
+out to be a tone (permanently deaf), a unit estimator that could not bootstrap
+onto a sender slower than its guess (fluent nonsense, forever), and elements
+classified before anything was known about the sender (first letter always
+wrong). None would have been visible in review.
+
 ## Field variability — the survey is a probe, not the config (2026-07-26)
 
 Owner direction: location, antenna, propagation, and time of day are all

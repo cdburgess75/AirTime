@@ -9,9 +9,21 @@ AirTime runs entirely on an *unmodified* [AMNVOLT ATS Mini V4](docs/PLAN.md#2-ta
 > broadcast FM, a WWV minute marker on 15 MHz pulls the phase onto the second,
 > and the laptop takes its time from the radio's own access point. Milestones
 > 0–4 are verified on hardware; what remains is an evening of FT8 decodes
-> (Milestone 5) and the §5 front-panel display. `make test` → **97 tests, 2269
-> checks passing**. The story of how it got there — including four bugs that
-> each made the device confidently wrong — is in [`docs/STATUS.md`](docs/STATUS.md).
+> (Milestone 5). `make test` → **136 tests, 2438 checks passing**. The story of
+> how it got there — including four bugs that each made the device
+> *confidently wrong* — is in [`docs/STATUS.md`](docs/STATUS.md).
+
+```
+                                    AirTime          [batt][wifi]
+
+                       18:31:26  CDT
+                       23:31:26  UTC
+
+                 +/-31 ms   RDS+WWV   sync 2m ago
+
+ FM 89.9 MHz  RDS                          NTP: 1 client
+                    NOW Maritime Mobile 14300
+```
 
 ---
 
@@ -78,9 +90,36 @@ Detailed milestone contents live in [`docs/PLAN.md §7`](docs/PLAN.md#7-mileston
 - **Toolchain:** [Arduino CLI](https://arduino.github.io/arduino-cli/) for the device build; plain `g++`/`make` for the host core and its tests.
 - **PSRAM variant:** upstream ships `esp32s3-ospi` and `esp32s3-qspi` profiles. This unit reports 8 MB PSRAM (the `R8`, octal), so **OSPI** — which is also upstream's default. Confirm via non-zero PSRAM in Settings→About.
 
+### Flashing without a toolchain
+
+`tools/release.sh` produces one merged image — bootloader, partition table and
+application in a single file at offset 0, which is what a web flasher expects
+and which removes the commonest way a first flash goes wrong:
+
+```
+tools/release.sh                       # -> dist/airtime-<version>-airtime.bin
+esptool.py --chip esp32s3 write_flash 0x0 dist/airtime-<version>-airtime.bin
+```
+
+The running version is on the **About** screen and in the serial banner. Telling
+two builds apart by comparing binary sizes has already produced one false alarm
+in this project.
+
 ## Using AirTime as your time source
 
 WSJT‑X and JS8Call have **no NTP client** — they read the OS clock. So you point your **operating system** at the radio, and the OS keeps FT8's clock honest.
+
+**The short version, on any of the three platforms:** join the radio's WiFi, then
+
+```
+./tools/airtime-sync.sh            # sync once
+sudo ./tools/airtime-sync.sh --install   # ...or track it automatically, forever
+```
+
+It refuses to sync from a radio that reports itself unsynchronised, and does
+nothing at all when the radio is not there — which is what makes the installed
+version safe to forget about. Full per-OS detail, including what the WSJT‑X
+**DT** column is telling you, is in [`docs/CLIENT_SETUP.md`](docs/CLIENT_SETUP.md).
 
 Once AirTime is serving (SoftAP up, NTP responding at the radio's IP, e.g. `192.168.4.1`):
 
