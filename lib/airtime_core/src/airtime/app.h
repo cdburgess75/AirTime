@@ -114,7 +114,22 @@ struct AppConfig {
   int64_t restore_uncertainty_us = 3600LL * 1000000; // warm boot is a memory
   int64_t ntp_client_window_us = 5LL * 60 * 1000000;
   int64_t source_recent_us = 2LL * 3600 * 1000000;   // for the "RDS+WWV" display
+
+  // What the shared audio detector listens for, per duty. WWV: the 1000 Hz
+  // minute marker in 20 ms blocks (edge quantisation vs selectivity balance).
+  // CW: a ~700 Hz beat note — where most operators park a CW note — in 5 ms
+  // blocks, because a 40 WPM dit is 30 ms long and 20 ms blocks cap usable
+  // speed near 15 WPM (morse.h). setMode() pushes these into the sampler at
+  // each transition; the numbers live here so the fakes see the same ones the
+  // device uses.
+  real wwv_tone_hz = 1000.0f;
+  int64_t wwv_block_us = 20000;
+  real cw_tone_hz = 700.0f;
+  int64_t cw_block_us = 5000;
 };
+
+// Who owns the radio right now. See AirTimeApp::setMode for what each means.
+enum class OpMode : uint8_t { Clock, Radio, Cw };
 
 // What became of the last WWV marker that yielded a phase measurement — the
 // piece of the story the detector's own diag cannot tell (it sees tones, not
@@ -170,48 +185,35 @@ class AirTimeApp {
   // time must never be dragged off to go hunting. Started automatically only
   // when there is nothing to fall back on — no supplied list and nothing
   // stored. Timekeeping continues throughout; the survey only owns the dial.
-  // ── Operator mode ─────────────────────────────────────────────────────────
-  // Hand the dial back. AirTime stops tuning entirely — no FM rotation, no WWV
-  // windows, no survey — and coasts on the clock it has already disciplined.
+  // ── Modes ─────────────────────────────────────────────────────────────────
+  // One enum, one transition function, because the modes were once two booleans
+  // set from the firmware in a careful order — with a comment on the ordering
+  // that read "load-bearing, not tidiness", which is a bug report filed in
+  // advance. All sequencing now lives in setMode(), where the fakes test it.
   //
-  // This costs far less than it sounds. Once the crystal is characterised the
-  // residual rate error is a couple of ppm, so an hour of listening costs
-  // single-digit milliseconds, and the uncertainty reported to NTP grows to
-  // match. The clock does not stop being right; it stops being re-checked, and
-  // says so.
+  // Clock — what the device IS. AirTime owns the dial and WiFi.
+  // Radio — the dial belongs to the human. No retuning, no WWV windows; WiFi
+  //         stays UP, so NTP serves *better* here — with no ADC sampling there
+  //         is no §2 conflict to schedule around. The clock coasts on its
+  //         learned drift: an hour costs single-digit milliseconds, and the
+  //         uncertainty reported to NTP grows to match. It does not stop being
+  //         right; it stops being re-checked, and says so.
+  // Cw    — Radio, plus the audio tap. Same tap as WWV, same silicon rule
+  //         (PLAN.md §2): the access point is DOWN and NTP does not answer for
+  //         as long as the operator stays. Not worked around — stated, on the
+  //         screen, in the mode that causes it. Entering repoints the shared
+  //         detector at the CW note; leaving repoints it at WWV and flushes the
+  //         half-assembled character so the last letter of a callsign is not
+  //         eaten by the mode change.
   //
-  // WiFi stays UP throughout, which makes NTP service better rather than worse
-  // in this mode: with no ADC sampling there is no §2 conflict to schedule
-  // around, so there are no listen windows to coast through.
-  //
-  // Never persisted: every power-on comes up as a clock (see begin()).
-  //
-  // Leaving the mode is the interesting direction, and it is why this is not a
-  // one-line setter: for however long the operator had the dial, every cached
-  // belief about where the chip is pointing has been going stale behind our
-  // back. See the definition.
-  void setRadioMode(bool on);
-  bool radioMode() const { return radio_mode_; }
-
-  // ── CW decode ─────────────────────────────────────────────────────────────
-  //
-  // The third mode, and the only one in which this device stops being a clock.
-  //
-  // CW comes off the SAME audio tap WWV does, so it inherits the SAME rule:
-  // ADC2 is unreadable while the WiFi radio is powered (PLAN.md §2). Decoding
-  // therefore means the access point is DOWN and NTP is not answering, for as
-  // long as the operator stays here. That is not a limitation to be worked
-  // around — it is silicon — so it is made explicit instead: an operator asks
-  // for it, the screen says the clock is off the air, and leaving restores
-  // service.
-  //
-  // The clock itself keeps running on its learned drift throughout and remains
-  // as good as coasting makes it; what stops is SERVING, not timekeeping.
-  //
-  // The dial belongs to the operator here exactly as in radio mode — nothing
-  // may retune underneath someone hunting for a signal by ear.
-  void setCwMode(bool on);
-  bool cwMode() const { return cw_mode_; }
+  // Leaving for Clock is the direction with teeth: for however long the
+  // operator had the dial, every cached belief about where the chip points has
+  // been going stale behind our back. setMode(Clock) forgets them all and
+  // retunes. Never persisted: every power-on comes up as a clock (see begin()).
+  void setMode(OpMode m);
+  OpMode mode() const { return mode_; }
+  bool radioMode() const { return mode_ == OpMode::Radio; }
+  bool cwMode() const { return mode_ == OpMode::Cw; }
 
   // What has been decoded, oldest first, as a NUL-terminated string.
   const MorseTextBuffer& cwText() const { return cw_text_; }
@@ -268,6 +270,13 @@ class AirTimeApp {
   void adoptSurveyResult();
   void pollWwv(int64_t now);
   void pollCw(int64_t now);
+  // EVERY retune of the FM side goes through here, because the radio has ONE
+  // tuner and `tuned_wwv_khz_` is a claim about it: any move of the dial that
+  // does not go through the WWV path leaves that claim stale, and a stale
+  // claim makes applyDirective skip the retune into the next listen window —
+  // three minutes spent sampling FM program audio while the log says 15000.
+  void tuneRds(int32_t khz);
+  void tuneFmStation(int64_t now);   // current station + dwell restart
   void submitRdsVote(int64_t now);
   void persist(int64_t now, bool force);
   void noteAccepted(Source s, int64_t now);
@@ -311,8 +320,7 @@ class AirTimeApp {
   int64_t last_rds_submit_ = 0;
   int64_t last_persist_ = 0;
 
-  bool radio_mode_ = false;
-  bool cw_mode_ = false;
+  OpMode mode_ = OpMode::Clock;
   MorseDecoder cw_;
   MorseTextBuffer cw_text_;
   real cw_level_ = 0.0f;

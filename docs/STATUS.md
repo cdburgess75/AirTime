@@ -3,7 +3,7 @@
 Live checklist for the build. Milestone contents come from [`PLAN.md §7`](PLAN.md#7-milestones).
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked/gate
 
-Last updated 2026-07-27. **153 tests / 6100 checks** via `make test`.
+Last updated 2026-07-27. **161 tests / 6194 checks** via `make test`.
 
 **The clock works.** Milestones 0-4 are done and Milestones 2 and 3 are verified
 over the air: `sntp 192.168.4.1` → **−0.005106 ± 0.070630**, no internet, no GPS.
@@ -177,6 +177,50 @@ evening of WSJT-X decodes into the one number this milestone turns on.
 - SkyWave's live NetLogger feed is not applicable on-device: the radio runs a
   bare SoftAP with no route to the internet, by design. It would be a `tools/`
   import at most.
+
+## The single-tuner redesign (2026-07-27, after the retrospective)
+
+The recurring bug class of this project — a chip pointed somewhere else than
+the software believes — existed because the test fakes were two independent
+radios while the device has ONE tuner. Three structural changes closed it:
+
+- **`FakeTuner`** — one shared dial in the simulation. The adapters' `tunedKhz()`
+  values remain what they are on hardware: *cached claims* about a chip someone
+  else may have moved. Tests now assert on the truth, the claim, and the
+  difference, which is the bug class itself.
+- **`OpMode` enum** — Clock/Radio/Cw as one state machine in `AirTimeApp`, with
+  every transition sequenced in `setMode()` where the fakes exercise it. The
+  firmware's mode switch no longer contains call ordering whose comment
+  admitted it was load-bearing; the detector repointing (`setDetector`) is part
+  of the `IWwvSampler` contract now.
+- **`pickDialBand`** — the narrowest-band choice moved from untested glue into
+  `airtime/dial.h`, host-tested against a copy of the real shipped band table
+  (the "ALL swallows every net" trap is pinned by test).
+
+The shared tuner exposed **two real device bugs within minutes of existing**:
+
+1. **Single-station RDS deafness.** Nothing retuned the chip to FM after a WWV
+   listen window — the dwell rotation requires >1 station — so a one-station
+   config sat parked on AM forever, coasting while the station list looked
+   healthy. Fixed: window end hands the dial back (`applyDirective`).
+2. **Deaf listen windows.** With that retune in place, `tuned_wwv_khz_` went
+   stale instead: the next window wanted the band the cache already claimed,
+   skipped the retune, and spent three minutes sampling FM program audio. This
+   is almost certainly the field mystery of "music on 10 MHz" — the mkr line
+   printed the wanted band while the chip sat on a local FM station, and the
+   inflated floor read as jamming. Fixed: every FM tune goes through
+   `tuneRds()`, which voids the WWV claim; a listen window can no longer open
+   without genuinely retuning.
+
+All three invariants are sabotage-verified (re-introducing each bug fails the
+suite). One harness lesson learned the hard way: a test that dereferences a
+pointer it just reported null takes the binary down before the summary prints,
+and a runner grepping for FAIL lines reads that wreck as a pass — the bias test
+now returns after reporting, and verification runs read the summary line, not a
+filter.
+
+Remaining from the retrospective: the Menu.cpp table restructure (its own
+careful pass), and the cosmetic `IWwvSampler` rename.
 
 ## How the adapters got here (historical)
 

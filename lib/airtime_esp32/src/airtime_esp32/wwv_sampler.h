@@ -86,7 +86,8 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   // no task restart and no window where cfg_ is read from two cores at once.
   //
   // Returns false if called while running, which would be exactly that race.
-  bool setDetector(airtime::real tone_hz, int64_t block_us);
+  // (Now the IWwvSampler contract — AirTimeApp::setMode drives it directly.)
+  bool setDetector(airtime::real tone_hz, int64_t block_us) override;
   airtime::real toneHz() const { return cfg_.tone_hz; }
 
   // --- Diagnostics (not part of the interface) -----------------------------

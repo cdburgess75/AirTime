@@ -59,7 +59,7 @@ void AirTimeApp::begin() {
   sched_.start(now);
   fm_dwell_start_ = now;
   last_persist_ = now;
-  if (station_count_ > 0) deps_.rds->tuneKhz(stations_[0]);
+  tuneFmStation(now);
 
   // Nothing to listen to and nothing remembered: find out for ourselves.
   if (cfg_.auto_survey && station_count_ == 0) startSurvey();
@@ -71,7 +71,7 @@ void AirTimeApp::begin() {
 void AirTimeApp::startSurvey() {
   survey_.begin(deps_.clock->nowUs());
   const int32_t khz = survey_.wantTuned();
-  if (khz != 0) deps_.rds->tuneKhz(khz);
+  if (khz != 0) tuneRds(khz);
 }
 
 void AirTimeApp::pollSurvey(int64_t now) {
@@ -95,7 +95,7 @@ void AirTimeApp::pollSurvey(int64_t now) {
   const int32_t before = survey_.wantTuned();
   if (survey_.tick(now, deps_.rds->signalStrength())) {
     const int32_t khz = survey_.wantTuned();
-    if (khz != 0 && khz != before) deps_.rds->tuneKhz(khz);
+    if (khz != 0 && khz != before) tuneRds(khz);
   }
   if (survey_.done()) adoptSurveyResult();
 }
@@ -110,64 +110,67 @@ void AirTimeApp::adoptSurveyResult() {
   if (n == 0) return;
 
   setFmStations(found, n);
-  fm_dwell_start_ = deps_.clock->nowUs();
-  deps_.rds->tuneKhz(stations_[0]);
+  tuneFmStation(deps_.clock->nowUs());
   learned_dirty_ = true;
   persist(deps_.clock->nowUs(), /*force=*/true);
 }
 
-void AirTimeApp::setRadioMode(bool on) {
-  if (on == radio_mode_) return;
-  radio_mode_ = on;
-  if (on) return;
-
-  // Coming back from operator mode. While it was on, the human owned the dial
-  // and this object did not watch — so `tuned_wwv_khz_` and the RDS source's
-  // idea of the current station are now claims about a chip that has since been
-  // tuned somewhere else entirely, by hand.
-  //
-  // Both cached values are used to SKIP work. applyDirective() only calls
-  // wwv->tuneKhz() when the wanted band differs from tuned_wwv_khz_, so an
-  // operator who left the radio on 40 m and switched back to Clock would have
-  // the next listen window open on 7200 kHz while every log line said 15000 —
-  // and the FM side would not correct itself until the dwell timer rotated
-  // stations, which needs more than one station and several minutes.
-  //
-  // So forget both. Zero can never equal a real band, which forces the retune
-  // and the marker reset with it; the FM station is re-tuned right here.
+void AirTimeApp::tuneRds(int32_t khz) {
+  deps_.rds->tuneKhz(khz);
+  // One tuner: the dial is on FM now, whatever the WWV cache used to claim.
+  // Leaving that claim standing is how a listen window ends up sampling FM
+  // program audio — applyDirective skips the WWV retune when the wanted band
+  // "already matches" a chip that has long since been moved. The music heard
+  // on "10 MHz" in the first field session was in all likelihood this bug:
+  // the mkr line printed the wanted band while the chip sat on a local FM
+  // station, and the inflated noise floor read as jamming.
   tuned_wwv_khz_ = 0;
-  if (station_count_ > 0) {
-    deps_.rds->tuneKhz(stations_[station_idx_]);
-    fm_dwell_start_ = deps_.clock->nowUs();
-  }
 }
 
-void AirTimeApp::setCwMode(bool on) {
-  if (on == cw_mode_) return;
-  cw_mode_ = on;
-  cw_level_ = 0.0f;
+void AirTimeApp::tuneFmStation(int64_t now) {
+  if (station_count_ == 0) return;
+  tuneRds(stations_[station_idx_]);
+  fm_dwell_start_ = now;
+}
 
-  if (on) {
-    // Start from silence. The decoder tracks a noise floor and estimates the
-    // sender's speed from the traffic, and both are about the band we are
-    // about to listen to, not the one we just left.
+void AirTimeApp::setMode(OpMode m) {
+  if (m == mode_) return;
+  const OpMode prev = mode_;
+
+  // Leaving CW: the character still being assembled comes out — the last
+  // letter of a callsign must not be eaten by the mode change — and the shared
+  // detector goes back to being a WWV instrument. setDetector() is only legal
+  // on a stopped sampler, which is why the stop happens HERE, synchronously,
+  // rather than being left to applyDirective a loop later. This ordering used
+  // to live in the firmware as three calls whose comment admitted the order
+  // was load-bearing; now it lives where the fakes can test it.
+  if (prev == OpMode::Cw) {
+    char c = 0;
+    if (cw_.flush(&c)) cw_text_.push(c);
+    if (deps_.wwv->isRunning()) deps_.wwv->stop();
+    deps_.wwv->setDetector(cfg_.wwv_tone_hz, cfg_.wwv_block_us);
+  }
+
+  if (m == OpMode::Cw) {
+    // Entering CW: take the tap. A listen window may own the sampler at this
+    // instant — stop it first, same reason as above. Decoder and noise floor
+    // start from silence: both are about the band the operator is about to
+    // tune, not the one the radio just left.
+    if (deps_.wwv->isRunning()) deps_.wwv->stop();
+    deps_.wwv->setDetector(cfg_.cw_tone_hz, cfg_.cw_block_us);
     cw_.reset();
     cw_text_.clear();
-    return;
+    cw_level_ = 0.0f;
   }
 
-  // Leaving: emit whatever character was half-assembled, so the last letter of
-  // a callsign is not silently eaten by the mode change.
-  char c = 0;
-  if (cw_.flush(&c)) cw_text_.push(c);
+  mode_ = m;
 
-  // Same reasoning as leaving radio mode — the dial was the operator's and
-  // every cached belief about it is stale. See setRadioMode.
-  tuned_wwv_khz_ = 0;
-  if (station_count_ > 0) {
-    deps_.rds->tuneKhz(stations_[station_idx_]);
-    fm_dwell_start_ = deps_.clock->nowUs();
-  }
+  // Returning to clock duty. For however long the operator had the dial, every
+  // cached belief about it went stale — selectBand() goes through neither
+  // adapter. Retune the FM side now, not at the next dwell rotation (which
+  // with one station never comes), and tuneRds() voids the WWV claim, forcing
+  // a genuine retune into the next listen window.
+  if (m == OpMode::Clock) tuneFmStation(deps_.clock->nowUs());
 }
 
 real AirTimeApp::cwSnr() const {
@@ -197,7 +200,7 @@ Directive AirTimeApp::effectiveDirective(Directive d) const {
   // a ~700 Hz beat note, not 20 ms of a 1000 Hz minute marker. Feeding them to
   // the marker detector would hand the arbiter phase measurements derived from
   // somebody's callsign.
-  if (cw_mode_) {
+  if (mode_ == OpMode::Cw) {
     d.wwv_listening = false;
     d.wwv_band_khz = 0;
     d.rds_scanning = false;
@@ -209,7 +212,7 @@ Directive AirTimeApp::effectiveDirective(Directive d) const {
   // the scheduler's listening plans are simply overruled — and with no ADC
   // sampling there is no reason for WiFi to drop, so NTP serves continuously
   // instead of coasting through a window every hour.
-  if (radio_mode_) {
+  if (mode_ == OpMode::Radio) {
     d.wwv_listening = false;
     d.wwv_band_khz = 0;
     d.rds_scanning = false;
@@ -240,16 +243,33 @@ void AirTimeApp::applyDirective(const Directive& d) {
   // THE ordering rule (PLAN.md §2): ADC2 and WiFi can never be live together.
   // Always release before acquiring — stop the sampler and drop WiFi first, then
   // bring up whatever the new directive wants.
-  const bool want_audio = d.wwv_listening || cw_mode_;
+  const bool want_audio = d.wwv_listening || mode_ == OpMode::Cw;
 
-  if (!want_audio && deps_.wwv->isRunning()) deps_.wwv->stop();
+  if (!want_audio && deps_.wwv->isRunning()) {
+    deps_.wwv->stop();
+    // ONE tuner (PLAN.md §2's quieter sibling): the listen window leaves the
+    // chip parked on an AM band, and nothing else puts it back. The FM dwell
+    // rotation cannot — it requires station_count_ > 1, so a single-station
+    // config would stay RDS-deaf FOREVER after its first window, coasting on
+    // drift while the logs showed a healthy station list. Found the day the
+    // test fakes learned to share one tuner; invisible while they were two
+    // independent radios, and invisible on the bench because the real config
+    // happens to carry three stations and the rotation papered over it.
+    //
+    // Not in radio/CW mode (the dial is the operator's — but then want_audio
+    // or the mode gate keeps us out of here anyway) and not mid-survey (the
+    // survey owns the tuning plan).
+    if (mode_ == OpMode::Clock && !surveying()) {
+      tuneFmStation(deps_.clock->nowUs());
+    }
+  }
   if (!d.wifi_up && deps_.wifi->isUp()) deps_.wifi->tearDown();
 
   if (d.wifi_up && !deps_.wifi->isUp()) deps_.wifi->bringUp();
 
   // CW takes the audio tap without touching the dial: the operator tuned it,
   // by ear, and is probably still nudging it.
-  if (cw_mode_ && !deps_.wwv->isRunning()) deps_.wwv->start();
+  if (mode_ == OpMode::Cw && !deps_.wwv->isRunning()) deps_.wwv->start();
 
   if (d.wwv_listening) {
     if (d.wwv_band_khz != tuned_wwv_khz_) {
@@ -270,13 +290,13 @@ void AirTimeApp::loop() {
   // In operator mode AirTime observes nothing and steers nothing. Reading RDS
   // from whatever the operator happens to tune would let one unvetted station
   // steer the clock, which is exactly the failure the voter exists to prevent.
-  if (cw_mode_) {
+  if (mode_ == OpMode::Cw) {
     pollCw(now);
     persist(now, /*force=*/false);
     return;
   }
 
-  if (radio_mode_) {
+  if (mode_ == OpMode::Radio) {
     persist(now, /*force=*/false);
     return;
   }
@@ -335,8 +355,7 @@ void AirTimeApp::pollRds(int64_t now) {
   if (!directive_.wwv_listening && station_count_ > 1 &&
       (now - fm_dwell_start_) >= cfg_.fm_dwell_us) {
     station_idx_ = (station_idx_ + 1) % station_count_;
-    deps_.rds->tuneKhz(stations_[station_idx_]);
-    fm_dwell_start_ = now;
+    tuneFmStation(now);
   }
 
   voter_.prune(now - cfg_.rds_report_ttl_us);

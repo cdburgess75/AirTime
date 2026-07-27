@@ -37,6 +37,35 @@ class FakeClock : public IMonotonicClock {
   int64_t nowUs() const override { return mono_us; }
 };
 
+// --- The tuner --------------------------------------------------------------
+// The SI4732 has ONE tuner, and this struct is it.
+//
+// The fakes below used to be two independent radios — each kept its own
+// `tuned_` and consulted nobody. That lie hid the two bugs that reached
+// hardware anyway: a "Radio" screen reading 7200 while the chip played an FM
+// station, and a listen window that opened on 40 m while every log line said
+// 15000, because the app's cached band matched the band it wanted and so it
+// never retuned. Neither can be expressed when each fake owns its own dial.
+//
+// So the truth lives here, once. The adapters' `tunedKhz()` values remain —
+// deliberately — as what they are on the device: CACHED CLAIMS about a chip
+// that may have been tuned by somebody else since. A test can now assert on
+// either, and on the difference, which IS the bug class.
+//
+// operatorTune() models the stock firmware touching the chip directly
+// (selectBand goes through neither adapter), which is what an operator turning
+// the dial in radio mode does to AirTime's beliefs.
+struct FakeTuner {
+  enum class Band : uint8_t { None, Fm, Am };
+  Band band = Band::None;
+  int32_t khz = 0;
+
+  void tuneFm(int32_t k) { band = Band::Fm; khz = k; }
+  void tuneAm(int32_t k) { band = Band::Am; khz = k; }
+  bool onFm(int32_t k) const { return band == Band::Fm && khz == k; }
+  bool onAm(int32_t k) const { return band == Band::Am && khz == k; }
+};
+
 // --- FM / RDS ---------------------------------------------------------------
 struct FakeStation {
   int32_t khz = 0;
@@ -71,19 +100,26 @@ inline void buildCtGroup(int64_t utc_epoch_s, uint16_t pi, RdsGroup* g) {
 class FakeRdsSource : public IRdsSource {
  public:
   std::vector<FakeStation> stations;
+  FakeTuner* tuner = nullptr;   // wired by Sim; the one dial
   int tune_count = 0;  // retunes are observable: the real radio has ONE tuner
 
   void tuneKhz(int32_t khz) override {
     tuned_ = khz;
     ++tune_count;
+    if (tuner != nullptr) tuner->tuneFm(khz);
   }
+  // The adapter's cached claim — NOT necessarily where the chip is. See
+  // FakeTuner: keeping the two distinct is the entire point.
   int32_t tunedKhz() const override { return tuned_; }
 
   // Signal strength of whatever is on the tuned frequency. The survey uses
   // this to skip empty channels in 200 ms instead of dwelling 80 s on noise.
+  // Off FM entirely, the real adapter reports -1 (atRdsRssi refuses to read a
+  // shortwave RSSI into an FM survey).
   int signalStrength() const override {
+    if (tuner != nullptr && tuner->band != FakeTuner::Band::Fm) return -1;
     for (const FakeStation& s : stations) {
-      if (s.khz == tuned_) return s.rssi;
+      if (s.khz == rxKhz()) return s.rssi;
     }
     return 2;   // band noise
   }
@@ -95,13 +131,18 @@ class FakeRdsSource : public IRdsSource {
     return true;
   }
 
-  // Emit a CT group from the tuned station at each true minute boundary.
+  // Emit a CT group from the RECEIVED station at each true minute boundary —
+  // received per the shared tuner, not per this adapter's cache. On AM, or on
+  // an FM frequency nobody transmits on, nothing arrives; the SI4735 library
+  // does not even perform the I2C read outside FM mode.
   void pump(int64_t true_utc_us, int64_t mono_us, int64_t prev_true_utc_us) {
     constexpr int64_t kMin = 60000000;
+    const int32_t rx = rxKhz();
+    if (rx == 0) return;
     const int64_t first = (prev_true_utc_us / kMin + 1) * kMin;
     for (int64_t m = first; m <= true_utc_us; m += kMin) {
       for (const FakeStation& s : stations) {
-        if (s.khz != tuned_ || !s.sends_ct) continue;
+        if (s.khz != rx || !s.sends_ct) continue;
         RdsGroup g;
         buildCtGroup(m / 1000000, s.pi, &g);   // asserts the exact minute
         // ...but arrives error_us away from it, which is what makes the station
@@ -115,6 +156,14 @@ class FakeRdsSource : public IRdsSource {
   std::size_t pending() const { return queue_.size(); }
 
  private:
+  // Where RDS is actually being received from: the chip's dial if a tuner is
+  // wired (0 when the chip is not on FM at all), this fake's own cache when a
+  // bare test runs it standalone.
+  int32_t rxKhz() const {
+    if (tuner == nullptr) return tuned_;
+    return tuner->band == FakeTuner::Band::Fm ? tuner->khz : 0;
+  }
+
   int32_t tuned_ = 0;
   std::deque<RdsGroup> queue_;
 };
@@ -136,9 +185,29 @@ class FakeWwvSampler : public IWwvSampler {
   real noise_power = 7.7e-5f;
   std::vector<int32_t> propagating_bands;  // empty => nothing is heard
 
+  FakeTuner* tuner = nullptr;   // wired by Sim; the one dial
   int tune_count = 0;  // as with FakeRdsSource: retunes are observable
 
-  void tuneKhz(int32_t khz) override { tuned_ = khz; ++tune_count; }
+  // What the detector is pointed at — assertable, so a test can prove the mode
+  // machinery repointed it (700 Hz / 5 ms for CW, back to 1000 Hz / 20 ms for
+  // WWV) rather than trusting the sequencing.
+  real detector_tone_hz = 1000.0f;
+  int64_t detector_block_us = 20000;
+  int rejected_detector_sets = 0;   // calls made while running — the race
+
+  void tuneKhz(int32_t khz) override {
+    tuned_ = khz;
+    ++tune_count;
+    if (tuner != nullptr) tuner->tuneAm(khz);
+  }
+  bool setDetector(real tone_hz, int64_t bus) override {
+    // Same contract as Esp32WwvSampler: never mid-run. A caller that tries is
+    // exactly the cross-core cfg_ race the real adapter refuses.
+    if (running_) { ++rejected_detector_sets; return false; }
+    detector_tone_hz = tone_hz;
+    detector_block_us = bus;
+    return true;
+  }
   void start() override { running_ = true; }
   void stop() override { running_ = false; }
   bool isRunning() const override { return running_; }
@@ -167,6 +236,7 @@ class FakeWwvSampler : public IWwvSampler {
     }
   }
 
+  // The cached claim, as on the device (Esp32WwvSampler keeps exactly this).
   int32_t tunedKhz() const { return tuned_; }
 
   // Inject a block directly, bypassing the WWV marker generator above.
@@ -180,9 +250,20 @@ class FakeWwvSampler : public IWwvSampler {
   }
 
  private:
+  // Where the audio tap is actually listening: the chip's dial, not this
+  // adapter's cache. If the chip is on FM (harvesting RDS, or an operator's
+  // music), the tap carries program audio — no 1000 Hz minute marker — however
+  // firmly the cache believes it is on 15000.
+  int32_t rxKhz() const {
+    if (tuner == nullptr) return tuned_;
+    return tuner->band == FakeTuner::Band::Am ? tuner->khz : 0;
+  }
+
   bool propagates() const {
+    const int32_t rx = rxKhz();
+    if (rx == 0) return false;
     for (int32_t b : propagating_bands) {
-      if (b == tuned_) return true;
+      if (b == rx) return true;
     }
     return false;
   }
@@ -270,10 +351,22 @@ class FakeStore : public ITimeStore {
 class Sim {
  public:
   FakeClock clock;
+  FakeTuner tuner;   // the ONE dial both adapters below share
   FakeRdsSource rds;
   FakeWwvSampler wwv;
   FakeWiFi wifi;
   FakeStore store;
+
+  Sim() {
+    rds.tuner = &tuner;
+    wwv.tuner = &tuner;
+  }
+
+  // The stock firmware touching the chip directly — selectBand() goes through
+  // neither adapter, so their caches go stale exactly as they do on hardware.
+  void operatorTune(int32_t khz, bool fm) {
+    if (fm) tuner.tuneFm(khz); else tuner.tuneAm(khz);
+  }
 
   int64_t true_utc_us = 0;
   double crystal_ppm = 0.0;  // positive => device clock runs fast

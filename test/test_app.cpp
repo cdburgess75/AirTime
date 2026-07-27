@@ -352,6 +352,12 @@ AT_TEST(app_learns_station_bias_and_keeps_rds_usable) {
   // The station's error has been measured, and measured as ITS error.
   const StationBias* b = app.stationBias().find(0x1001);
   AT_CHECK(b != nullptr);
+  // The framework reports and continues, so a null here must end the test —
+  // dereferencing it takes down the whole binary before the summary prints,
+  // and a crash-in-place is the one way this suite can fail SILENTLY: a runner
+  // that greps for FAIL lines sees none and reads the wreck as a pass. That
+  // exact misreading cost a debugging session during the tuner redesign.
+  if (b == nullptr) return;
   AT_CHECK(b->samples >= 3);
   AT_CHECK_NEAR((double)b->bias_us, 700000.0, 120000.0);
 
@@ -672,7 +678,7 @@ AT_TEST(app_radio_mode_stops_tuning_but_keeps_serving) {
   AT_CHECK(app.arbiter().isSet());
 
   const int tunes_before = sim.rds.tune_count;
-  app.setRadioMode(true);
+  app.setMode(OpMode::Radio);
   sim.advance(2 * kHour, &app);
 
   // Two hours and it never touched the dial — including no WWV window, which
@@ -694,29 +700,30 @@ AT_TEST(app_radio_mode_stops_tuning_but_keeps_serving) {
   AT_CHECK(iabs(sim.clockErrorUs(app)) < 200000);
 
   // Back to clock mode and it resumes disciplining itself.
-  app.setRadioMode(false);
+  app.setMode(OpMode::Clock);
   sim.advance(10 * kMin, &app);
   AT_CHECK(sim.rds.tune_count > tunes_before);
 }
 
-// Leaving operator mode has to assume the worst about the dial.
+// One tuner, one truth: a listen window must find the chip actually ON the
+// band it believes it chose, and must hand the chip back to FM when it closes.
 //
-// While the mode is on, the human tunes the chip by hand and AirTime does not
-// watch. Both retune paths short-circuit on a cached value — the WWV path skips
-// tuneKhz() when the wanted band already matches, the FM path waits for a dwell
-// timer — so both would happily go on describing a frequency the radio left
-// long ago. The operator parks on 40 m; the log keeps saying 15000.
+// Both halves of this were real bugs, and both were invisible while the fakes
+// were two independent radios:
 //
-// This is the single-tuner class of bug (PLAN.md §2) in its quietest form: no
-// conflict, no error, just a receiver pointed somewhere else than the software
-// believes, which shows up only as a listen window that hears nothing.
-AT_TEST(app_radio_mode_exit_retunes_from_wherever_the_operator_left_it) {
+//  * With one FM station, nothing retuned after a window — the dwell rotation
+//    requires station_count_ > 1 — so the chip sat on AM forever and RDS went
+//    permanently deaf while the station list looked healthy.
+//  * With the window-end retune in place, `tuned_wwv_khz_` went stale instead:
+//    the next window wanted the same band the cache already claimed, skipped
+//    the retune, and spent three minutes sampling FM program audio. On the
+//    device that read as "music on 10 MHz" and a jamming theory.
+AT_TEST(app_listen_windows_own_the_real_tuner_and_give_it_back) {
   Sim sim;
   sim.true_utc_us = startUtcUs();
-  // One propagating band and one station, so neither recovery path can happen
-  // by accident: the scheduler will want the SAME band next window (which is
-  // what makes the equality test skip the retune), and with a single station
-  // there is no dwell rotation to re-tune the FM side behind our back.
+  // One propagating band and ONE station: no dwell rotation exists to paper
+  // over a missing retune, and the settled scheduler wants the same band every
+  // window — the exact condition under which the stale cache was permanent.
   sim.wwv.propagating_bands = {15000};
   FakeStation a{9110, 0x1001, true, 0};
   sim.rds.stations = {a};
@@ -725,44 +732,46 @@ AT_TEST(app_radio_mode_exit_retunes_from_wherever_the_operator_left_it) {
   const int32_t fm[] = {9110};
   app.setFmStations(fm, 1);
   app.begin();
+  AT_CHECK(sim.tuner.onFm(9110));   // acquiring = harvesting RDS
 
-  // Four hours, because the trap needs the scheduler to have SETTLED. While it
-  // is still hunting, every window opens on a different band and retunes on the
-  // way in, which hides the bug. Once 15 MHz has proved itself the sampler stops
-  // being retuned at all -- the wanted band equals the believed band, window
-  // after window -- and that is precisely when a stale belief becomes permanent.
+  // Let it find 15 MHz and settle into the hourly rhythm.
   sim.advance(4 * kHour, &app);
   AT_CHECK(app.arbiter().isSet());
-  const int32_t band_before = sim.wwv.tunedKhz();
-  AT_CHECK_EQ(band_before, 15000);
+  AT_CHECK_EQ(sim.wwv.tunedKhz(), 15000);
 
-  const int settled_tunes = sim.wwv.tune_count;
-  sim.advance(1 * kHour, &app);
-  AT_CHECK_EQ(sim.wwv.tune_count, settled_tunes);   // settled: no retunes at all
+  // Settled means: between windows the chip is on FM (or RDS starves), and
+  // each window REALLY retunes — the chip, not just the cache — despite asking
+  // for the very band it asked for last time.
+  AT_CHECK(sim.tuner.onFm(9110));
+  app.operatorListenNow();
+  sim.advance(30 * kS, &app);
+  AT_CHECK(app.directive().wwv_listening);
+  AT_CHECK(sim.tuner.onAm(15000));           // truth, not the cache
+  sim.advance(5 * kMin, &app);               // window closes (exit on fix)
+  AT_CHECK(!app.directive().wwv_listening);
+  AT_CHECK(sim.tuner.onFm(9110));            // ...and the dial came back
 
-  // The operator takes the dial and parks it on 40 m, which is what the
-  // firmware's selectBand() does to the chip underneath both adapters.
-  app.setRadioMode(true);
+  // RDS is therefore still alive hours later — the single-station deafness.
+  sim.advance(2 * kHour, &app);
+  AT_CHECK(app.displayState().sources & kSrcRds);
+
+  // The operator takes the dial and parks it on 40 m. selectBand() touches the
+  // chip through neither adapter, so both caches go stale — as on hardware.
+  app.setMode(OpMode::Radio);
   sim.advance(20 * kMin, &app);
-  sim.rds.tuneKhz(7200);
-  sim.wwv.tuneKhz(7200);
-  const int rds_tunes = sim.rds.tune_count;
-  const int wwv_tunes = sim.wwv.tune_count;
+  sim.operatorTune(7200, /*fm=*/false);
+  AT_CHECK_EQ(sim.rds.tunedKhz(), 9110);     // the cache's stale claim...
+  AT_CHECK(sim.tuner.onAm(7200));            // ...vs where the chip really is
 
-  // Handing the dial back must put the FM station back immediately -- not at
-  // the next dwell rotation, which with one station never comes.
-  app.setRadioMode(false);
-  app.loop();
-  AT_CHECK_EQ(sim.rds.tune_count, rds_tunes + 1);
-  AT_CHECK_EQ(sim.rds.tunedKhz(), 9110);
+  // Handing the dial back re-tunes the chip immediately — not at the next
+  // dwell rotation, which with one station never comes.
+  app.setMode(OpMode::Clock);
+  AT_CHECK(sim.tuner.onFm(9110));
 
-  // ...and the next listen window must retune WWV even though the band it
-  // wants is the very one it last asked for. That equality is exactly what made
-  // this invisible: same band, so "already there", so no retune -- and the
-  // window opens on 7200 kHz and hears nothing, forever.
-  sim.advance(90 * kMin, &app);
-  AT_CHECK(sim.wwv.tune_count > wwv_tunes);
-  AT_CHECK_EQ(sim.wwv.tunedKhz(), band_before);
+  // And the next window still finds its band for real.
+  app.operatorListenNow();
+  sim.advance(30 * kS, &app);
+  AT_CHECK(sim.tuner.onAm(15000));
 }
 
 // The §2 invariant must hold in operator mode too — it is the one rule that
@@ -780,7 +789,7 @@ AT_TEST(app_radio_mode_never_breaks_the_adc_rule) {
   app.begin();
 
   for (int i = 0; i < 12; ++i) {           // toggle across many listen windows
-    app.setRadioMode(i % 2 == 0);
+    app.setMode(i % 2 == 0 ? OpMode::Radio : OpMode::Clock);
     sim.advance(25 * kMin, &app);
   }
   AT_CHECK(!sim.adc_wifi_conflict);
@@ -843,11 +852,18 @@ AT_TEST(app_cw_mode_decodes_traffic_onto_the_screen) {
   sim.advance(10 * kMin, &app);
   AT_CHECK(app.arbiter().isSet());
 
-  app.setCwMode(true);
+  app.setMode(OpMode::Cw);
   app.loop();
   AT_CHECK(app.cwMode());
   AT_CHECK(sim.wwv.isRunning());     // the tap is live...
   AT_CHECK(!sim.wifi.isUp());        // ...so the radio is off. Non-negotiable.
+
+  // The shared detector was genuinely repointed — the Goertzel bin at the CW
+  // note, blocks short enough to resolve a 40 WPM dit — and the repointing
+  // never raced a running sampler.
+  AT_CHECK_EQ((double)sim.wwv.detector_tone_hz, 700.0);
+  AT_CHECK_EQ(sim.wwv.detector_block_us, 5000);
+  AT_CHECK_EQ(sim.wwv.rejected_detector_sets, 0);
 
   // "CQ DE W1AW" at 18 WPM, the speed W1AW sends bulletins at.
   CwKeyer k(&sim.wwv, sim.clock.mono_us, 18);
@@ -873,14 +889,19 @@ AT_TEST(app_cw_mode_decodes_traffic_onto_the_screen) {
   AT_CHECK_EQ(std::strcmp(app.cwText().text(), "CQ DE W1AW"), 0);
   AT_CHECK(app.cwStatus().wpm >= 15 && app.cwStatus().wpm <= 21);
 
-  // Leaving hands everything back: the dial is re-tuned, the tap released, and
-  // the access point comes up so the device is a clock again.
+  // Leaving hands everything back: the dial re-tuned exactly once, the tap
+  // released, the detector back on WWV's numbers, and the access point up so
+  // the device is a clock again.
   const int tunes = sim.rds.tune_count;
-  app.setCwMode(false);
+  app.setMode(OpMode::Clock);
   app.loop();
   AT_CHECK(!app.cwMode());
   AT_CHECK(!sim.wwv.isRunning());
   AT_CHECK_EQ(sim.rds.tune_count, tunes + 1);
+  AT_CHECK(sim.tuner.onFm(9110));
+  AT_CHECK_EQ((double)sim.wwv.detector_tone_hz, 1000.0);
+  AT_CHECK_EQ(sim.wwv.detector_block_us, 20000);
+  AT_CHECK_EQ(sim.wwv.rejected_detector_sets, 0);
   sim.advance(2 * kMin, &app);
   AT_CHECK(sim.wifi.isUp());
 }
@@ -901,10 +922,10 @@ AT_TEST(app_cw_mode_never_breaks_the_adc_rule) {
   app.begin();
 
   for (int i = 0; i < 8; ++i) {
-    app.setCwMode(i % 2 == 0);
+    app.setMode(i % 2 == 0 ? OpMode::Cw : OpMode::Clock);
     sim.advance(20 * kMin, &app);
   }
-  app.setCwMode(false);
+  app.setMode(OpMode::Clock);
   AT_CHECK(!sim.adc_wifi_conflict);
 }
 
@@ -926,7 +947,7 @@ AT_TEST(app_cw_traffic_never_disciplines_the_clock) {
   const uint32_t markers_before = app.wwvMarker().diag().markers;
   const int64_t err_before = sim.clockErrorUs(app);
 
-  app.setCwMode(true);
+  app.setMode(OpMode::Cw);
   app.loop();
   // 5 WPM: a dah is 720 ms, squarely inside the 700-900 ms marker gate.
   CwKeyer k(&sim.wwv, sim.clock.mono_us, 5);

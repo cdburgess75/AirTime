@@ -111,20 +111,13 @@ static const char* const kHfNames[] = {"Listen Now", "Serve Now", "Survey Dial"}
 // Clock or receiver. The clock is what this device IS, so it is what every
 // power-on comes up as; operator mode is a thing you ask for and it is not
 // remembered. While it is on, AirTime touches nothing — see
-// AirTimeApp::setRadioMode for why an hour of listening costs milliseconds.
+// AirTimeApp::setMode for why an hour of listening costs milliseconds.
 static const char* const kModeNames[] = {"Clock", "Radio", "CW Copy"};
 
-// What the CW detector listens for. 700 Hz because that is where most operators
-// park a CW note, and 5 ms blocks because a 40 WPM dit is only 30 ms long
-// (morse.h). At the tap's measured ~10 kHz that is 50 samples per block — a
-// 200 Hz bin, which is selectivity enough to reject band noise without being so
-// sharp that a slightly mistuned note falls out of it.
-static const airtime::real kCwToneHz = 700.0f;
-static const int64_t kCwBlockUs = 5000;
-// ...and back to what WWV needs. These are WwvSamplerConfig's own defaults,
-// repeated here because leaving CW has to restore them explicitly.
-static const airtime::real kWwvToneHz = 1000.0f;
-static const int64_t kWwvBlockUs = 20000;
+// (The CW/WWV detector parameters — 700 Hz in 5 ms blocks vs 1000 Hz in 20 ms —
+// live in AppConfig now: AirTimeApp::setMode repoints the sampler itself, in a
+// sequence the host tests exercise, so this file no longer has an ordering to
+// get right.)
 static int atModeOpt = 0;
 static int atHfOpt = 0;
 
@@ -391,7 +384,7 @@ void atSetNetIdx(int i) { if(i >= 0 && i < (int)kNetCount) atNetSel = i; }
 static void atEnterRadioMode()
 {
   atModeOpt = 1;
-  if(atApp != nullptr) atApp->setRadioMode(true);
+  if(atApp != nullptr) atApp->setMode(airtime::OpMode::Radio);
 
   // ssbLoaded is a cached claim about the chip, and AirTime has been calling
   // setFM/setAM behind its back all along, so the flag cannot be trusted.
@@ -419,47 +412,23 @@ int atCwLevelPct()
   int pct = (int)(100.0f * snr / 12.0f);
   return pct < 0 ? 0 : (pct > 100 ? 100 : pct);
 }
-// Point the sampler's Goertzel at a CW note or back at WWV's minute marker.
-//
-// Only legal while the sampler is stopped, which is why leaving CW mode comes
-// first below: setCwMode(false) makes the next applyDirective stop the tap, and
-// the reconfiguration has to follow that, not race it.
-static void atSetDetector(bool cw)
-{
-  atWwv.setDetector(cw ? kCwToneHz : kWwvToneHz, cw ? kCwBlockUs : kWwvBlockUs);
-}
-
 void atSetModeIdx(int i)
 {
   if(i < 0 || i >= atModeCount() || i == atModeOpt) return;
-  if(atApp == nullptr) { atModeOpt = i; return; }
+  atModeOpt = i;
+  if(atApp == nullptr) return;
 
-  const bool was_cw = (atModeOpt == 2);
-
-  // Leave CW first, whatever we are heading for. setCwMode(false) is what makes
-  // the next applyDirective release the audio tap, and setDetector() is only
-  // legal once the sampler has actually stopped — so the loop() between them is
-  // load-bearing, not tidiness.
-  if(was_cw && i != 2)
+  if(i == 0)
   {
-    atApp->setCwMode(false);
-    atApp->loop();
-    atSetDetector(false);
-  }
-
-  if(i != 1 && i != 2)
-  {
-    // Back to being a clock. Both operator flags have to clear: CW entry sets
-    // radio mode as well (it hands over the dial the same way), and leaving one
-    // without the other would strand the device owning nothing while claiming
-    // to be a clock.
-    atModeOpt = i;
-    atApp->setRadioMode(false);
+    // Back to being a clock. setMode(Clock) does the remembering-what-went-
+    // stale: it re-tunes the FM side and voids the WWV band cache, because the
+    // operator has been moving a dial AirTime cannot see.
+    atApp->setMode(airtime::OpMode::Clock);
     return;
   }
 
-  // Both remaining modes hand the dial to the operator, and that means the
-  // WHOLE stock sequence.
+  // Radio and CW both hand the dial to the operator, and that means the WHOLE
+  // stock sequence.
   //
   // useBand() alone is not enough and the failure is silent: for an SSB band it
   // calls rx.setSSB(), which does nothing useful unless the SSB patch has been
@@ -471,26 +440,17 @@ void atSetModeIdx(int i)
   // Entering CW from Clock is the same story with a different ending: AirTime
   // will have been parked on an FM broadcast station harvesting RDS, and
   // without this the operator would open CW copy pointed at music.
-  atEnterRadioMode();
+  //
+  // CW additionally takes the audio tap, which costs the access point — ADC2
+  // and the WiFi radio cannot both be live (PLAN.md §2) — so NTP stops
+  // answering until the operator leaves, and the screen says so. The tap level
+  // follows the DSP volume (Milestone 0) and nothing overrides it here: CW is
+  // tuned by ear, so the volume set to hear the note is the level the detector
+  // sees, and the decoder's own noise floor adapts to it.
+  atApp->setMode(i == 2 ? airtime::OpMode::Cw : airtime::OpMode::Radio);
+  unloadSSB();           // the cached patch state cannot be trusted; see above
   selectBand(bandIdx);   // loadSSB if needed -> useBand -> setBandwidth
   rx.setVolume(volume);
-  atModeOpt = i;
-
-  if(i == 2)
-  {
-    // CW additionally takes the audio tap, and that costs the access point:
-    // ADC2 and the WiFi radio cannot both be live (PLAN.md §2), so NTP stops
-    // answering until the operator leaves. The screen says so.
-    //
-    // The tap level follows the DSP volume (Milestone 0), and unlike a WWV
-    // window nothing overrides it here — CW is tuned by ear, so the volume the
-    // operator sets to hear the note is also the level the detector sees. The
-    // decoder tracks its own noise floor, so it adapts rather than needing a
-    // calibrated level the way the marker detector does.
-    atApp->loop();         // settle WiFi/sampler state before repointing
-    atSetDetector(true);
-    atApp->setCwMode(true);
-  }
 }
 
 // ── Tuning a net ────────────────────────────────────────────────────────────
@@ -513,35 +473,30 @@ static uint8_t atChipMode(airtime::NetMode m)
 // Which entry of bands[] should hold this dial frequency. -1 if none can, which
 // is a table error rather than an operator error.
 //
-// NARROWEST wins, and that is the whole point of the function. bands[] overlaps
-// heavily -- 7047 kHz sits inside "ALL" (150-30000), "41M" (7000-9000) and
-// "40M" (7000-7300) -- and first-match returns "ALL" for every net in the
-// table. That is not merely the wrong label: tuneToMemory() writes the mode
-// into the band it lands on, so selecting one CW net would leave the operator's
-// general-coverage band stuck in USB forever. The tightest band containing a
-// frequency is the one someone drew around it on purpose.
+// The CHOICE — narrowest span wins, or "ALL" (150-30000 kHz) swallows every net
+// in the directory and tuneToMemory() rewrites its mode — lives in
+// airtime/dial.h, host-tested against a copy of this very table. This function
+// only translates bands[] rows into spans, and mirrors isMemoryInBand()'s
+// FM-vs-not rule exactly so tuneToMemory() cannot refuse what the pick
+// promised.
 static int atBandForKhz(int32_t khz, uint8_t mode)
 {
-  const bool want_fm = (mode == FM);
-  int best = -1;
-  int32_t best_span = 0;
-
-  for(int i = 0; i < getTotalBands(); i++)
+  // bands[] is extern here with unknown extent, so the buffer is a constant:
+  // 32 clears the 28 shipped rows. A grown table clamps rather than overruns —
+  // and if that ever happens, the last bands become unreachable to nets, which
+  // the -1 path reports on screen instead of hiding.
+  constexpr int kMaxSpans = 32;
+  airtime::DialBandSpan spans[kMaxSpans];
+  int n = getTotalBands();
+  if(n > kMaxSpans) n = kMaxSpans;
+  for(int i = 0; i < n; i++)
   {
-    // isMemoryInBand() gates on bandMode, so match its rule exactly or
-    // tuneToMemory() will refuse what this function just promised.
-    const bool is_fm = (bands[i].bandType == FM_BAND_TYPE) || (bands[i].bandMode == FM);
-    if(is_fm != want_fm) continue;
-    if(khz < bands[i].minimumFreq || khz > bands[i].maximumFreq) continue;
-
-    const int32_t span = (int32_t)bands[i].maximumFreq - (int32_t)bands[i].minimumFreq;
-    // Ties go to a band already in the wanted mode, so a net does not disturb
-    // the operator's settings when an equally good band would not have to.
-    const bool better = (best < 0) || (span < best_span) ||
-                        (span == best_span && bands[i].bandMode == mode);
-    if(better) { best = i; best_span = span; }
+    spans[i].min_khz = bands[i].minimumFreq;
+    spans[i].max_khz = bands[i].maximumFreq;
+    spans[i].fm = (bands[i].bandType == FM_BAND_TYPE) || (bands[i].bandMode == FM);
+    spans[i].mode = bands[i].bandMode;
   }
-  return best;
+  return airtime::pickDialBand(spans, (size_t)n, khz, mode == FM, mode);
 }
 
 bool atTuneNet(int i)

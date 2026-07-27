@@ -72,6 +72,16 @@ class IWwvSampler {
   // Next Goertzel power estimate and the monotonic time of its block.
   // Non-blocking: returns false when nothing is ready.
   virtual bool nextPower(int64_t* mono_us, real* power) = 0;
+  // Repoint the DETECTOR — the Goertzel bin and the block length — not the
+  // receiver. WWV wants 1000 Hz in 20 ms blocks; CW copy wants a ~700 Hz beat
+  // note in 5 ms ones (a 40 WPM dit is 30 ms long). Only legal while stopped:
+  // implementations may reject a call mid-run, which is why AirTimeApp
+  // sequences stop() before this in a mode change. Default accepts and ignores,
+  // for adapters with a fixed detector.
+  virtual bool setDetector(real tone_hz, int64_t block_us) {
+    (void)tone_hz; (void)block_us;
+    return true;
+  }
 };
 
 // --- Radio link -------------------------------------------------------------
