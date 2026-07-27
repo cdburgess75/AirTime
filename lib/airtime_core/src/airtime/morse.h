@@ -134,4 +134,34 @@ class MorseDecoder {
 // significant elements (1 = dah, 0 = dit). Returns 0 for no such character.
 char morseLookup(uint8_t bits, int count);
 
+// What the operator reads while it is happening.
+//
+// Deliberately not a scrollback. A pocket radio's panel is two short lines and
+// the person holding it is reading live traffic, not reviewing a log; older
+// text simply leaves. Keeping a transcript would mean deciding where to put it,
+// how much to keep, and what to do when it fills — all questions worth
+// answering for a logging feature and none of them worth answering for a
+// display.
+class MorseTextBuffer {
+ public:
+  static constexpr std::size_t kMax = 96;
+
+  // Runs of spaces are collapsed and a leading space is dropped. The decoder
+  // emits ' ' per word gap, and a pause in the traffic — which is most of a
+  // code practice session — would otherwise push the last real word off the
+  // left of the screen with nothing to show for it.
+  void push(char c);
+  void clear();
+
+  const char* text() const { return buf_; }
+  std::size_t size() const { return len_; }
+
+  // The last `n` characters, for a line of that width.
+  const char* tail(std::size_t n) const;
+
+ private:
+  char buf_[kMax + 1] = {};
+  std::size_t len_ = 0;
+};
+
 }  // namespace airtime

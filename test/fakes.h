@@ -169,6 +169,16 @@ class FakeWwvSampler : public IWwvSampler {
 
   int32_t tunedKhz() const { return tuned_; }
 
+  // Inject a block directly, bypassing the WWV marker generator above.
+  //
+  // pump() synthesises one thing — a station transmitting a minute marker on a
+  // propagating band — which is the right model for the clock and useless for
+  // CW, where the tone is keyed by a person and carries text. Rather than teach
+  // the marker generator Morse, let a test key the queue itself.
+  void pushPower(int64_t mono_us, real power) {
+    queue_.push_back({mono_us, power});
+  }
+
  private:
   bool propagates() const {
     for (int32_t b : propagating_bands) {

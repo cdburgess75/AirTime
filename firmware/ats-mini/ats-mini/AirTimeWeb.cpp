@@ -220,7 +220,8 @@ static void atHandleRoot()
   // ── What the radio is physically doing ───────────────────────────────────
   atSend("<h2>Receiver</h2><table>");
   atKv("dial", s.tuned);
-  const char *ph = app->radioMode()   ? "operator has the dial"
+  const char *ph = app->cwMode()      ? "CW copy - NTP is off the air"
+                 : app->radioMode()   ? "operator has the dial"
                  : app->surveying()   ? "surveying the FM band"
                  : st.phase == airtime::Phase::Acquiring ? "acquiring"
                  : st.phase == airtime::Phase::Listening ? "listening for WWV"

@@ -142,7 +142,69 @@ void AirTimeApp::setRadioMode(bool on) {
   }
 }
 
+void AirTimeApp::setCwMode(bool on) {
+  if (on == cw_mode_) return;
+  cw_mode_ = on;
+  cw_level_ = 0.0f;
+
+  if (on) {
+    // Start from silence. The decoder tracks a noise floor and estimates the
+    // sender's speed from the traffic, and both are about the band we are
+    // about to listen to, not the one we just left.
+    cw_.reset();
+    cw_text_.clear();
+    return;
+  }
+
+  // Leaving: emit whatever character was half-assembled, so the last letter of
+  // a callsign is not silently eaten by the mode change.
+  char c = 0;
+  if (cw_.flush(&c)) cw_text_.push(c);
+
+  // Same reasoning as leaving radio mode — the dial was the operator's and
+  // every cached belief about it is stale. See setRadioMode.
+  tuned_wwv_khz_ = 0;
+  if (station_count_ > 0) {
+    deps_.rds->tuneKhz(stations_[station_idx_]);
+    fm_dwell_start_ = deps_.clock->nowUs();
+  }
+}
+
+real AirTimeApp::cwSnr() const {
+  const real floor = cw_.noiseFloor();
+  if (floor <= 0.0f || cw_level_ <= 0.0f) return 0.0f;
+  return cw_level_ / floor;
+}
+
+void AirTimeApp::pollCw(int64_t) {
+  int64_t t = 0;
+  real p = 0.0f;
+  char c = 0;
+  while (deps_.wwv->nextPower(&t, &p)) {
+    cw_level_ = p;
+    if (cw_.process(t, p, &c)) cw_text_.push(c);
+  }
+}
+
 Directive AirTimeApp::effectiveDirective(Directive d) const {
+  // CW first: it is the stricter of the two operator modes. Same audio tap as
+  // WWV, therefore the same silicon rule — WiFi OFF or ADC2 reads garbage
+  // (PLAN.md §2). The access point goes down and NTP stops answering for as
+  // long as the operator stays here, which is why this mode is never entered
+  // by the scheduler and only ever by a person.
+  //
+  // wwv_listening stays FALSE: the sampler runs, but these blocks are 5 ms of
+  // a ~700 Hz beat note, not 20 ms of a 1000 Hz minute marker. Feeding them to
+  // the marker detector would hand the arbiter phase measurements derived from
+  // somebody's callsign.
+  if (cw_mode_) {
+    d.wwv_listening = false;
+    d.wwv_band_khz = 0;
+    d.rds_scanning = false;
+    d.wifi_up = false;
+    return d;
+  }
+
   // Operator mode: the dial belongs to the human. Nothing here may retune, so
   // the scheduler's listening plans are simply overruled — and with no ADC
   // sampling there is no reason for WiFi to drop, so NTP serves continuously
@@ -178,10 +240,16 @@ void AirTimeApp::applyDirective(const Directive& d) {
   // THE ordering rule (PLAN.md §2): ADC2 and WiFi can never be live together.
   // Always release before acquiring — stop the sampler and drop WiFi first, then
   // bring up whatever the new directive wants.
-  if (!d.wwv_listening && deps_.wwv->isRunning()) deps_.wwv->stop();
+  const bool want_audio = d.wwv_listening || cw_mode_;
+
+  if (!want_audio && deps_.wwv->isRunning()) deps_.wwv->stop();
   if (!d.wifi_up && deps_.wifi->isUp()) deps_.wifi->tearDown();
 
   if (d.wifi_up && !deps_.wifi->isUp()) deps_.wifi->bringUp();
+
+  // CW takes the audio tap without touching the dial: the operator tuned it,
+  // by ear, and is probably still nudging it.
+  if (cw_mode_ && !deps_.wwv->isRunning()) deps_.wwv->start();
 
   if (d.wwv_listening) {
     if (d.wwv_band_khz != tuned_wwv_khz_) {
@@ -202,6 +270,12 @@ void AirTimeApp::loop() {
   // In operator mode AirTime observes nothing and steers nothing. Reading RDS
   // from whatever the operator happens to tune would let one unvetted station
   // steer the clock, which is exactly the failure the voter exists to prevent.
+  if (cw_mode_) {
+    pollCw(now);
+    persist(now, /*force=*/false);
+    return;
+  }
+
   if (radio_mode_) {
     persist(now, /*force=*/false);
     return;

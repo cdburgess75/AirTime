@@ -31,8 +31,118 @@
 // AirTimeScreen and airtimeScreen() live in Menu.h — the web status page
 // renders from the same struct, so the panel and the phone cannot disagree.
 
+// ── CW copy ─────────────────────────────────────────────────────────────────
+//
+// A different screen for a different job. The clock face answers "what time is
+// it"; this one answers "what is he sending", and the two share almost nothing
+// — so rather than bend the clock layout around a text pane, CW gets the panel.
+//
+// Three things, in the order they matter:
+//
+//   the text        as much as fits, newest at the bottom right, because the
+//                   operator is reading the end of it
+//   the tuning bar  the reason this is on screen at all. CW is tuned BY EAR to
+//                   a note, and the decoder only hears one 200 Hz-wide bin —
+//                   so "am I in the bin" is the question the panel must answer
+//                   while the operator's hand is on the knob.
+//   speed           measured, not set. Confirms it has locked onto the sender.
+//
+// The clock keeps running underneath and is shown small: it is still a clock,
+// it has simply stopped SERVING (WiFi is down — the audio tap and the WiFi
+// radio cannot both be live, PLAN.md §2). That trade is stated on screen
+// rather than left for the operator to discover from a laptop that stopped
+// syncing.
+static void drawLayoutAirTimeCw(void)
+{
+  AirTimeScreen s;
+  airtimeScreen(&s);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString("CW COPY", 8, 3, 2);
+
+  // The clock, small and out of the way, still honest about sync.
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(s.synced ? TH.text_muted : TH.text_warn);
+  spr.drawString(s.valid ? s.local : "--:--:--", 312, 3, 2);
+
+  // ── Tuning ────────────────────────────────────────────────────────────────
+  // A bar rather than a number: tuning is a peak-seeking action and a moving
+  // bar is read with peripheral vision while the eyes are on the dial.
+  const int pct = atCwLevelPct();
+  const int w = 180;
+  const int bx = 8, by = 22;
+  spr.drawRect(bx, by, w, 10, TH.menu_border);
+  if(pct > 0)
+    spr.fillRect(bx + 1, by + 1, (w - 2) * pct / 100, 8,
+                 atCwKeyDown() ? TH.smeter_bar : TH.text_muted);
+  // The threshold the decoder actually uses: 4x noise out of a 12x scale. Left
+  // of this mark nothing will be copied, however steady the bar looks.
+  spr.drawFastVLine(bx + (w - 2) / 3, by - 2, 14, TH.text_warn);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString("TUNE FOR PEAK", bx + w + 8, by - 2, 2);
+
+  const int wpm = atCwWpm();
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(TH.text);
+  if(wpm > 0)
+  {
+    char b[16];
+    snprintf(b, sizeof(b), "%d WPM", wpm);
+    spr.drawString(b, 312, by + 14, 2);
+  }
+  else
+  {
+    spr.setTextColor(TH.text_muted);
+    spr.drawString("listening", 312, by + 14, 2);
+  }
+
+  // ── The copy ──────────────────────────────────────────────────────────────
+  // Font 4 (26 px) is big enough to read at arm's length on a bench and fits
+  // about 17 characters across 320 px. Three lines of the tail, oldest at the
+  // top, so the newest text is always in the same place on the screen.
+  const char *text = atCwText();
+  const size_t len = strlen(text);
+  const size_t kCols = 17, kRows = 3;
+  const size_t shown = len > kCols * kRows ? kCols * kRows : len;
+  const char *from = text + (len - shown);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text);
+  char line[kCols + 1];
+  for(size_t r = 0 ; r < kRows ; r++)
+  {
+    const size_t off = r * kCols;
+    if(off >= shown) break;
+    size_t n = shown - off;
+    if(n > kCols) n = kCols;
+    memcpy(line, from + off, n);
+    line[n] = 0;
+    spr.drawString(line, 8, 52 + (int)r * 28, 4);
+  }
+
+  if(shown == 0)
+  {
+    spr.setTextColor(TH.text_muted);
+    spr.drawString("Tune a CW signal for the peak above.", 8, 52, 2);
+    spr.drawString("Copy appears here.", 8, 70, 2);
+  }
+
+  // The cost of being here, stated plainly. NTP is not answering.
+  spr.setTextDatum(BL_DATUM);
+  spr.setTextColor(TH.text_warn);
+  spr.drawString("NTP OFF - the tap and WiFi cannot share the chip", 8, 168, 2);
+
+  if(currentCmd != CMD_NONE)
+    drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+}
+
 void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
 {
+  if(airtimeCwMode()) { drawLayoutAirTimeCw(); return; }
+
   // statusLine1/2 are the caller's override (menus, BLE, EiBi). When present
   // they win: a transient message the operator asked for should not be buried
   // under the clock.

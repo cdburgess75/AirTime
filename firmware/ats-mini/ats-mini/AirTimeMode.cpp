@@ -112,7 +112,19 @@ static const char* const kHfNames[] = {"Listen Now", "Serve Now", "Survey Dial"}
 // power-on comes up as; operator mode is a thing you ask for and it is not
 // remembered. While it is on, AirTime touches nothing — see
 // AirTimeApp::setRadioMode for why an hour of listening costs milliseconds.
-static const char* const kModeNames[] = {"Clock", "Radio"};
+static const char* const kModeNames[] = {"Clock", "Radio", "CW Copy"};
+
+// What the CW detector listens for. 700 Hz because that is where most operators
+// park a CW note, and 5 ms blocks because a 40 WPM dit is only 30 ms long
+// (morse.h). At the tap's measured ~10 kHz that is 50 samples per block — a
+// 200 Hz bin, which is selectivity enough to reject band noise without being so
+// sharp that a slightly mistuned note falls out of it.
+static const airtime::real kCwToneHz = 700.0f;
+static const int64_t kCwBlockUs = 5000;
+// ...and back to what WWV needs. These are WwvSamplerConfig's own defaults,
+// repeated here because leaving CW has to restore them explicitly.
+static const airtime::real kWwvToneHz = 1000.0f;
+static const int64_t kWwvBlockUs = 20000;
 static int atModeOpt = 0;
 static int atHfOpt = 0;
 
@@ -391,19 +403,63 @@ int atModeCount() { return (int)(sizeof(kModeNames) / sizeof(kModeNames[0])); }
 const char *atModeName(int i) { return (i >= 0 && i < atModeCount()) ? kModeNames[i] : "?"; }
 int atModeIdx() { return atModeOpt; }
 bool airtimeRadioMode() { return atApp != nullptr && atApp->radioMode(); }
+bool airtimeCwMode()    { return atApp != nullptr && atApp->cwMode(); }
+
+// What CW copy has heard, and how well it is hearing it.
+const char *atCwText()  { return atApp != nullptr ? atApp->cwText().text() : ""; }
+int atCwWpm()           { return atApp != nullptr ? atApp->cwStatus().wpm : 0; }
+bool atCwKeyDown()      { return atApp != nullptr && atApp->cwStatus().key_down; }
+// Tone against the noise floor, as a percentage of "comfortably copyable".
+// The decoder calls the key down at 4x and up again at 2x, so 4x is the number
+// that matters; 12x is a strong signal and the top of the bar.
+int atCwLevelPct()
+{
+  if(atApp == nullptr) return 0;
+  const float snr = (float)atApp->cwSnr();
+  int pct = (int)(100.0f * snr / 12.0f);
+  return pct < 0 ? 0 : (pct > 100 ? 100 : pct);
+}
+// Point the sampler's Goertzel at a CW note or back at WWV's minute marker.
+//
+// Only legal while the sampler is stopped, which is why leaving CW mode comes
+// first below: setCwMode(false) makes the next applyDirective stop the tap, and
+// the reconfiguration has to follow that, not race it.
+static void atSetDetector(bool cw)
+{
+  atWwv.setDetector(cw ? kCwToneHz : kWwvToneHz, cw ? kCwBlockUs : kWwvBlockUs);
+}
+
 void atSetModeIdx(int i)
 {
   if(i < 0 || i >= atModeCount() || i == atModeOpt) return;
   if(atApp == nullptr) { atModeOpt = i; return; }
 
-  if(i != 1)
+  const bool was_cw = (atModeOpt == 2);
+
+  // Leave CW first, whatever we are heading for. setCwMode(false) is what makes
+  // the next applyDirective release the audio tap, and setDetector() is only
+  // legal once the sampler has actually stopped — so the loop() between them is
+  // load-bearing, not tidiness.
+  if(was_cw && i != 2)
   {
+    atApp->setCwMode(false);
+    atApp->loop();
+    atSetDetector(false);
+  }
+
+  if(i != 1 && i != 2)
+  {
+    // Back to being a clock. Both operator flags have to clear: CW entry sets
+    // radio mode as well (it hands over the dial the same way), and leaving one
+    // without the other would strand the device owning nothing while claiming
+    // to be a clock.
     atModeOpt = i;
     atApp->setRadioMode(false);
     return;
   }
 
-  // Hand the dial back properly, and that means the WHOLE stock sequence.
+  // Both remaining modes hand the dial to the operator, and that means the
+  // WHOLE stock sequence.
   //
   // useBand() alone is not enough and the failure is silent: for an SSB band it
   // calls rx.setSSB(), which does nothing useful unless the SSB patch has been
@@ -411,9 +467,30 @@ void atSetModeIdx(int i)
   // "41M USB 7200.000" while the speaker kept playing the FM station AirTime
   // had been harvesting. The readout was honest about intent and wrong about
   // reality, which is the exact failure this screen exists to prevent.
+  //
+  // Entering CW from Clock is the same story with a different ending: AirTime
+  // will have been parked on an FM broadcast station harvesting RDS, and
+  // without this the operator would open CW copy pointed at music.
   atEnterRadioMode();
   selectBand(bandIdx);   // loadSSB if needed -> useBand -> setBandwidth
   rx.setVolume(volume);
+  atModeOpt = i;
+
+  if(i == 2)
+  {
+    // CW additionally takes the audio tap, and that costs the access point:
+    // ADC2 and the WiFi radio cannot both be live (PLAN.md §2), so NTP stops
+    // answering until the operator leaves. The screen says so.
+    //
+    // The tap level follows the DSP volume (Milestone 0), and unlike a WWV
+    // window nothing overrides it here — CW is tuned by ear, so the volume the
+    // operator sets to hear the note is also the level the detector sees. The
+    // decoder tracks its own noise floor, so it adapts rather than needing a
+    // calibrated level the way the marker detector does.
+    atApp->loop();         // settle WiFi/sampler state before repointing
+    atSetDetector(true);
+    atApp->setCwMode(true);
+  }
 }
 
 // ── Tuning a net ────────────────────────────────────────────────────────────

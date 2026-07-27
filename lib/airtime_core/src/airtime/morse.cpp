@@ -206,4 +206,30 @@ MorseStatus MorseDecoder::status() const {
   return s;
 }
 
+void MorseTextBuffer::clear() {
+  buf_[0] = '\0';
+  len_ = 0;
+}
+
+void MorseTextBuffer::push(char c) {
+  if (c == '\0') return;
+  // A word gap at the very start, or a second one in a row, carries no
+  // information and costs a column of a very small screen.
+  if (c == ' ' && (len_ == 0 || buf_[len_ - 1] == ' ')) return;
+
+  if (len_ == kMax) {
+    // Full: the oldest character leaves. kMax is 96 and characters arrive at
+    // a few per second even at 40 WPM, so shifting beats the bookkeeping a
+    // ring buffer would need to hand out a contiguous string.
+    for (std::size_t i = 1; i < kMax; ++i) buf_[i - 1] = buf_[i];
+    len_ = kMax - 1;
+  }
+  buf_[len_++] = c;
+  buf_[len_] = '\0';
+}
+
+const char* MorseTextBuffer::tail(std::size_t n) const {
+  return (len_ > n) ? (buf_ + (len_ - n)) : buf_;
+}
+
 }  // namespace airtime

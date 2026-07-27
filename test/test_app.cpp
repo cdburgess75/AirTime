@@ -5,6 +5,7 @@
 // Everything here runs on the host; only the adapters remain to be written.
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "fakes.h"
@@ -783,4 +784,157 @@ AT_TEST(app_radio_mode_never_breaks_the_adc_rule) {
     sim.advance(25 * kMin, &app);
   }
   AT_CHECK(!sim.adc_wifi_conflict);
+}
+
+// ── CW decode ───────────────────────────────────────────────────────────────
+//
+// End to end: a real keying pattern, through the sampler seam, through the app,
+// onto the buffer a screen reads. The decoder itself is covered in test_morse;
+// what this pins down is the WIRING — that the app puts the sampler in the
+// right state, that the blocks reach the decoder rather than the marker
+// detector, and that the §2 rule holds in a mode where the audio tap is live
+// for as long as the operator wants it.
+namespace {
+
+// Key a message into a fake sampler's queue, exactly as the ESP32 task would:
+// 5 ms blocks of tone power at the levels Milestone 0 measured on the tap.
+class CwKeyer {
+ public:
+  CwKeyer(FakeWwvSampler* s, int64_t start_us, int wpm)
+      : s_(s), now_(start_us), unit_(1200000 / wpm) {}
+
+  void mark(int64_t us) { blocks(us, 1.9e-3f); }
+  void space(int64_t us) { blocks(us, 7.7e-5f); }
+
+  // "CQ DE W1AW" style, using the standard element notation per letter.
+  void letter(const char* elements) {
+    for (const char* p = elements; *p; ++p) {
+      mark(*p == '-' ? unit_ * 3 : unit_);
+      if (p[1]) space(unit_);
+    }
+  }
+  void letterGap() { space(unit_ * 3); }
+  void wordGap() { space(unit_ * 7); }
+  int64_t now() const { return now_; }
+
+ private:
+  void blocks(int64_t dur_us, real power) {
+    for (int64_t t = 0; t < dur_us; t += 5000) {
+      s_->pushPower(now_, power);
+      now_ += 5000;
+    }
+  }
+  FakeWwvSampler* s_;
+  int64_t now_;
+  int64_t unit_;
+};
+
+}  // namespace
+
+AT_TEST(app_cw_mode_decodes_traffic_onto_the_screen) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{9110, 0x1001, true, 0};
+  sim.rds.stations = {a};
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+  sim.advance(10 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+
+  app.setCwMode(true);
+  app.loop();
+  AT_CHECK(app.cwMode());
+  AT_CHECK(sim.wwv.isRunning());     // the tap is live...
+  AT_CHECK(!sim.wifi.isUp());        // ...so the radio is off. Non-negotiable.
+
+  // "CQ DE W1AW" at 18 WPM, the speed W1AW sends bulletins at.
+  CwKeyer k(&sim.wwv, sim.clock.mono_us, 18);
+  struct { const char* ch; } msg[] = {
+      {"-.-."}, {"--.-"}, {nullptr},          // CQ
+      {"-.."},  {"."},    {nullptr},          // DE
+      {".--"},  {".----"},{".-"}, {".--"},    // W1AW
+  };
+  for (std::size_t i = 0; i < sizeof(msg) / sizeof(msg[0]); ++i) {
+    if (msg[i].ch == nullptr) { k.wordGap(); continue; }
+    k.letter(msg[i].ch);
+    if (i + 1 < sizeof(msg) / sizeof(msg[0]) && msg[i + 1].ch != nullptr)
+      k.letterGap();
+  }
+  // The last letter needs more than a letter gap to come out. A character is
+  // only known to be finished when the NEXT one starts, or when the sender
+  // clearly stops (MorseConfig::idle_flush_us, 3 s) -- so live copy always
+  // trails the air by one character, and 600 ms of silence would leave the
+  // final W of W1AW still buffered. That is the decoder being right, not slow.
+  k.space(3500000);
+  app.loop();
+
+  AT_CHECK_EQ(std::strcmp(app.cwText().text(), "CQ DE W1AW"), 0);
+  AT_CHECK(app.cwStatus().wpm >= 15 && app.cwStatus().wpm <= 21);
+
+  // Leaving hands everything back: the dial is re-tuned, the tap released, and
+  // the access point comes up so the device is a clock again.
+  const int tunes = sim.rds.tune_count;
+  app.setCwMode(false);
+  app.loop();
+  AT_CHECK(!app.cwMode());
+  AT_CHECK(!sim.wwv.isRunning());
+  AT_CHECK_EQ(sim.rds.tune_count, tunes + 1);
+  sim.advance(2 * kMin, &app);
+  AT_CHECK(sim.wifi.isUp());
+}
+
+// The §2 invariant is what makes this mode dangerous to get wrong: it holds the
+// audio tap open indefinitely, at the operator's pleasure, rather than for a
+// scheduled three minutes. Sim::advance asserts wifi-and-ADC are never both
+// live, so an hour of toggling is a real test of it.
+AT_TEST(app_cw_mode_never_breaks_the_adc_rule) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  FakeStation a{9110, 0x1001, true, 0};
+  sim.rds.stations = {a};
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  for (int i = 0; i < 8; ++i) {
+    app.setCwMode(i % 2 == 0);
+    sim.advance(20 * kMin, &app);
+  }
+  app.setCwMode(false);
+  AT_CHECK(!sim.adc_wifi_conflict);
+}
+
+// CW blocks must never reach the marker detector. They are 5 ms of a beat note
+// keyed by a human; the detector gates 700-900 ms bursts and would happily
+// classify a dah at 12 WPM as a minute marker, handing the arbiter a phase
+// measurement derived from somebody's callsign.
+AT_TEST(app_cw_traffic_never_disciplines_the_clock) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{9110, 0x1001, true, 0};
+  sim.rds.stations = {a};
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+  sim.advance(10 * kMin, &app);
+
+  const uint32_t markers_before = app.wwvMarker().diag().markers;
+  const int64_t err_before = sim.clockErrorUs(app);
+
+  app.setCwMode(true);
+  app.loop();
+  // 5 WPM: a dah is 720 ms, squarely inside the 700-900 ms marker gate.
+  CwKeyer k(&sim.wwv, sim.clock.mono_us, 5);
+  for (int i = 0; i < 6; ++i) { k.letter("-"); k.letterGap(); }
+  k.space(600000);
+  app.loop();
+
+  AT_CHECK_EQ(app.wwvMarker().diag().markers, markers_before);
+  AT_CHECK(iabs(sim.clockErrorUs(app) - err_before) < 1000);
+  AT_CHECK(app.cwText().size() > 0);   // ...but it WAS decoded
 }

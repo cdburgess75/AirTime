@@ -76,6 +76,19 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   bool isRunning() const override;
   bool nextPower(int64_t* mono_us, airtime::real* power) override;
 
+  // Repoint the DETECTOR — the Goertzel bin and the block length. Not the
+  // receiver: tuneKhz() does that, and this deliberately does not touch it.
+  //
+  // WWV wants 1000 Hz in 20 ms blocks; CW wants a ~700 Hz beat note in 5 ms
+  // ones, because a 40 WPM dit is 30 ms long and 20 ms blocks cannot resolve
+  // it (morse.h). The task re-reads this config every time it re-arms, which
+  // happens on every start(), so a change made while stopped is picked up with
+  // no task restart and no window where cfg_ is read from two cores at once.
+  //
+  // Returns false if called while running, which would be exactly that race.
+  bool setDetector(airtime::real tone_hz, int64_t block_us);
+  airtime::real toneHz() const { return cfg_.tone_hz; }
+
   // --- Diagnostics (not part of the interface) -----------------------------
   // Published by the sampler task for observation only; never used for control,
   // so a torn read across cores is harmless.

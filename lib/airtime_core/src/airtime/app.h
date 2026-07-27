@@ -24,6 +24,7 @@
 #include "scheduler.h"
 #include "sntp.h"
 #include "learned_state.h"
+#include "morse.h"
 #include "station_bias.h"
 #include "station_vote.h"
 #include "types.h"
@@ -192,6 +193,39 @@ class AirTimeApp {
   void setRadioMode(bool on);
   bool radioMode() const { return radio_mode_; }
 
+  // ── CW decode ─────────────────────────────────────────────────────────────
+  //
+  // The third mode, and the only one in which this device stops being a clock.
+  //
+  // CW comes off the SAME audio tap WWV does, so it inherits the SAME rule:
+  // ADC2 is unreadable while the WiFi radio is powered (PLAN.md §2). Decoding
+  // therefore means the access point is DOWN and NTP is not answering, for as
+  // long as the operator stays here. That is not a limitation to be worked
+  // around — it is silicon — so it is made explicit instead: an operator asks
+  // for it, the screen says the clock is off the air, and leaving restores
+  // service.
+  //
+  // The clock itself keeps running on its learned drift throughout and remains
+  // as good as coasting makes it; what stops is SERVING, not timekeeping.
+  //
+  // The dial belongs to the operator here exactly as in radio mode — nothing
+  // may retune underneath someone hunting for a signal by ear.
+  void setCwMode(bool on);
+  bool cwMode() const { return cw_mode_; }
+
+  // What has been decoded, oldest first, as a NUL-terminated string.
+  const MorseTextBuffer& cwText() const { return cw_text_; }
+  MorseStatus cwStatus() const { return cw_.status(); }
+  // Tone power in the most recent block against the decoder's noise floor —
+  // the number an operator tunes for a peak on. 0 when nothing is arriving.
+  real cwLevel() const { return cw_level_; }
+  // Tone power against the decoder's own tracked noise floor. This is the
+  // number an operator tunes for a peak on, and it is more use than the raw
+  // power because it is already scaled by how noisy the band is. The decoder
+  // calls the key down above 4x, so anything holding above that is copy.
+  real cwSnr() const;
+  void cwClear() { cw_text_.clear(); }
+
   void startSurvey();
   bool surveying() const { return survey_.phase() != SurveyPhase::Idle &&
                                   survey_.phase() != SurveyPhase::Done; }
@@ -233,6 +267,7 @@ class AirTimeApp {
   void pollSurvey(int64_t now);
   void adoptSurveyResult();
   void pollWwv(int64_t now);
+  void pollCw(int64_t now);
   void submitRdsVote(int64_t now);
   void persist(int64_t now, bool force);
   void noteAccepted(Source s, int64_t now);
@@ -277,6 +312,10 @@ class AirTimeApp {
   int64_t last_persist_ = 0;
 
   bool radio_mode_ = false;
+  bool cw_mode_ = false;
+  MorseDecoder cw_;
+  MorseTextBuffer cw_text_;
+  real cw_level_ = 0.0f;
   bool ever_synced_ = false;
   int64_t last_sync_mono_ = 0;
   int64_t last_sync_utc_ = 0;

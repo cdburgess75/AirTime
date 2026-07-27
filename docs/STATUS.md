@@ -164,9 +164,6 @@ evening of WSJT-X decodes into the one number this milestone turns on.
 - [ ] **Time-of-day WWV band choice.** The band list {15, 10, 5} MHz is tuned for
       daytime propagation. A night cold-start begins on a band that is dead after
       dark and has to fail its way down. The clock knows the hour; it should use it.
-- [ ] **CW decoder wiring.** The core is built and host-tested at 7–35 WPM but is
-      reachable from nothing. It wants ~5 ms sampler blocks (a 40 WPM dit is
-      30 ms) and it needs the tuner, so it belongs behind operator mode.
 - [ ] **Web config page** — time zone, nets, stations — so a field change does not
       mean scrolling an encoder. The status page is the read half of this.
 - [ ] **Status page polish.** Functional, not yet good-looking.
@@ -538,7 +535,7 @@ Each item below is either host-tested or verified in the linked binary.
 | **Daylight theme** | Inverted for direct sun. Dark red and dark green accents — the bright ones that read well on black vanish on white. |
 | **AirTime menu** | Time Zone, WWV Band and the §5 operator actions, which had been implemented and tested since Milestone 4 and reachable from nothing. Choices persist in AirTime's own NVS namespace, so the build stays additive to upstream. |
 | **Net directory** | "Is it on NOW", answerable only by a radio that knows UTC. Shown solely while synced — a schedule read off a wrong clock looks right, which is worse than showing nothing. |
-| **CW decoder** | Core built and host-tested at 7–35 WPM. Not yet wired: it wants ~5 ms sampler blocks (a 40 WPM dit is 30 ms) and it needs the tuner, so it belongs behind an operator mode. |
+| **CW decoder** | Core host-tested at 7–35 WPM, and **wired** (2026-07-27): Mode → CW Copy hands over the dial, repoints the sampler's Goertzel to 700 Hz in 5 ms blocks, and turns the panel into a text terminal with a tuning bar. Costs the access point — the audio tap and the WiFi radio cannot share the chip — which the screen states rather than leaving to be discovered. |
 | **Release image** | `tools/release.sh` merges bootloader + partitions + application into one file at offset 0. Version on the About screen. |
 | **Client sync** | `tools/airtime-sync.sh`, including an install-once agent that tracks the radio when present and does nothing when absent. |
 

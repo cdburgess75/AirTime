@@ -53,6 +53,15 @@ void Esp32WwvSampler::end()
   begun_ = false;
 }
 
+bool Esp32WwvSampler::setDetector(real tone_hz, int64_t block_us)
+{
+  if(running_) return false;
+  if(tone_hz <= 0.0f || block_us <= 0) return false;
+  cfg_.tone_hz = tone_hz;
+  cfg_.block_us = block_us;
+  return true;
+}
+
 void Esp32WwvSampler::tuneKhz(int32_t khz)
 {
   tuned_khz_ = khz;
@@ -117,6 +126,9 @@ void Esp32WwvSampler::run()
   std::size_t block_n = 0;
   int64_t block_start_us = 0;
   std::size_t in_block = 0;
+  // Blocks per yield, recomputed on re-arm from whatever block length is in
+  // force. See the vTaskDelay below for why this is a cadence and not a count.
+  int yield_every = 1, since_yield = 0;
 
   while(!quit_)
   {
@@ -144,6 +156,9 @@ void Esp32WwvSampler::run()
       block_n = (std::size_t)((double)cfg_.block_us * (double)fs / 1e6);
       if(block_n < 16) block_n = 16;
       goertzel = Goertzel(fs, cfg_.tone_hz, block_n);
+      yield_every = (int)((20000 + cfg_.block_us - 1) / cfg_.block_us);
+      if(yield_every < 1) yield_every = 1;
+      since_yield = 0;
       in_block = 0;
       armed = true;
     }
@@ -173,13 +188,24 @@ void Esp32WwvSampler::run()
       blocks_ = blocks;
       dropped_ = dropped;
 
-      // One tick of air between blocks, or the idle task on this core starves
-      // and the task watchdog reboots the chip (observed on first boot: abort
-      // ~16 s in, "IDLE0 ... CPU 0: airtime_wwv"). The pause sits BETWEEN
-      // blocks, so within-block sample spacing — what the Goertzel bin and the
-      // measured rate describe — is untouched, and marker durations come from
-      // block timestamps, which keep counting through the gap.
-      vTaskDelay(1);
+      // One tick of air, or the idle task on this core starves and the task
+      // watchdog reboots the chip (observed on first boot: abort ~16 s in,
+      // "IDLE0 ... CPU 0: airtime_wwv"). The pause sits BETWEEN blocks, so
+      // within-block sample spacing — what the Goertzel bin and the measured
+      // rate describe — is untouched, and durations come from block timestamps,
+      // which keep counting through the gap.
+      //
+      // Yield on a fixed CADENCE rather than every block. A tick is 1 ms, which
+      // is 5% of a 20 ms WWV block and was fine — but 20% of a 5 ms CW block,
+      // and that fifth of the air is not merely lost, it is lost in slices
+      // shorter than the element edges the decoder is trying to time. Holding
+      // the interval at ~20 ms of audio keeps the idle task exactly as well fed
+      // as it was proven to need, whatever the block size.
+      if(++since_yield >= yield_every)
+      {
+        since_yield = 0;
+        vTaskDelay(1);
+      }
     }
   }
 

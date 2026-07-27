@@ -111,7 +111,7 @@ static const char *menu[] =
 {
 #ifdef AIRTIME
   "Volume",
-  "Clock/Radio",
+  "Mode",
   "Nets",
 #else
   "Mode",
