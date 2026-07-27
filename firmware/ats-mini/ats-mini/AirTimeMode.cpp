@@ -113,7 +113,7 @@ static const char* const kHfNames[] = {"Listen Now", "Serve Now", "Survey Dial"}
 // power-on comes up as; operator mode is a thing you ask for and it is not
 // remembered. While it is on, AirTime touches nothing — see
 // AirTimeApp::setMode for why an hour of listening costs milliseconds.
-static const char* const kModeNames[] = {"Clock", "Radio", "CW Copy"};
+static const char* const kModeNames[] = {"Clock", "Radio", "CW Copy", "Waterfall"};
 
 // (The CW/WWV detector parameters — 700 Hz in 5 ms blocks vs 1000 Hz in 20 ms —
 // live in AppConfig now: AirTimeApp::setMode repoints the sampler itself, in a
@@ -407,6 +407,25 @@ const char *atModeName(int i)
 int atModeIdx() { return atModeOpt; }
 bool airtimeRadioMode() { return atApp != nullptr && atApp->radioMode(); }
 bool airtimeCwMode()    { return atApp != nullptr && atApp->cwMode(); }
+bool airtimeSpectrumMode()
+{
+  return atApp != nullptr && atApp->mode() == airtime::OpMode::Spectrum;
+}
+uint32_t atSpectrumCopy(float out[AT_SPECTRUM_BINS])
+{
+  static_assert(AT_SPECTRUM_BINS ==
+                    (int)airtime_esp32::Esp32WwvSampler::kSpectrumBins,
+                "display and sampler disagree about the bin count");
+  return atWwv.copySpectrum(out);
+}
+
+void atResetLearning()
+{
+  // The order is the safety: wipe, then reboot without another persist tick —
+  // a loop pass between the two could write fresh state into the emptiness.
+  atStore.wipeAll();
+  ESP.restart();
+}
 
 // What CW copy has heard, and how well it is hearing it.
 const char *atCwText()  { return atApp != nullptr ? atApp->cwText().text() : ""; }
@@ -432,8 +451,11 @@ void atSetModeIdx(int i)
   {
     // Back to being a clock. setMode(Clock) does the remembering-what-went-
     // stale: it re-tunes the FM side and voids the WWV band cache, because the
-    // operator has been moving a dial AirTime cannot see.
+    // operator has been moving a dial AirTime cannot see. The spectrum bank is
+    // dropped after the stop setMode performs — same race-free ordering as
+    // entry.
     atApp->setMode(airtime::OpMode::Clock);
+    atWwv.disableSpectrum();
     return;
   }
 
@@ -457,7 +479,14 @@ void atSetModeIdx(int i)
   // follows the DSP volume (Milestone 0) and nothing overrides it here: CW is
   // tuned by ear, so the volume set to hear the note is the level the detector
   // sees, and the decoder's own noise floor adapts to it.
-  atApp->setMode(i == 2 ? airtime::OpMode::Cw : airtime::OpMode::Radio);
+  atApp->setMode(i == 2 ? airtime::OpMode::Cw :
+                 i == 3 ? airtime::OpMode::Spectrum : airtime::OpMode::Radio);
+  // setMode stopped the sampler synchronously whichever direction we crossed,
+  // so flipping the bank here cannot race the task (its contract refuses a
+  // running sampler; the return is deliberately unchecked because the stop
+  // above makes refusal impossible, and the next applyDirective restarts).
+  if(i == 3) atWwv.enableSpectrum(150.0f, 50.0f);
+  else       atWwv.disableSpectrum();
   unloadSSB();           // the cached patch state cannot be trusted; see above
   selectBand(bandIdx);   // loadSSB if needed -> useBand -> setBandwidth
   rx.setVolume(volume);

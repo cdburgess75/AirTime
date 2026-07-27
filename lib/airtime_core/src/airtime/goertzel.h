@@ -25,6 +25,10 @@ class Goertzel {
   // block_size     : samples per power estimate (sets frequency resolution and
   //                  update cadence; e.g. 800 @ 8 kHz => a 100 ms estimate)
   Goertzel(real sample_rate_hz, real target_hz, std::size_t block_size);
+  // Inert placeholder (1 Hz bin, 1-sample blocks) so a BANK of these can live
+  // in an array and be pointed at real frequencies later — the waterfall runs
+  // 64 of them side by side over the same sample stream.
+  Goertzel() : Goertzel(1.0f, 1.0f, 1) {}
 
   // Feed one sample. Returns true exactly when a block completes; on true,
   // *power receives the normalized power for that block and the filter resets.

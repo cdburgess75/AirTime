@@ -129,7 +129,7 @@ struct AppConfig {
 };
 
 // Who owns the radio right now. See AirTimeApp::setMode for what each means.
-enum class OpMode : uint8_t { Clock, Radio, Cw };
+enum class OpMode : uint8_t { Clock, Radio, Cw, Spectrum };
 
 // What became of the last WWV marker that yielded a phase measurement — the
 // piece of the story the detector's own diag cannot tell (it sees tones, not
@@ -205,6 +205,13 @@ class AirTimeApp {
   //         detector at the CW note; leaving repoints it at WWV and flushes the
   //         half-assembled character so the last letter of a callsign is not
   //         eaten by the mode change.
+  // Spectrum — Radio, plus the audio tap as a WATERFALL. The same §2 trade as
+  //         Cw, accepted by the operator for the same reason: seeing the
+  //         passband while tuning is worth more than serving NTP for the
+  //         duration. The core only sequences ownership (tap running, WiFi
+  //         down, dial untouched); what is done with the samples — the
+  //         Goertzel bank, the history, the drawing — is the firmware's
+  //         business entirely, which is why this mode has no poll function.
   //
   // Leaving for Clock is the direction with teeth: for however long the
   // operator had the dial, every cached belief about where the chip points has

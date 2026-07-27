@@ -445,9 +445,10 @@ void drawScreen(const char *statusLine1, const char *statusLine2)
   // The clock appliance owns the screen (§5) — unless the operator has asked
   // for the radio back, in which case the stock layout is correct again:
   // AirTime has stopped retuning, so the frequency readout is true.
-  // CW copy runs the AirTime layout too — it renders a text terminal rather
-  // than a clock. Only plain operator mode wants the stock dial back.
-  if(airtimeCwMode() || !airtimeRadioMode())
+  // CW copy and the waterfall run the AirTime layout too — a text terminal
+  // and a spectrum rather than a clock. Only plain operator mode wants the
+  // stock dial back.
+  if(airtimeCwMode() || airtimeSpectrumMode() || !airtimeRadioMode())
   {
     drawLayoutAirTime(statusLine1, statusLine2);
     spr.pushSprite(0, 0);

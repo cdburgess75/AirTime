@@ -90,6 +90,24 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   bool setDetector(airtime::real tone_hz, int64_t block_us) override;
   airtime::real toneHz() const { return cfg_.tone_hz; }
 
+  // ── Spectrum duty (the waterfall) ─────────────────────────────────────────
+  // A bank of Goertzel bins run side by side over the same sample stream, one
+  // frame of bin powers per block. While enabled, the single-detector path is
+  // idle and NOTHING is queued — the frame below, overwritten in place, is the
+  // whole product, because a waterfall wants the latest picture, not history.
+  //
+  // Same contract as setDetector: only legal while stopped. AirTimeApp's
+  // setMode stops the sampler synchronously entering AND leaving Spectrum,
+  // which is what makes the firmware's enable/disable calls race-free.
+  static constexpr std::size_t kSpectrumBins = 64;
+  bool enableSpectrum(airtime::real f0_hz, airtime::real df_hz);
+  bool disableSpectrum();
+  bool spectrumEnabled() const { return spectrum_on_; }
+  // Copy the latest frame; returns the frame counter (0 = nothing yet).
+  // Deliberately unlocked: a torn read mixes two adjacent 20 ms frames in one
+  // drawn row, which is beneath visibility on a waterfall.
+  uint32_t copySpectrum(airtime::real out[kSpectrumBins]) const;
+
   // --- Diagnostics (not part of the interface) -----------------------------
   // Published by the sampler task for observation only; never used for control,
   // so a torn read across cores is harmless.
@@ -124,6 +142,13 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   // ADC2 contends with.
   std::atomic<bool> parked_{true};
   bool begun_ = false;
+
+  bool spectrum_on_ = false;
+  airtime::real spec_f0_hz_ = 150.0f;
+  airtime::real spec_df_hz_ = 50.0f;
+  airtime::Goertzel spec_bank_[kSpectrumBins];
+  airtime::real spec_frame_[kSpectrumBins] = {};
+  uint32_t spec_frames_ = 0;
 
   int32_t tuned_khz_ = 0;
   airtime::real sample_rate_hz_ = 0.0f;

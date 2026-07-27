@@ -62,6 +62,30 @@ bool Esp32WwvSampler::setDetector(real tone_hz, int64_t block_us)
   return true;
 }
 
+bool Esp32WwvSampler::enableSpectrum(real f0_hz, real df_hz)
+{
+  if(running_) return false;
+  if(f0_hz <= 0.0f || df_hz <= 0.0f) return false;
+  spec_f0_hz_ = f0_hz;
+  spec_df_hz_ = df_hz;
+  spec_frames_ = 0;
+  spectrum_on_ = true;
+  return true;
+}
+
+bool Esp32WwvSampler::disableSpectrum()
+{
+  if(running_) return false;
+  spectrum_on_ = false;
+  return true;
+}
+
+uint32_t Esp32WwvSampler::copySpectrum(real out[kSpectrumBins]) const
+{
+  for(std::size_t i = 0 ; i < kSpectrumBins ; i++) out[i] = spec_frame_[i];
+  return spec_frames_;
+}
+
 void Esp32WwvSampler::tuneKhz(int32_t khz)
 {
   tuned_khz_ = khz;
@@ -156,6 +180,18 @@ void Esp32WwvSampler::run()
       block_n = (std::size_t)((double)cfg_.block_us * (double)fs / 1e6);
       if(block_n < 16) block_n = 16;
       goertzel = Goertzel(fs, cfg_.tone_hz, block_n);
+      if(spectrum_on_)
+      {
+        // All bins share block_n, so every bin completes on the same sample
+        // and one loop pass harvests a coherent frame. Bins above Nyquist are
+        // pinned to an inert placeholder rather than aliased into lies.
+        for(std::size_t b = 0 ; b < kSpectrumBins ; b++)
+        {
+          const real f = spec_f0_hz_ + spec_df_hz_ * (real)b;
+          spec_bank_[b] = (f < fs * 0.45f) ? Goertzel(fs, f, block_n)
+                                           : Goertzel();
+        }
+      }
       yield_every = (int)((20000 + cfg_.block_us - 1) / cfg_.block_us);
       if(yield_every < 1) yield_every = 1;
       since_yield = 0;
@@ -171,6 +207,37 @@ void Esp32WwvSampler::run()
     // through the filter's sidelobes; the tap sits around 2870 counts here.
     dc += cfg_.dc_alpha * ((real)raw - dc);
     const real x = ((real)raw - dc) / cfg_.adc_full_scale;
+
+    // Spectrum duty: feed the bank instead of the single detector. The frame
+    // is published in place and nothing is queued — no consumer exists for a
+    // sample stream in this mode, and a full queue would only pollute the
+    // dropped-blocks diagnostic that WWV listening relies on.
+    if(spectrum_on_)
+    {
+      ++in_block;
+      bool frame_done = false;
+      for(std::size_t b = 0 ; b < kSpectrumBins ; b++)
+      {
+        real p = 0.0f;
+        if(spec_bank_[b].process(x, &p))
+        {
+          spec_frame_[b] = p;
+          frame_done = true;
+        }
+      }
+      if(frame_done)
+      {
+        ++spec_frames_;
+        in_block = 0;
+        blocks_ = ++blocks;
+        if(++since_yield >= yield_every)
+        {
+          since_yield = 0;
+          vTaskDelay(1);
+        }
+      }
+      continue;
+    }
 
     real power = 0.0f;
     ++in_block;

@@ -39,6 +39,17 @@ class NvsTimeStore : public airtime::ITimeStore {
     open_ = false;
   }
 
+  // Erase everything AirTime has ever learned or been told — drift, last
+  // time, station biases, band stats, surveyed stations, menu settings. The
+  // recovery hammer for a radio whose persisted brain is suspected of being
+  // the problem: learning that survives power-off also lets a bad lesson
+  // survive power-off, and this is the honest way out. The caller reboots
+  // afterwards; a fresh boot relearns everything from the air.
+  bool wipeAll() {
+    if (!open_) return false;
+    return prefs_.clear();
+  }
+
   // --- ITimeStore ------------------------------------------------------------
   bool loadDriftPpm(double* ppm) override {
     if (!open_ || !prefs_.isKey("drift")) return false;

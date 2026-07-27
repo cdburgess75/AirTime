@@ -139,8 +139,159 @@ static void drawLayoutAirTimeCw(void)
     drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
 }
 
+// ── Waterfall ───────────────────────────────────────────────────────────────
+//
+// The audio passband, drawn: a spectrum line across 150–3300 Hz in 50 Hz bins,
+// and beneath it the last ~80 frames as history. This is the SSB passband, so
+// on 40 m every carrier, warble and voice in the channel is a stripe the
+// operator can steer onto by ear and eye together.
+//
+// Auto-gain, log scale: the tap's level depends on the DSP volume (Milestone
+// 0), so absolute power is meaningless here. A slow-rising floor and a
+// fast-rising peak track the scene, and each cell maps log-power between them
+// onto a 16-step palette. The palette runs black→blue→cyan→yellow→white in
+// RGB565, computed once — deliberately NOT theme colours: a waterfall's
+// grammar is its own, and the operator has seen a hundred of them.
+static void drawLayoutAirTimeWaterfall(void)
+{
+  static const int kBins = AT_SPECTRUM_BINS;
+  static const int kRows = 78;
+  static const int kCell = 4;              // 64 bins x 4 px = 256 px wide
+  static const int kX0 = (320 - kBins * kCell) / 2;
+
+  static uint8_t hist[kRows][kBins];       // palette indices, ring buffer
+  static int head = 0;                     // newest row
+  static uint32_t last_frame = 0;
+  static float log_floor = 0.0f, log_peak = 1.0f;
+  static bool seeded = false;
+
+  static uint16_t palette[16];
+  static bool palette_built = false;
+  if(!palette_built)
+  {
+    for(int i = 0 ; i < 16 ; i++)
+    {
+      // 0..5 black->blue, 6..10 blue->cyan, 11..13 cyan->yellow, 14..15 ->white
+      uint8_t r, g, b;
+      if(i <= 5)       { r = 0;            g = 0;            b = 51 * i;      }
+      else if(i <= 10) { r = 0;            g = 51 * (i - 5); b = 255;         }
+      else if(i <= 13) { r = 85 * (i - 10); g = 255;         b = 255 - 85 * (i - 10); }
+      else             { r = 255;          g = 255;          b = 170 * (i - 13); }
+      palette[i] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    }
+    palette_built = true;
+  }
+
+  // Pull the newest frame; only a NEW frame scrolls the history.
+  float frame[AT_SPECTRUM_BINS];
+  const uint32_t n = atSpectrumCopy(frame);
+  if(n != 0 && n != last_frame)
+  {
+    last_frame = n;
+
+    float lg[AT_SPECTRUM_BINS];
+    float fmin = 1e9f, fmax = -1e9f;
+    for(int i = 0 ; i < kBins ; i++)
+    {
+      const float pwr = frame[i] > 1e-12f ? frame[i] : 1e-12f;
+      lg[i] = log10f(pwr);
+      if(lg[i] < fmin) fmin = lg[i];
+      if(lg[i] > fmax) fmax = lg[i];
+    }
+    if(!seeded) { log_floor = fmin; log_peak = fmax; seeded = true; }
+    // Floor follows the band mood slowly; the peak grabs fast and lets go
+    // slowly, so a passing strong signal sets the scale rather than blinding
+    // the map for everything after it.
+    log_floor += 0.02f * (fmin - log_floor);
+    if(fmax > log_peak) log_peak += 0.5f  * (fmax - log_peak);
+    else                log_peak += 0.01f * (fmax - log_peak);
+    if(log_peak - log_floor < 0.5f) log_peak = log_floor + 0.5f;
+
+    head = (head + 1) % kRows;
+    for(int i = 0 ; i < kBins ; i++)
+    {
+      float v = (lg[i] - log_floor) / (log_peak - log_floor);
+      if(v < 0.0f) v = 0.0f;
+      if(v > 1.0f) v = 1.0f;
+      hist[head][i] = (uint8_t)(v * 15.0f + 0.5f);
+    }
+  }
+
+  AirTimeScreen sc;
+  airtimeScreen(&sc);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString("WATERFALL", 8, 3, 2);
+
+  // The one stock reading that matters while steering: where the dial is.
+  char fbuf[24];
+  if(currentMode == FM)
+    snprintf(fbuf, sizeof(fbuf), "%.1f MHz", currentFrequency / 100.0);
+  else
+    snprintf(fbuf, sizeof(fbuf), "%u kHz", currentFrequency);
+  spr.setTextDatum(TC_DATUM);
+  spr.setTextColor(TH.text);
+  spr.drawString(fbuf, 160, 3, 2);
+
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(sc.synced ? TH.text_muted : TH.text_warn);
+  spr.drawString(sc.valid ? sc.local : "--:--:--", 312, 3, 2);
+
+  // Spectrum: the newest frame as bars, 30 px tall.
+  const int spec_y = 22, spec_h = 30;
+  for(int i = 0 ; i < kBins ; i++)
+  {
+    const int level = hist[head][i];
+    const int h = 1 + (level * (spec_h - 1)) / 15;
+    const int x = kX0 + i * kCell;
+    spr.fillRect(x, spec_y + spec_h - h, kCell - 1, h, palette[level]);
+  }
+
+  // Frequency ruler between spectrum and history: 1, 2, 3 kHz above the bin
+  // that carries that audio frequency ((f - 150) / 50).
+  spr.setTextDatum(TC_DATUM);
+  spr.setTextColor(TH.text_muted);
+  for(int khz = 1 ; khz <= 3 ; khz++)
+  {
+    const int bin = (khz * 1000 - 150) / 50;
+    if(bin >= 0 && bin < kBins)
+    {
+      const int x = kX0 + bin * kCell + kCell / 2;
+      spr.drawFastVLine(x, spec_y + spec_h + 1, 3, TH.text_muted);
+      spr.drawNumber(khz, x, spec_y + spec_h + 5, 1);
+    }
+  }
+
+  // History, newest row directly under the ruler.
+  const int wf_y = spec_y + spec_h + 15;
+  for(int r = 0 ; r < kRows ; r++)
+  {
+    const uint8_t *row = hist[(head - r + kRows * 2) % kRows];
+    const int y = wf_y + r;
+    for(int i = 0 ; i < kBins ; i++)
+      spr.drawFastHLine(kX0 + i * kCell, y, kCell - 1, palette[row[i]]);
+  }
+
+  if(n == 0)
+  {
+    spr.setTextDatum(MC_DATUM);
+    spr.setTextColor(TH.text_muted);
+    spr.drawString("waiting for the tap...", 160, wf_y + kRows / 2, 2);
+  }
+
+  // The cost of being here, stated plainly — same honesty as CW copy.
+  spr.setTextDatum(BL_DATUM);
+  spr.setTextColor(TH.text_warn);
+  spr.drawString("NTP OFF while the waterfall is up", 8, 170, 1);
+
+  if(currentCmd != CMD_NONE)
+    drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+}
+
 void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
 {
+  if(airtimeSpectrumMode()) { drawLayoutAirTimeWaterfall(); return; }
   if(airtimeCwMode()) { drawLayoutAirTimeCw(); return; }
 
   // statusLine1/2 are the caller's override (menus, BLE, EiBi). When present

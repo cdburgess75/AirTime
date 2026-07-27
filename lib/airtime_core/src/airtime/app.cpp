@@ -163,6 +163,20 @@ void AirTimeApp::setMode(OpMode m) {
     cw_level_ = 0.0f;
   }
 
+  // Leaving the waterfall: release the tap NOW, not a loop later, so the
+  // firmware can safely tear the spectrum bank down the moment this returns.
+  if (prev == OpMode::Spectrum) {
+    if (deps_.wwv->isRunning()) deps_.wwv->stop();
+  }
+
+  if (m == OpMode::Spectrum) {
+    // Entering the waterfall: take the tap, stopped first for the same
+    // reason. The firmware layer flips the sampler into spectrum duty between
+    // this stop and the restart applyDirective performs next loop — the gap
+    // is the point, it is what makes the reconfiguration race-free.
+    if (deps_.wwv->isRunning()) deps_.wwv->stop();
+  }
+
   mode_ = m;
 
   // Returning to clock duty. For however long the operator had the dial, every
@@ -200,7 +214,7 @@ Directive AirTimeApp::effectiveDirective(Directive d) const {
   // a ~700 Hz beat note, not 20 ms of a 1000 Hz minute marker. Feeding them to
   // the marker detector would hand the arbiter phase measurements derived from
   // somebody's callsign.
-  if (mode_ == OpMode::Cw) {
+  if (mode_ == OpMode::Cw || mode_ == OpMode::Spectrum) {
     d.wwv_listening = false;
     d.wwv_band_khz = 0;
     d.rds_scanning = false;
@@ -243,7 +257,8 @@ void AirTimeApp::applyDirective(const Directive& d) {
   // THE ordering rule (PLAN.md §2): ADC2 and WiFi can never be live together.
   // Always release before acquiring — stop the sampler and drop WiFi first, then
   // bring up whatever the new directive wants.
-  const bool want_audio = d.wwv_listening || mode_ == OpMode::Cw;
+  const bool want_audio = d.wwv_listening || mode_ == OpMode::Cw ||
+                          mode_ == OpMode::Spectrum;
 
   if (!want_audio && deps_.wwv->isRunning()) {
     deps_.wwv->stop();
@@ -269,7 +284,9 @@ void AirTimeApp::applyDirective(const Directive& d) {
 
   // CW takes the audio tap without touching the dial: the operator tuned it,
   // by ear, and is probably still nudging it.
-  if (mode_ == OpMode::Cw && !deps_.wwv->isRunning()) deps_.wwv->start();
+  if ((mode_ == OpMode::Cw || mode_ == OpMode::Spectrum) &&
+      !deps_.wwv->isRunning())
+    deps_.wwv->start();
 
   if (d.wwv_listening) {
     if (d.wwv_band_khz != tuned_wwv_khz_) {
@@ -296,7 +313,7 @@ void AirTimeApp::loop() {
     return;
   }
 
-  if (mode_ == OpMode::Radio) {
+  if (mode_ == OpMode::Radio || mode_ == OpMode::Spectrum) {
     persist(now, /*force=*/false);
     return;
   }

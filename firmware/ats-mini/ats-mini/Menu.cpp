@@ -249,6 +249,7 @@ static const MenuItem atSettingsMenu[] =
   {"Time Zone",   CMD_AT_ZONE},
   {"WWV Band",    CMD_AT_BAND},
   {"HF Listen",   CMD_AT_HF},
+  {"Reset Learn", CMD_AT_RESET},
   {"About",       CMD_ABOUT},
 };
 
@@ -1054,6 +1055,13 @@ static void atActivate(uint16_t cmd)
     case CMD_AT_HF:
       atHfSelReset();
       currentCmd = CMD_AT_HF;
+      break;
+
+    case CMD_AT_RESET:
+      // Wipes every learned/persisted AirTime byte and reboots — the recovery
+      // hammer for a radio whose persisted brain is suspect. Everything it
+      // forgets is relearnable from the air; the cost is one cold acquisition.
+      atResetLearning();
       break;
 
     default:

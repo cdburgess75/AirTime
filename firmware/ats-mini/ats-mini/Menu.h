@@ -50,6 +50,7 @@
 #define CMD_AT_HF      0x3200 // | AirTime: listen now / serve now
 #define CMD_AT_MODE    0x3250 // | AirTime: clock or receiver
 #define CMD_AT_NETS    0x3280 // | AirTime: scheduled nets
+#define CMD_AT_RESET   0x32C0 // | AirTime: wipe learned state and reboot
 #endif
 #define CMD_ABOUT      0x3300 //-+
 
@@ -190,6 +191,14 @@ bool airtimeRadioMode();
 // CW copy: a third mode, in which the access point is DOWN (the audio tap and
 // the WiFi radio cannot both be live) and the panel becomes a text terminal.
 bool airtimeCwMode();
+// Waterfall: the audio passband as spectrum + history. Same tap, same §2
+// price as CW copy — the access point is down while it is on screen.
+bool airtimeSpectrumMode();
+#define AT_SPECTRUM_BINS 64
+// Copy the newest spectrum frame; returns its frame counter (0 = none yet).
+uint32_t atSpectrumCopy(float out[AT_SPECTRUM_BINS]);
+// Wipe every learned/persisted AirTime byte and reboot. See NvsTimeStore.
+void atResetLearning();
 const char *atCwText();
 int atCwWpm();
 bool atCwKeyDown();

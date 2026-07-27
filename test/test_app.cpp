@@ -921,12 +921,49 @@ AT_TEST(app_cw_mode_never_breaks_the_adc_rule) {
   app.setFmStations(fm, 1);
   app.begin();
 
+  static const OpMode kCycle[] = {OpMode::Cw, OpMode::Clock, OpMode::Spectrum,
+                                  OpMode::Radio, OpMode::Cw, OpMode::Spectrum,
+                                  OpMode::Clock, OpMode::Radio};
   for (int i = 0; i < 8; ++i) {
-    app.setMode(i % 2 == 0 ? OpMode::Cw : OpMode::Clock);
+    app.setMode(kCycle[i]);
     sim.advance(20 * kMin, &app);
   }
   app.setMode(OpMode::Clock);
   AT_CHECK(!sim.adc_wifi_conflict);
+}
+
+// The waterfall owns the tap exactly as CW does and pays the same rent: WiFi
+// down while it is on screen, dial untouched underneath the operator, and a
+// clean handback — sampler released, FM re-tuned, AP restored — on exit.
+AT_TEST(app_spectrum_mode_owns_the_tap_and_hands_it_back) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{9110, 0x1001, true, 0};
+  sim.rds.stations = {a};
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+  sim.advance(10 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+
+  app.setMode(OpMode::Spectrum);
+  app.loop();
+  AT_CHECK(sim.wwv.isRunning());     // the tap is live...
+  AT_CHECK(!sim.wifi.isUp());        // ...so the radio is off. Same rule as CW.
+
+  // Half an hour of watching: AirTime must not retune underneath the operator,
+  // and the §2 invariant must hold throughout.
+  const int tunes = sim.rds.tune_count;
+  sim.advance(30 * kMin, &app);
+  AT_CHECK_EQ(sim.rds.tune_count, tunes);
+  AT_CHECK(!sim.adc_wifi_conflict);
+
+  app.setMode(OpMode::Clock);
+  AT_CHECK(!sim.wwv.isRunning());    // released synchronously on exit
+  AT_CHECK(sim.tuner.onFm(9110));
+  sim.advance(2 * kMin, &app);
+  AT_CHECK(sim.wifi.isUp());
 }
 
 // CW blocks must never reach the marker detector. They are 5 ms of a beat note
