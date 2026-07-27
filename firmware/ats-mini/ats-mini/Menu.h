@@ -154,6 +154,11 @@ int atZoneCount();  const char *atZoneName(int i);  int atZoneIdx();  void atSet
 int atBandCount();  const char *atBandName(int i);  int atBandIdx();  void atSetBandIdx(int i);
 int atHfCount();    const char *atHfName(int i);    int atHfIdx();    void atSetHfIdx(int i);
 int atModeCount();  const char *atModeName(int i);  int atModeIdx();  void atSetModeIdx(int i);
+// Mode and HF Listen scroll a SELECTION and commit on click — they are lists
+// of actions, and firing them per encoder detent let a browse of the menu
+// switch modes and start surveys (a field-found bug, not a style choice).
+int atModeSelIdx();  void atSetModeSel(int i);  void atModeSelReset();  void atModeCommit();
+int atHfSelIdx();    void atSetHfSel(int i);    void atHfSelReset();    void atHfCommit();
 const char *atNetDetail();
 int atNetCount();   const char *atNetName(int i);   int atNetIdx();   void atSetNetIdx(int i);
 

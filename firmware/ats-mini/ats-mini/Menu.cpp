@@ -1043,6 +1043,16 @@ static void atActivate(uint16_t cmd)
       eibiLoadSchedule();
       break;
 
+    case CMD_AT_MODE:
+      atModeSelReset();          // open at the mode the radio is actually in
+      currentCmd = CMD_AT_MODE;
+      break;
+
+    case CMD_AT_HF:
+      atHfSelReset();
+      currentCmd = CMD_AT_HF;
+      break;
+
     default:
       currentCmd = cmd;
       break;
@@ -1110,8 +1120,8 @@ static void doSettings(int16_t enc)
 // one renderer serves all three.
 static void doAtZone(int16_t enc) { atSetZoneIdx(wrap_range(atZoneIdx(), enc, 0, atZoneCount() - 1)); }
 static void doAtBand(int16_t enc) { atSetBandIdx(wrap_range(atBandIdx(), enc, 0, atBandCount() - 1)); }
-static void doAtHf(int16_t enc)   { atSetHfIdx(wrap_range(atHfIdx(), enc, 0, atHfCount() - 1)); }
-static void doAtMode(int16_t enc) { atSetModeIdx(wrap_range(atModeIdx(), enc, 0, atModeCount() - 1)); }
+static void doAtHf(int16_t enc)   { atSetHfSel(wrap_range(atHfSelIdx(), enc, 0, atHfCount() - 1)); }
+static void doAtMode(int16_t enc) { atSetModeSel(wrap_range(atModeSelIdx(), enc, 0, atModeCount() - 1)); }
 static void doAtNets(int16_t enc) { atSetNetIdx(wrap_range(atNetIdx(), enc, 0, atNetCount() - 1)); }
 
 // Nets is the one AirTime list where scrolling is not the whole interaction.
@@ -1224,6 +1234,8 @@ bool clickHandler(uint16_t cmd, bool shortPress)
     case CMD_SETTINGS: clickSettings(settingsIdx, shortPress);break;
 #ifdef AIRTIME
     case CMD_AT_NETS:  clickAtNets(atNetIdx(), shortPress);break;
+    case CMD_AT_MODE:  atModeCommit(); currentCmd = CMD_NONE; break;
+    case CMD_AT_HF:    atHfCommit();   currentCmd = CMD_NONE; break;
 #endif
     case CMD_MEMORY:   clickMemory(memoryIdx, shortPress);break;
     case CMD_BLEMODE:  clickBleMode(bleModeIdx, shortPress);break;
@@ -1972,8 +1984,8 @@ void drawSideBar(uint16_t cmd, int x, int y, int sx)
 #ifdef AIRTIME
     case CMD_AT_ZONE: drawAtList(atLabelFor(cmd), atZoneCount(), atZoneIdx(), atZoneName, x, y, sx); break;
     case CMD_AT_BAND: drawAtList(atLabelFor(cmd), atBandCount(), atBandIdx(), atBandName, x, y, sx); break;
-    case CMD_AT_HF:   drawAtList(atLabelFor(cmd), atHfCount(),   atHfIdx(),   atHfName,   x, y, sx); break;
-    case CMD_AT_MODE: drawAtList(atLabelFor(cmd), atModeCount(), atModeIdx(), atModeName, x, y, sx); break;
+    case CMD_AT_HF:   drawAtList(atLabelFor(cmd), atHfCount(),   atHfSelIdx(),   atHfName,   x, y, sx); break;
+    case CMD_AT_MODE: drawAtList(atLabelFor(cmd), atModeCount(), atModeSelIdx(), atModeName, x, y, sx); break;
     case CMD_AT_NETS: drawAtList(atLabelFor(cmd), atNetCount(),  atNetIdx(),  atNetName,  x, y, sx); break;
 #endif
     case CMD_MENU:       drawMenu(x, y, sx);       break;

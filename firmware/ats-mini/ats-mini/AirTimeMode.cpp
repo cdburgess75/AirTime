@@ -393,7 +393,16 @@ static void atEnterRadioMode()
 }
 
 int atModeCount() { return (int)(sizeof(kModeNames) / sizeof(kModeNames[0])); }
-const char *atModeName(int i) { return (i >= 0 && i < atModeCount()) ? kModeNames[i] : "?"; }
+const char *atModeName(int i)
+{
+  if(i < 0 || i >= atModeCount()) return "?";
+  if(i != atModeOpt) return kModeNames[i];
+  // The mode the radio is IN, as distinct from the row the encoder is on —
+  // the two are different things now that scrolling does not switch.
+  static char b[16];
+  snprintf(b, sizeof(b), "%s *", kModeNames[i]);
+  return b;
+}
 int atModeIdx() { return atModeOpt; }
 bool airtimeRadioMode() { return atApp != nullptr && atApp->radioMode(); }
 bool airtimeCwMode()    { return atApp != nullptr && atApp->cwMode(); }
@@ -525,17 +534,41 @@ bool atTuneNet(int i)
 int atHfCount() { return (int)(sizeof(kHfNames) / sizeof(kHfNames[0])); }
 const char *atHfName(int i) { return (i >= 0 && i < atHfCount()) ? kHfNames[i] : "?"; }
 int atHfIdx() { return atHfOpt; }
+// The committer: called on CLICK, never while scrolling. This used to act on
+// every encoder detent — "these are verbs, §5 asks for them to be immediate" —
+// and the field found the flaw in that reading of §5: scrolling the list just
+// to SEE the options fired them. Browsing past "Survey Dial" handed the tuner
+// to a half-hour survey; past "Listen Now", tore down the access point for a
+// listen window. Immediate means "on selection", and selection is a click.
 void atSetHfIdx(int i)
 {
   if(i < 0 || i >= atHfCount()) return;
   atHfOpt = i;
   if(atApp == nullptr) return;
-  // Acted on as the operator scrolls: these are verbs, not a stored preference,
-  // and §5 asks for them to be immediate.
   if(atHfOpt == 0)      atApp->operatorListenNow();
   else if(atHfOpt == 1)  atApp->operatorServeNow();
   else                   atApp->startSurvey();   // ~30 min; owns the dial
 }
+
+// ── Scroll is looking; click is doing ───────────────────────────────────────
+// The Mode and HF Listen lists hold ACTIONS, and until this existed they fired
+// while the cursor moved across them. Scrolling Clock->CW Copy to look at the
+// options live-switched the radio through Radio (a full SSB hand-over per
+// detent) into CW (access point down, NTP off the air). The clock got knocked
+// over by someone reading a menu. So these lists carry a selection cursor that
+// commits only on click; Zone and WWV Band stay live, because scrolling a
+// VALUE into place is what a settings knob is for.
+static int atModeSel = -1;   // -1: the list opens at the active mode
+int atModeSelIdx() { return atModeSel < 0 ? atModeOpt : atModeSel; }
+void atSetModeSel(int i) { if(i >= 0 && i < atModeCount()) atModeSel = i; }
+void atModeSelReset() { atModeSel = -1; }
+void atModeCommit() { atSetModeIdx(atModeSelIdx()); atModeSel = -1; }
+
+static int atHfSel = 0;
+int atHfSelIdx() { return atHfSel; }
+void atSetHfSel(int i) { if(i >= 0 && i < atHfCount()) atHfSel = i; }
+void atHfSelReset() { atHfSel = 0; }
+void atHfCommit() { atSetHfIdx(atHfSel); }
 
 void airtimeSetup()
 {
