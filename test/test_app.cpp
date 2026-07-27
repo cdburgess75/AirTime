@@ -601,3 +601,53 @@ AT_TEST(app_manual_set) {
   AT_CHECK(iabs(sim.clockErrorUs(app)) < 100000);
   AT_CHECK(app.displayState().sources & kSrcManual);
 }
+
+// Dropped somewhere new, with a station list that means nothing here: the
+// radio surveys the dial for itself, adopts what it finds, and remembers it.
+//
+// This is what separates an instrument from a demo. The compile-time list is
+// three frequencies measured on one evening in New Orleans; two states over it
+// is worth nothing, RDS never seeds, and the whole clock collapses.
+AT_TEST(app_surveys_the_dial_when_it_has_nothing) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+
+  // A dial the app has never been told about.
+  FakeStation a{9370, 0x5001, true, 40000};   a.rssi = 44;
+  FakeStation b{10130, 0x5002, true, 90000};  b.rssi = 38;
+  FakeStation c{10610, 0x5003, false, 0};     c.rssi = 50;  // loud, but no CT
+  sim.rds.stations = {a, b, c};
+
+  AirTimeApp app(sim.deps());
+  app.begin();                      // note: NO setFmStations
+  AT_CHECK(app.surveying());
+
+  sim.advance(30 * kMin, &app);     // scan pass, then dwell on each candidate
+
+  AT_CHECK(!app.surveying());
+  AT_CHECK(sim.store.blobs.count("fm") == 1);   // and it was written down
+
+  // Having found stations, it goes on to do its actual job.
+  sim.advance(10 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+}
+
+// A radio that already has stations must never be dragged off to go hunting —
+// surveying costs the dial for half an hour, and a working clock has something
+// to protect.
+AT_TEST(app_does_not_survey_when_it_has_stations) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{9110, 0x1001, true, 0};
+  sim.rds.stations = {a};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+  AT_CHECK(!app.surveying());
+
+  sim.advance(5 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+  AT_CHECK(!app.surveying());
+}

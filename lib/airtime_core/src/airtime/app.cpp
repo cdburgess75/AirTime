@@ -8,6 +8,7 @@ AirTimeApp::AirTimeApp(const AppDeps& deps, const AppConfig& cfg)
       arbiter_(cfg.arbiter),
       sched_(cfg.scheduler),
       bias_(cfg.station_bias),
+      survey_(cfg.survey_cfg),
       marker_(cfg.marker) {}
 
 void AirTimeApp::setFmStations(const int32_t* khz, std::size_t n) {
@@ -45,6 +46,14 @@ void AirTimeApp::begin() {
     if (deps_.store->loadBlob(kBlobBandStats, blob, sizeof(blob), &got)) {
       decodeBandStats(blob, got, &sched_);
     }
+    // A surveyed station list outranks the compile-time warm start: it was
+    // measured HERE. Only adopted if the caller did not supply one explicitly.
+    if (station_count_ == 0 &&
+        deps_.store->loadBlob(kBlobStations, blob, sizeof(blob), &got)) {
+      int32_t khz[kMaxStations];
+      const std::size_t n = decodeStations(blob, got, khz, kMaxStations);
+      if (n > 0) setFmStations(khz, n);
+    }
   }
 
   sched_.start(now);
@@ -52,8 +61,59 @@ void AirTimeApp::begin() {
   last_persist_ = now;
   if (station_count_ > 0) deps_.rds->tuneKhz(stations_[0]);
 
+  // Nothing to listen to and nothing remembered: find out for ourselves.
+  if (cfg_.auto_survey && station_count_ == 0) startSurvey();
+
   directive_ = effectiveDirective(sched_.tick(now));
   applyDirective(directive_);
+}
+
+void AirTimeApp::startSurvey() {
+  survey_.begin(deps_.clock->nowUs());
+  const int32_t khz = survey_.wantTuned();
+  if (khz != 0) deps_.rds->tuneKhz(khz);
+}
+
+void AirTimeApp::pollSurvey(int64_t now) {
+  // Listen while dwelling — without this the survey would tune beautifully and
+  // hear nothing, and every station would score as "no clock time".
+  //
+  // The disagreement is measured against our own clock, which during a survey
+  // may be wildly wrong or unset; that is fine and deliberate. FmSurvey
+  // re-references everything to its own median at the end, so only a STABLE
+  // clock is required, not a correct one.
+  RdsGroup g;
+  while (deps_.rds->poll(&g)) {
+    RdsClockTime t;
+    if (!decodeRdsClockTime(g.a, g.b, g.c, g.d, &t)) continue;
+    const int64_t asserted = t.utc_epoch_s * 1000000;
+    const int64_t reference =
+        arbiter_.isSet() ? arbiter_.utcAt(g.mono_us) : g.mono_us;
+    survey_.noteClockTime(g.a, reference - asserted);
+  }
+
+  const int32_t before = survey_.wantTuned();
+  if (survey_.tick(now, deps_.rds->signalStrength())) {
+    const int32_t khz = survey_.wantTuned();
+    if (khz != 0 && khz != before) deps_.rds->tuneKhz(khz);
+  }
+  if (survey_.done()) adoptSurveyResult();
+}
+
+void AirTimeApp::adoptSurveyResult() {
+  int32_t found[kMaxStations];
+  const std::size_t n = survey_.results(found, kMaxStations);
+  survey_.abort();   // back to Idle: the result is taken, the dial is free
+
+  // Nothing usable. Leave whatever list was already there rather than blanking
+  // it — a bad night on the dial is not a reason to forget a good station.
+  if (n == 0) return;
+
+  setFmStations(found, n);
+  fm_dwell_start_ = deps_.clock->nowUs();
+  deps_.rds->tuneKhz(stations_[0]);
+  learned_dirty_ = true;
+  persist(deps_.clock->nowUs(), /*force=*/true);
 }
 
 Directive AirTimeApp::effectiveDirective(Directive d) const {
@@ -101,8 +161,12 @@ void AirTimeApp::loop() {
   directive_ = effectiveDirective(sched_.tick(now));
   applyDirective(directive_);
 
-  pollRds(now);
-  if (directive_.wwv_listening) pollWwv(now);
+  if (surveying()) {
+    pollSurvey(now);
+  } else {
+    pollRds(now);
+    if (directive_.wwv_listening) pollWwv(now);
+  }
 
   persist(now, /*force=*/false);
 }
@@ -306,6 +370,8 @@ void AirTimeApp::persist(int64_t now, bool force) {
     if (n > 0) deps_.store->saveBlob(kBlobStationBias, blob, n);
     n = encodeBandStats(sched_, blob, sizeof(blob));
     if (n > 0) deps_.store->saveBlob(kBlobBandStats, blob, n);
+    n = encodeStations(stations_, station_count_, blob, sizeof(blob));
+    if (n > 0) deps_.store->saveBlob(kBlobStations, blob, n);
     learned_dirty_ = false;
   }
 }

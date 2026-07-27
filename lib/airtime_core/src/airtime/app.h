@@ -18,6 +18,7 @@
 
 #include "arbiter.h"
 #include "display.h"
+#include "fm_survey.h"
 #include "hal.h"
 #include "rds_ct.h"
 #include "scheduler.h"
@@ -70,6 +71,11 @@ struct AppConfig {
   // reporting itself synced.) 75 s clears the minute with margin and is not a
   // divisor of it.
   int64_t fm_dwell_us = 75LL * 1000000;
+
+  // Survey the dial automatically when there is nothing else to go on. A
+  // radio with no stations is not keeping time and has nothing to protect.
+  bool auto_survey = true;
+  FmSurveyConfig survey_cfg;
 
   // WWV self-corroboration. A lone marker implying a ≥500 ms correction is
   // rightly rejected (§4 rule 3: one source cannot step the clock) — but WWV
@@ -158,6 +164,16 @@ class AirTimeApp {
   void begin();
   void loop();
 
+  // Survey the FM dial for stations that carry usable clock time, then adopt
+  // and persist the result. Deliberately explicit: a device already keeping
+  // time must never be dragged off to go hunting. Started automatically only
+  // when there is nothing to fall back on — no supplied list and nothing
+  // stored. Timekeeping continues throughout; the survey only owns the dial.
+  void startSurvey();
+  bool surveying() const { return survey_.phase() != SurveyPhase::Idle &&
+                                  survey_.phase() != SurveyPhase::Done; }
+  const FmSurvey& survey() const { return survey_; }
+
   // Answer an NTP request. Returns false if it is not a valid client request.
   bool handleNtpRequest(const uint8_t* req, std::size_t len, uint32_t client_id,
                         uint8_t* resp48);
@@ -191,6 +207,8 @@ class AirTimeApp {
   Directive effectiveDirective(Directive d) const;
   void applyDirective(const Directive& d);
   void pollRds(int64_t now);
+  void pollSurvey(int64_t now);
+  void adoptSurveyResult();
   void pollWwv(int64_t now);
   void submitRdsVote(int64_t now);
   void persist(int64_t now, bool force);
@@ -204,6 +222,7 @@ class AirTimeApp {
   Scheduler sched_;
   StationVoter voter_;
   StationBiasTable bias_;
+  FmSurvey survey_;
   WwvMarkerDetector marker_;
   ClientCounter clients_;
 

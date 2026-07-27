@@ -48,6 +48,7 @@ struct FakeStation {
   // and minutes only, so encoding an error into the content silently discards
   // anything under 60 s.
   int64_t error_us = 0;
+  int rssi = 40;           // what a survey scan would read here
 };
 
 // Encode a UTC instant as an RDS group 4A (the inverse of decodeRdsClockTime).
@@ -77,6 +78,15 @@ class FakeRdsSource : public IRdsSource {
     ++tune_count;
   }
   int32_t tunedKhz() const override { return tuned_; }
+
+  // Signal strength of whatever is on the tuned frequency. The survey uses
+  // this to skip empty channels in 200 ms instead of dwelling 80 s on noise.
+  int signalStrength() const override {
+    for (const FakeStation& s : stations) {
+      if (s.khz == tuned_) return s.rssi;
+    }
+    return 2;   // band noise
+  }
 
   bool poll(RdsGroup* out) override {
     if (queue_.empty()) return false;

@@ -52,6 +52,11 @@ class IRdsSource {
   virtual int32_t tunedKhz() const = 0;
   // Non-blocking: returns false when no group is waiting.
   virtual bool poll(RdsGroup* out) = 0;
+  // Received signal strength on the tuned frequency, or -1 if the adapter
+  // cannot say. Only the survey needs this — it is what makes scanning a whole
+  // band take twenty seconds instead of two hours — so it defaults to
+  // "unknown" rather than forcing every implementation to answer.
+  virtual int signalStrength() const { return -1; }
 };
 
 // --- HF / WWV ---------------------------------------------------------------

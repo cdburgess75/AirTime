@@ -35,10 +35,12 @@ namespace airtime {
 // at 15 characters.
 constexpr const char* kBlobStationBias = "sta";
 constexpr const char* kBlobBandStats = "band";
+constexpr const char* kBlobStations = "fm";
 
 // Worst-case encoded sizes, for caller-side buffers.
 constexpr std::size_t kStationBiasBlobMax = 2 + StationBiasTable::kMaxStations * 8;
 constexpr std::size_t kBandStatsBlobMax = 2 + Scheduler::kMaxBands * 10;
+constexpr std::size_t kStationsBlobMax = 2 + 8 * 4;
 
 // Returns bytes written, or 0 if `cap` is too small.
 std::size_t encodeStationBias(const StationBiasTable& t, void* buf, std::size_t cap);
@@ -47,6 +49,12 @@ std::size_t encodeStationBias(const StationBiasTable& t, void* buf, std::size_t 
 bool decodeStationBias(const void* buf, std::size_t len, StationBiasTable* out);
 
 std::size_t encodeBandStats(const Scheduler& s, void* buf, std::size_t cap);
+
+// The surveyed FM station list. Returns bytes written / stations read.
+std::size_t encodeStations(const int32_t* khz, std::size_t n, void* buf,
+                           std::size_t cap);
+std::size_t decodeStations(const void* buf, std::size_t len, int32_t* khz_out,
+                           std::size_t max);
 bool decodeBandStats(const void* buf, std::size_t len, Scheduler* out);
 
 }  // namespace airtime

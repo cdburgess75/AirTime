@@ -47,6 +47,9 @@ namespace airtime_esp32 {
 
 // Implemented by the integration layer, where the SI4735 instance lives.
 struct RdsChipOps {
+  // Optional: current RSSI on the tuned frequency, 0..127. Leave null when the
+  // host cannot answer; the survey then falls back to dwelling everywhere.
+  int (*rssi)(void* ctx) = nullptr;
   // Tune the receiver to an FM frequency in SI4735 native FM units (10 kHz —
   // 9110 is 91.1 MHz), switching it into FM mode if needed.
   void (*tune)(int32_t khz10, void* ctx);
@@ -90,6 +93,13 @@ class Esp32RdsSource : public airtime::IRdsSource {
   }
 
   int32_t tunedKhz() const override { return tuned_khz_; }
+
+  // Signal strength, for the dial survey. Supplied by the host firmware
+  // through RdsChipOps::rssi because reading it means talking to the tuner,
+  // which is the one thing this adapter does not own.
+  int signalStrength() const override {
+    return ops_.rssi != nullptr ? ops_.rssi(ops_.ctx) : -1;
+  }
 
   bool poll(airtime::RdsGroup* out) override;
 

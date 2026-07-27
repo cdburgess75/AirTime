@@ -105,7 +105,7 @@ static int atBandOpt = 0;
 
 // The §5 operator actions. Implemented and tested since Milestone 4 and until
 // now reachable from nothing at all.
-static const char* const kHfNames[] = {"Listen Now", "Serve Now"};
+static const char* const kHfNames[] = {"Listen Now", "Serve Now", "Survey Dial"};
 static int atHfOpt = 0;
 
 // ── Nets worth knowing about ────────────────────────────────────────────────
@@ -158,6 +158,14 @@ static void atTuneWwv(int32_t khz, void*)
   rx.setGpioCtl(1, 0, 0);
   rx.setGpio(1, 0, 0);            // whip/SW antenna path
   rx.setBandwidth(2, 1);          // 3 kHz — the 1000 Hz marker passes cleanly
+}
+
+static int atRdsRssi(void*)
+{
+  // Only meaningful in FM mode; during a WWV window the number describes a
+  // shortwave band and would mislead a survey that is scanning the FM dial.
+  if(!rx.isCurrentTuneFM()) return -1;
+  return rx.getCurrentRSSI();
 }
 
 static int atRdsRead(uint16_t w[4], uint8_t ble[4], void*)
@@ -236,8 +244,9 @@ void atSetHfIdx(int i)
   if(atApp == nullptr) return;
   // Acted on as the operator scrolls: these are verbs, not a stored preference,
   // and §5 asks for them to be immediate.
-  if(atHfOpt == 0) atApp->operatorListenNow();
-  else             atApp->operatorServeNow();
+  if(atHfOpt == 0)      atApp->operatorListenNow();
+  else if(atHfOpt == 1)  atApp->operatorServeNow();
+  else                   atApp->startSurvey();   // ~30 min; owns the dial
 }
 
 void airtimeSetup()
@@ -261,6 +270,7 @@ void airtimeSetup()
   airtime_esp32::RdsChipOps rdsOps;
   rdsOps.tune = &atTuneFm;
   rdsOps.read = &atRdsRead;
+  rdsOps.rssi = &atRdsRssi;
   atRds.begin(rdsCfg, rdsOps, &atMono);
 
   airtime_esp32::WwvSamplerConfig wwvCfg;   // GPIO11, 1 kHz, 20 ms blocks
@@ -419,6 +429,21 @@ void airtimeScreen(AirTimeScreen *out)
 
   snprintf(clientsBuf, sizeof(clientsBuf), "NTP: %d client%s",
            st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
+
+  // A survey owns the dial for half an hour. Saying so is the difference
+  // between "working" and "broken" from the operator's side.
+  if(atApp->surveying())
+  {
+    const airtime::FmSurvey& sv = atApp->survey();
+    snprintf(netBuf, sizeof(netBuf), "SURVEY %d%%  %ld  (%u found)",
+             sv.progressPct(), (long)sv.wantTuned(),
+             (unsigned)sv.candidateCount());
+    out->clock  = clockBuf; out->local = localBuf; out->zone = zoneBuf;
+    out->status = statusBuf;
+    out->tuned  = tunedBuf; out->clients = clientsBuf; out->net = netBuf;
+    out->synced = st.synced; out->valid = st.clock_valid;
+    return;
+  }
 
   // What is on the air. Only ever shown with a clock we trust — a net schedule
   // read off a wrong clock is worse than no schedule, because it looks right.
