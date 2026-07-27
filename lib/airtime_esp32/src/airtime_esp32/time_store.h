@@ -60,6 +60,22 @@ class NvsTimeStore : public airtime::ITimeStore {
     if (open_) prefs_.putLong64("utc", utc_us);
   }
 
+  // Learned state (station biases, band propagation) as opaque blobs. The
+  // core owns the format and validates everything it reads back — see
+  // learned_state.h — so this stays a dumb pipe.
+  bool loadBlob(const char* key, void* buf, std::size_t cap,
+                std::size_t* out_len) override {
+    if (!open_ || !prefs_.isKey(key)) return false;
+    const std::size_t n = prefs_.getBytes(key, buf, cap);
+    if (n == 0) return false;   // absent, or too big for the caller's buffer
+    if (out_len != nullptr) *out_len = n;
+    return true;
+  }
+
+  void saveBlob(const char* key, const void* buf, std::size_t len) override {
+    if (open_) prefs_.putBytes(key, buf, len);
+  }
+
  private:
   Preferences prefs_;
   bool open_ = false;

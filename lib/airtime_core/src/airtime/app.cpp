@@ -32,6 +32,19 @@ void AirTimeApp::begin() {
       // A memory, not a measurement — restored unsynced (§5).
       arbiter_.restore(now, utc, cfg_.restore_uncertainty_us);
     }
+
+    // What this radio learned about the world around it. Both decoders ignore
+    // anything they cannot fully verify, so a corrupt or older-format blob
+    // costs a relearn rather than a fabricated correction.
+    uint8_t blob[kStationBiasBlobMax > kBandStatsBlobMax ? kStationBiasBlobMax
+                                                        : kBandStatsBlobMax];
+    std::size_t got = 0;
+    if (deps_.store->loadBlob(kBlobStationBias, blob, sizeof(blob), &got)) {
+      decodeStationBias(blob, got, &bias_);
+    }
+    if (deps_.store->loadBlob(kBlobBandStats, blob, sizeof(blob), &got)) {
+      decodeBandStats(blob, got, &sched_);
+    }
   }
 
   sched_.start(now);
@@ -117,6 +130,7 @@ void AirTimeApp::pollRds(int64_t now) {
         (g.mono_us - last_wwv_accept_mono_) <= cfg_.station_bias_learn_window_us &&
         arbiter_.uncertaintyUs(g.mono_us) <= cfg_.station_bias_learn_below_us) {
       bias_.observe(g.a, reference - asserted, g.mono_us);
+      learned_dirty_ = true;
     }
 
     CtReport r;
@@ -191,6 +205,7 @@ void AirTimeApp::pollWwv(int64_t now) {
     // A detection teaches the band table regardless of what the arbiter makes
     // of the implied correction — propagation is real either way.
     sched_.onWwvMarker(m.peak_power);
+    learned_dirty_ = true;
 
     // WWV carries no date (PLAN.md §3): it can only pull an already-roughly-right
     // clock onto the exact minute boundary. It cannot cold-start one — and a
@@ -280,6 +295,19 @@ void AirTimeApp::persist(int64_t now, bool force) {
   last_persist_ = now;
   if (arbiter_.drift().hasEstimate()) deps_.store->saveDriftPpm(arbiter_.ratePpm());
   if (arbiter_.isSet()) deps_.store->saveLastUtc(arbiter_.utcAt(now));
+
+  // Learned state, written only when it has actually changed. Flash endures
+  // ~100k cycles per sector and this runs for years; an unconditional hourly
+  // write of a table that has not moved is wear for nothing.
+  if (learned_dirty_) {
+    uint8_t blob[kStationBiasBlobMax > kBandStatsBlobMax ? kStationBiasBlobMax
+                                                         : kBandStatsBlobMax];
+    std::size_t n = encodeStationBias(bias_, blob, sizeof(blob));
+    if (n > 0) deps_.store->saveBlob(kBlobStationBias, blob, n);
+    n = encodeBandStats(sched_, blob, sizeof(blob));
+    if (n > 0) deps_.store->saveBlob(kBlobBandStats, blob, n);
+    learned_dirty_ = false;
+  }
 }
 
 uint8_t AirTimeApp::recentSourceMask(int64_t now) const {

@@ -383,6 +383,58 @@ AT_TEST(app_does_not_invent_bias_without_wwv) {
   AT_CHECK(!(app.displayState().sources & kSrcWwv));
 }
 
+// What the radio learns must survive being switched off — that is the whole
+// point of learning it. A station's lateness takes hours of WWV windows to
+// establish, and which HF band propagates here is a fact about the location,
+// not about this power-on.
+AT_TEST(app_remembers_what_it_learned_across_a_power_cycle) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.crystal_ppm = -18.0;
+  sim.wwv.propagating_bands = {15000};   // only the high band is open here
+  sim.wwv.chain_delay_us = 25000;
+  FakeStation s1{9110, 0x1001, true, 700000};
+  sim.rds.stations = {s1};
+
+  AppConfig cfg;
+  cfg.wwv_calibration_us = 25000;
+  {
+    AirTimeApp app(sim.deps(), cfg);
+    const int32_t fm[] = {9110};
+    app.setFmStations(fm, 1);
+    app.begin();
+    sim.advance(6 * kHour, &app);
+
+    AT_CHECK(app.stationBias().correction(0x1001) != 0);
+    AT_CHECK(sim.store.blob_saves > 0);
+  }
+
+  // Power cycle: same NVS, brand new everything else.
+  AirTimeApp fresh(sim.deps(), cfg);
+  const int32_t fm[] = {9110};
+  fresh.setFmStations(fm, 1);
+  fresh.begin();
+
+  // The station is trusted from the first group, not after another six hours.
+  AT_CHECK_NEAR((double)fresh.stationBias().correction(0x1001), 700000.0, 120000.0);
+
+  // And the radio knows where to listen: 15 MHz earned it, so the first window
+  // opens there instead of re-hunting 5 MHz.
+  AT_CHECK_EQ(fresh.scheduler().bandStats(fresh.scheduler().preferredBandIndex()).khz,
+              15000);
+}
+
+// A store that has never been written must leave a fresh device exactly as it
+// would have been — no phantom corrections, no phantom band preference.
+AT_TEST(app_starts_clean_when_nothing_is_stored) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  AirTimeApp app(sim.deps());
+  app.begin();
+  AT_CHECK_EQ(app.stationBias().count(), 0u);
+  AT_CHECK_EQ(app.stationBias().correction(0x1001), 0);
+}
+
 // Warm boot after a long power-down — the normal way this device gets used.
 //
 // THE field failure, end to end: switched off for an hour, NVS hands back an

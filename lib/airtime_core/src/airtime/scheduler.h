@@ -94,6 +94,12 @@ class Scheduler {
   // An RDS fix landed (can happen in any phase; RDS never needs WiFi down).
   void onRdsFix(int64_t mono_us);
 
+  // Restore what a previous power-on learned about a band. Matched by
+  // FREQUENCY rather than index, so a build whose band list has been reordered
+  // or extended cannot credit the wrong band. Returns false if this radio does
+  // not currently rotate through that frequency.
+  bool seedBandStats(int32_t khz, int successes, real best_snr);
+
   // Operator overrides from the encoder menu (§5).
   void requestListenNow();
   void requestServeNow();

@@ -22,6 +22,7 @@
 #include "rds_ct.h"
 #include "scheduler.h"
 #include "sntp.h"
+#include "learned_state.h"
 #include "station_bias.h"
 #include "station_vote.h"
 #include "types.h"
@@ -227,6 +228,8 @@ class AirTimeApp {
   int64_t last_wwv_accept_mono_ = 0;
   WwvFixDiag wwv_diag_;
   RdsFixDiag rds_diag_;
+  // Set when the bias table or band stats move; persist() writes only then.
+  bool learned_dirty_ = false;
   bool have_new_ct_ = false;
   int64_t last_rds_submit_ = 0;
   int64_t last_persist_ = 0;

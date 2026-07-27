@@ -14,7 +14,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
+#include <map>
+#include <string>
 #include <vector>
 
 #include "airtime/app.h"
@@ -218,6 +221,26 @@ class FakeStore : public ITimeStore {
     last_utc_us = utc;
     has_utc = true;
     ++utc_saves;
+  }
+
+  // Blobs, kept as plain bytes so a test can power-cycle by handing the same
+  // FakeStore to a fresh AirTimeApp — exactly what NVS does for the device.
+  std::map<std::string, std::vector<uint8_t>> blobs;
+  int blob_saves = 0;
+
+  bool loadBlob(const char* key, void* buf, std::size_t cap,
+                std::size_t* out_len) override {
+    auto it = blobs.find(key);
+    if (it == blobs.end() || it->second.size() > cap) return false;
+    std::memcpy(buf, it->second.data(), it->second.size());
+    if (out_len != nullptr) *out_len = it->second.size();
+    return true;
+  }
+
+  void saveBlob(const char* key, const void* buf, std::size_t len) override {
+    const uint8_t* p = static_cast<const uint8_t*>(buf);
+    blobs[key].assign(p, p + len);
+    ++blob_saves;
   }
 };
 

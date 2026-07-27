@@ -86,6 +86,26 @@ class ITimeStore {
   virtual void saveDriftPpm(double ppm) = 0;
   virtual bool loadLastUtc(int64_t* utc_us) = 0;
   virtual void saveLastUtc(int64_t utc_us) = 0;
+
+  // Named opaque blobs, for the things the device LEARNS: which stations run
+  // how late, which HF band actually propagates here. These arrive as one
+  // generic pair rather than a virtual per fact, so adding the next learned
+  // thing does not force every adapter and fake to grow a method.
+  //
+  // Default to "no storage" so a partial adapter still compiles and simply
+  // relearns from scratch — the same graceful degradation the app already
+  // gives a null store.
+  //
+  // loadBlob returns false when the key is absent; *out_len is the number of
+  // bytes written into buf.
+  virtual bool loadBlob(const char* key, void* buf, std::size_t cap,
+                        std::size_t* out_len) {
+    (void)key; (void)buf; (void)cap; (void)out_len;
+    return false;
+  }
+  virtual void saveBlob(const char* key, const void* buf, std::size_t len) {
+    (void)key; (void)buf; (void)len;
+  }
 };
 
 }  // namespace airtime

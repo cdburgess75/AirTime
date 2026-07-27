@@ -182,6 +182,16 @@ void Scheduler::onWwvFix(int64_t mono_us) {
   }
 }
 
+bool Scheduler::seedBandStats(int32_t khz, int successes, real best_snr) {
+  for (std::size_t i = 0; i < band_count_; ++i) {
+    if (bands_[i].khz != khz) continue;
+    bands_[i].successes = successes;
+    if (best_snr > bands_[i].best_snr) bands_[i].best_snr = best_snr;
+    return true;
+  }
+  return false;
+}
+
 void Scheduler::onRdsFix(int64_t mono_us) {
   (void)mono_us;
   has_fix_ = true;  // acted on at the next tick (§5: serve on first fix)
