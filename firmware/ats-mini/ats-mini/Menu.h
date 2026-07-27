@@ -44,7 +44,12 @@
 #define CMD_USBMODE    0x2D00 // |
 #define CMD_BLEMODE    0x2E00 // |
 #define CMD_WIFIMODE   0x2F00 // |
-#define CMD_ABOUT      0x3000 //-+
+#ifdef AIRTIME
+#define CMD_AT_ZONE    0x3000 // | AirTime: operator time zone
+#define CMD_AT_BAND    0x3100 // | AirTime: WWV band to try first
+#define CMD_AT_HF      0x3200 // | AirTime: listen now / serve now
+#endif
+#define CMD_ABOUT      0x3300 //-+
 
 // UI Layouts
 #define UI_DEFAULT  0
@@ -134,3 +139,12 @@ void doMode(int16_t enc);
 void doBand(int16_t enc);
 
 #endif // MENU_H
+
+#ifdef AIRTIME
+// AirTime settings, implemented in AirTimeMode.cpp. Declared here so Menu.cpp
+// can drive them without taking a dependency on the AirTime library headers —
+// the menu owns the turning and the drawing, AirTime owns the meaning.
+int atZoneCount();  const char *atZoneName(int i);  int atZoneIdx();  void atSetZoneIdx(int i);
+int atBandCount();  const char *atBandName(int i);  int atBandIdx();  void atSetBandIdx(int i);
+int atHfCount();    const char *atHfName(int i);    int atHfIdx();    void atSetHfIdx(int i);
+#endif

@@ -73,6 +73,41 @@ static const size_t kFmStationCount =
 static const int32_t kWwvBands[] = {15000, 10000, 5000};
 static const size_t kWwvBandCount = sizeof(kWwvBands) / sizeof(kWwvBands[0]);
 
+// ── Settings the operator can actually reach ────────────────────────────────
+// Everything below was a compile-time constant until the menu landed, which
+// meant a change of location — or of mind — needed a laptop, a toolchain and a
+// reflash. A field instrument should not require its own build environment.
+//
+// Choices persist in the AirTime NVS namespace rather than ats-mini's settings
+// blob, so this build stays additive to upstream and a stock reflash cannot
+// silently reinterpret bytes it does not know about.
+
+static const airtime::TimeZoneRule* const kZones[] = {
+    &airtime::kZoneEastern, &airtime::kZoneCentral, &airtime::kZoneMountain,
+    &airtime::kZoneArizona, &airtime::kZonePacific, &airtime::kZoneAlaska,
+    &airtime::kZoneHawaii,  &airtime::kZoneUtc,
+};
+static const char* const kZoneNames[] = {
+    "Eastern", "Central", "Mountain", "Arizona",
+    "Pacific", "Alaska",  "Hawaii",   "UTC",
+};
+static const int kZoneCount = sizeof(kZones) / sizeof(kZones[0]);
+static int atZone = 1;   // Central; the owner's QTH, and a sane default
+
+// Which WWV band to try FIRST. "Auto" leaves the learned preference alone,
+// which is the right answer once the radio has heard anything at all; the
+// explicit choices are for a fresh location where waiting out a sweep of dead
+// bands is just lost time.
+static const char* const kBandNames[] = {"Auto", "15 MHz", "10 MHz", "5 MHz"};
+static const int32_t kBandKhz[] = {0, 15000, 10000, 5000};
+static const int kBandOptCount = sizeof(kBandKhz) / sizeof(kBandKhz[0]);
+static int atBandOpt = 0;
+
+// The §5 operator actions. Implemented and tested since Milestone 4 and until
+// now reachable from nothing at all.
+static const char* const kHfNames[] = {"Listen Now", "Serve Now"};
+static int atHfOpt = 0;
+
 // ── Nets worth knowing about ────────────────────────────────────────────────
 // The feature the clock earns: a receiver that knows UTC to milliseconds can
 // answer "is it on NOW", not merely "what frequency is it on".
@@ -140,6 +175,71 @@ static int atRdsRead(uint16_t w[4], uint8_t ble[4], void*)
 
 // ── Hooks called from ats-mini.ino ──────────────────────────────────────────
 
+// ── Menu accessors (declared in Menu.h) ────────────────────────────────────
+// Settings persist as one small blob in AirTime's own NVS namespace. Written
+// on change rather than on a timer: menu edits are rare and an operator who
+// changes zone then pulls the battery should not lose it.
+
+static void atSaveSettings()
+{
+  const uint8_t blob[3] = {1, (uint8_t)atZone, (uint8_t)atBandOpt};  // [version, ...]
+  atStore.saveBlob("cfg", blob, sizeof(blob));
+}
+
+static void atLoadSettings()
+{
+  uint8_t blob[8];
+  size_t n = 0;
+  if(!atStore.loadBlob("cfg", blob, sizeof(blob), &n)) return;
+  if(n < 3 || blob[0] != 1) return;            // unknown format: keep defaults
+  if(blob[1] < kZoneCount)    atZone    = blob[1];
+  if(blob[2] < kBandOptCount) atBandOpt = blob[2];
+}
+
+int atZoneCount() { return kZoneCount; }
+const char *atZoneName(int i) { return (i >= 0 && i < kZoneCount) ? kZoneNames[i] : "?"; }
+int atZoneIdx() { return atZone; }
+void atSetZoneIdx(int i)
+{
+  if(i < 0 || i >= kZoneCount || i == atZone) return;
+  atZone = i;
+  atSaveSettings();
+}
+
+int atBandCount() { return kBandOptCount; }
+const char *atBandName(int i) { return (i >= 0 && i < kBandOptCount) ? kBandNames[i] : "?"; }
+int atBandIdx() { return atBandOpt; }
+void atSetBandIdx(int i)
+{
+  if(i < 0 || i >= kBandOptCount || i == atBandOpt) return;
+  atBandOpt = i;
+  atSaveSettings();
+  // Reorder the rotation so the chosen band is tried first. "Auto" (index 0)
+  // restores the surveyed default and lets the learned preference rule.
+  if(atApp == nullptr) return;
+  if(atBandOpt == 0) { atApp->setWwvBands(kWwvBands, kWwvBandCount); return; }
+  int32_t order[kWwvBandCount];
+  order[0] = kBandKhz[atBandOpt];
+  size_t n = 1;
+  for(size_t k = 0 ; k < kWwvBandCount ; k++)
+    if(kWwvBands[k] != order[0] && n < kWwvBandCount) order[n++] = kWwvBands[k];
+  atApp->setWwvBands(order, n);
+}
+
+int atHfCount() { return (int)(sizeof(kHfNames) / sizeof(kHfNames[0])); }
+const char *atHfName(int i) { return (i >= 0 && i < atHfCount()) ? kHfNames[i] : "?"; }
+int atHfIdx() { return atHfOpt; }
+void atSetHfIdx(int i)
+{
+  if(i < 0 || i >= atHfCount()) return;
+  atHfOpt = i;
+  if(atApp == nullptr) return;
+  // Acted on as the operator scrolls: these are verbs, not a stored preference,
+  // and §5 asks for them to be immediate.
+  if(atHfOpt == 0) atApp->operatorListenNow();
+  else             atApp->operatorServeNow();
+}
+
 void airtimeSetup()
 {
   // Status prints must NEVER block: with no computer attached to USB, HWCDC
@@ -155,6 +255,7 @@ void airtimeSetup()
   WiFi.mode(WIFI_MODE_NULL);
 
   atStore.begin();
+  atLoadSettings();
 
   airtime_esp32::RdsSourceConfig rdsCfg;
   airtime_esp32::RdsChipOps rdsOps;
@@ -201,6 +302,7 @@ void airtimeSetup()
 // photo back from the device showed them as gaps ("250 ms  RDS  sync 26s
 // ago"). Screen strings are therefore built here rather than reused.
 
+
 // The operator's time zone, as a RULE rather than an offset.
 //
 // A fixed label is wrong half the year and a fixed offset is wrong the other
@@ -210,7 +312,7 @@ void airtimeSetup()
 // kZoneEastern / kZoneMountain / kZonePacific / kZoneArizona / kZoneAlaska /
 // kZoneHawaii / kZoneUtc — see airtime/timezone.h, which is host-tested
 // against the real 2026 transition instants.
-static const airtime::TimeZoneRule& kLocalZone = airtime::kZoneCentral;
+#define kLocalZone (*kZones[atZone])
 
 struct AirTimeScreen {
   const char *clock;

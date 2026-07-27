@@ -125,7 +125,14 @@ static const char *menu[] =
 #define MENU_USBMODE      12
 #define MENU_BLEMODE      13
 #define MENU_WIFIMODE     14
-#define MENU_ABOUT        15
+#ifdef AIRTIME
+#define MENU_AT_ZONE     15
+#define MENU_AT_BAND     16
+#define MENU_AT_HF       17
+#define MENU_ABOUT       18
+#else
+#define MENU_ABOUT       15
+#endif
 
 
 int8_t settingsIdx = MENU_BRIGHTNESS;
@@ -147,6 +154,14 @@ static const char *settings[] =
   "USB Port",
   "Bluetooth",
   "Wi-Fi",
+#ifdef AIRTIME
+  // AirTime's own settings. These were compile-time constants until now, which
+  // meant a change of location or a change of mind needed a laptop, a
+  // toolchain and a reflash — the opposite of a field instrument.
+  "Time Zone",
+  "WWV Band",
+  "HF Listen",
+#endif
   "About",
 };
 
@@ -906,6 +921,16 @@ static void doSettings(int16_t enc)
   settingsIdx = wrap_range(settingsIdx, enc, 0, LAST_ITEM(settings));
 }
 
+#ifdef AIRTIME
+// AirTime menu items. Each is a plain list: the AirTime side owns the data and
+// the meaning, this side owns only the turning and the drawing — which is why
+// one renderer serves all three.
+static void doAtZone(int16_t enc) { atSetZoneIdx(wrap_range(atZoneIdx(), enc, 0, atZoneCount() - 1)); }
+static void doAtBand(int16_t enc) { atSetBandIdx(wrap_range(atBandIdx(), enc, 0, atBandCount() - 1)); }
+static void doAtHf(int16_t enc)   { atSetHfIdx(wrap_range(atHfIdx(), enc, 0, atHfCount() - 1)); }
+
+#endif
+
 static void clickSettings(int cmd, bool shortPress)
 {
   // No command yet
@@ -928,6 +953,11 @@ static void clickSettings(int cmd, bool shortPress)
     case MENU_USBMODE:    currentCmd = CMD_USBMODE;    break;
     case MENU_BLEMODE:    currentCmd = CMD_BLEMODE;    break;
     case MENU_WIFIMODE:   currentCmd = CMD_WIFIMODE;   break;
+#ifdef AIRTIME
+    case MENU_AT_ZONE:    currentCmd = CMD_AT_ZONE;    break;
+    case MENU_AT_BAND:    currentCmd = CMD_AT_BAND;    break;
+    case MENU_AT_HF:      currentCmd = CMD_AT_HF;      break;
+#endif
     case MENU_FM_REGION:
       // Only in FM mode
       if(currentMode==FM) currentCmd = CMD_FM_REGION;
@@ -973,6 +1003,11 @@ bool doSideBar(uint16_t cmd, int16_t enc, int16_t enca)
     case CMD_ZOOM:       doZoom(enc);break;
     case CMD_SCROLL:     doScrollDir(enc);break;
     case CMD_UTCOFFSET:  doUTCOffset(scrollDirection * enc);break;
+#ifdef AIRTIME
+    case CMD_AT_ZONE:    doAtZone(scrollDirection * enc);break;
+    case CMD_AT_BAND:    doAtBand(scrollDirection * enc);break;
+    case CMD_AT_HF:      doAtHf(scrollDirection * enc);break;
+#endif
     case CMD_SQUELCH:    doSquelch(enca);break;
     case CMD_ABOUT:      doAbout(enc);break;
     default:             return(false);
@@ -1698,12 +1733,40 @@ static void drawInfo(int x, int y, int sx)
 //
 // Draw side bar (menu or information)
 //
+#ifdef AIRTIME
+static void drawAtList(int title, int count, int idx, const char *(*name)(int),
+                       int x, int y, int sx)
+{
+  drawCommon(settings[title], x, y, sx, true);
+  if(count <= 0) return;
+
+  for(int i=-2 ; i<3 ; i++)
+  {
+    if(count < 5 && ((idx+i) < 0 || (idx+i) >= count)) continue;
+    const int j = abs((idx + count + i) % count);
+    if(i==0) {
+      drawZoomedMenu(name(j));
+      spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
+    } else {
+      spr.setTextColor(TH.menu_item);
+    }
+    spr.setTextDatum(MC_DATUM);
+    spr.drawString(name(j), 40+x+(sx/2), 64+y+(i*16), 2);
+  }
+}
+#endif
+
 void drawSideBar(uint16_t cmd, int x, int y, int sx)
 {
   if(sleepOn()) return;
 
   switch(cmd)
   {
+#ifdef AIRTIME
+    case CMD_AT_ZONE:    drawAtList(MENU_AT_ZONE, atZoneCount(), atZoneIdx(), atZoneName, x, y, sx); break;
+    case CMD_AT_BAND:    drawAtList(MENU_AT_BAND, atBandCount(), atBandIdx(), atBandName, x, y, sx); break;
+    case CMD_AT_HF:      drawAtList(MENU_AT_HF,   atHfCount(),   atHfIdx(),   atHfName,   x, y, sx); break;
+#endif
     case CMD_MENU:       drawMenu(x, y, sx);       break;
     case CMD_SETTINGS:   drawSettings(x, y, sx);   break;
     case CMD_MODE:       drawMode(x, y, sx);       break;
