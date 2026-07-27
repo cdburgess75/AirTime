@@ -113,6 +113,10 @@ bool doSideBar(uint16_t cmd, int16_t enc, int16_t enca);
 void doSelectDigit(int16_t enc);
 bool clickHandler(uint16_t cmd, bool shortPress);
 void selectBand(uint8_t idx, bool drawLoadingSSB = true);
+// Tune to an arbitrary frequency/mode/band triple. False if the triple does not
+// describe a reachable dial position. (Defined in Menu.cpp; declared here so
+// AirTime's net list can use the same path the memory slots do.)
+bool tuneToMemory(const Memory *memory);
 int getTotalBands();
 int getTotalModes();
 int getTotalMemories();
@@ -152,5 +156,8 @@ int atHfCount();    const char *atHfName(int i);    int atHfIdx();    void atSet
 int atModeCount();  const char *atModeName(int i);  int atModeIdx();  void atSetModeIdx(int i);
 const char *atNetDetail();
 int atNetCount();   const char *atNetName(int i);   int atNetIdx();   void atSetNetIdx(int i);
+// Tune the receiver to a net, taking the dial from AirTime to do it.
+// False if the net's frequency falls outside every band in bands[].
+bool atTuneNet(int i);
 bool airtimeRadioMode();
 #endif

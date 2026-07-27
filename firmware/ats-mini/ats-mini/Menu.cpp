@@ -1040,6 +1040,18 @@ static void doAtHf(int16_t enc)   { atSetHfIdx(wrap_range(atHfIdx(), enc, 0, atH
 static void doAtMode(int16_t enc) { atSetModeIdx(wrap_range(atModeIdx(), enc, 0, atModeCount() - 1)); }
 static void doAtNets(int16_t enc) { atSetNetIdx(wrap_range(atNetIdx(), enc, 0, atNetCount() - 1)); }
 
+// Nets is the one AirTime list where scrolling is not the whole interaction.
+// The others are settings -- turning the encoder IS the change -- but a net is
+// a place to go, so it needs a click to mean something. Without this the list
+// scrolled, showed "14300 kHz ON AIR NOW", and did precisely nothing when
+// chosen: clickHandler() fell through to its default, which closes the menu.
+static void clickAtNets(int idx, bool shortPress)
+{
+  (void)shortPress;        // either press means "take me there"
+  atTuneNet(idx);
+  currentCmd = CMD_NONE;   // out of the way; the operator wants the radio now
+}
+
 #endif
 
 static void clickSettings(int cmd, bool shortPress)
@@ -1175,6 +1187,9 @@ bool clickHandler(uint16_t cmd, bool shortPress)
   {
     case CMD_MENU:     clickMenu(menuIdx, shortPress);break;
     case CMD_SETTINGS: clickSettings(settingsIdx, shortPress);break;
+#ifdef AIRTIME
+    case CMD_AT_NETS:  clickAtNets(atNetIdx(), shortPress);break;
+#endif
     case CMD_MEMORY:   clickMemory(memoryIdx, shortPress);break;
     case CMD_BLEMODE:  clickBleMode(bleModeIdx, shortPress);break;
     case CMD_WIFIMODE: clickWiFiMode(wifiModeIdx, shortPress);break;

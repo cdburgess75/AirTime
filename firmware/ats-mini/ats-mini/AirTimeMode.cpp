@@ -303,6 +303,23 @@ int atNetCount() { return (int)kNetCount; }
 int atNetIdx() { return atNetSel; }
 void atSetNetIdx(int i) { if(i >= 0 && i < (int)kNetCount) atNetSel = i; }
 
+// Take the dial, without tuning it.
+//
+// Splitting this out of atSetModeIdx() is what lets a net be tuned in one move
+// instead of two: entering operator mode and then retuning would run the whole
+// band-select sequence twice, and on an SSB band each pass reloads the patch —
+// a second of "Loading SSB" apiece.
+static void atEnterRadioMode()
+{
+  atModeOpt = 1;
+  if(atApp != nullptr) atApp->setRadioMode(true);
+
+  // ssbLoaded is a cached claim about the chip, and AirTime has been calling
+  // setFM/setAM behind its back all along, so the flag cannot be trusted.
+  // Clearing it forces the next selectBand() to do a genuine reload.
+  unloadSSB();
+}
+
 int atModeCount() { return (int)(sizeof(kModeNames) / sizeof(kModeNames[0])); }
 const char *atModeName(int i) { return (i >= 0 && i < atModeCount()) ? kModeNames[i] : "?"; }
 int atModeIdx() { return atModeOpt; }
@@ -310,28 +327,100 @@ bool airtimeRadioMode() { return atApp != nullptr && atApp->radioMode(); }
 void atSetModeIdx(int i)
 {
   if(i < 0 || i >= atModeCount() || i == atModeOpt) return;
-  atModeOpt = i;
-  if(atApp == nullptr) return;
-  atApp->setRadioMode(atModeOpt == 1);
-  if(atModeOpt == 1)
+  if(atApp == nullptr) { atModeOpt = i; return; }
+
+  if(i != 1)
   {
-    // Hand the dial back properly, and that means the WHOLE stock sequence.
-    //
-    // useBand() alone is not enough and the failure is silent: for an SSB band
-    // it calls rx.setSSB(), which does nothing useful unless the SSB patch has
-    // been loaded into the SI4735 first. Observed on the device — the display
-    // read "41M USB 7200.000" while the speaker kept playing the FM station
-    // AirTime had been harvesting. The readout was honest about intent and
-    // wrong about reality, which is the exact failure this screen exists to
-    // prevent.
-    //
-    // unloadSSB() first because ssbLoaded is a cached claim about the chip,
-    // and AirTime has been calling setFM/setAM behind its back all along, so
-    // the flag cannot be trusted. Clearing it forces a genuine reload.
-    unloadSSB();
-    selectBand(bandIdx);   // loadSSB if needed -> useBand -> setBandwidth
-    rx.setVolume(volume);
+    atModeOpt = i;
+    atApp->setRadioMode(false);
+    return;
   }
+
+  // Hand the dial back properly, and that means the WHOLE stock sequence.
+  //
+  // useBand() alone is not enough and the failure is silent: for an SSB band it
+  // calls rx.setSSB(), which does nothing useful unless the SSB patch has been
+  // loaded into the SI4735 first. Observed on the device — the display read
+  // "41M USB 7200.000" while the speaker kept playing the FM station AirTime
+  // had been harvesting. The readout was honest about intent and wrong about
+  // reality, which is the exact failure this screen exists to prevent.
+  atEnterRadioMode();
+  selectBand(bandIdx);   // loadSSB if needed -> useBand -> setBandwidth
+  rx.setVolume(volume);
+}
+
+// ── Tuning a net ────────────────────────────────────────────────────────────
+
+// The chip has no CW demodulator, so CW is received as SSB and the operator
+// hears the beat note. USB by convention: the sideband a CW signal is tuned in
+// is a choice, and USB is what the digital-mode world uses on every band.
+static uint8_t atChipMode(airtime::NetMode m)
+{
+  switch(m)
+  {
+    case airtime::NetMode::Lsb: return LSB;
+    case airtime::NetMode::Usb: return USB;
+    case airtime::NetMode::Cw:  return USB;
+    case airtime::NetMode::Fm:  return FM;
+    default:                    return AM;
+  }
+}
+
+// Which entry of bands[] should hold this dial frequency. -1 if none can, which
+// is a table error rather than an operator error.
+//
+// NARROWEST wins, and that is the whole point of the function. bands[] overlaps
+// heavily -- 7047 kHz sits inside "ALL" (150-30000), "41M" (7000-9000) and
+// "40M" (7000-7300) -- and first-match returns "ALL" for every net in the
+// table. That is not merely the wrong label: tuneToMemory() writes the mode
+// into the band it lands on, so selecting one CW net would leave the operator's
+// general-coverage band stuck in USB forever. The tightest band containing a
+// frequency is the one someone drew around it on purpose.
+static int atBandForKhz(int32_t khz, uint8_t mode)
+{
+  const bool want_fm = (mode == FM);
+  int best = -1;
+  int32_t best_span = 0;
+
+  for(int i = 0; i < getTotalBands(); i++)
+  {
+    // isMemoryInBand() gates on bandMode, so match its rule exactly or
+    // tuneToMemory() will refuse what this function just promised.
+    const bool is_fm = (bands[i].bandType == FM_BAND_TYPE) || (bands[i].bandMode == FM);
+    if(is_fm != want_fm) continue;
+    if(khz < bands[i].minimumFreq || khz > bands[i].maximumFreq) continue;
+
+    const int32_t span = (int32_t)bands[i].maximumFreq - (int32_t)bands[i].minimumFreq;
+    // Ties go to a band already in the wanted mode, so a net does not disturb
+    // the operator's settings when an equally good band would not have to.
+    const bool better = (best < 0) || (span < best_span) ||
+                        (span == best_span && bands[i].bandMode == mode);
+    if(better) { best = i; best_span = span; }
+  }
+  return best;
+}
+
+bool atTuneNet(int i)
+{
+  if(i < 0 || (size_t)i >= kNetCount) return false;
+  const airtime::HamNet& n = kNets[i];
+
+  const uint8_t mode = atChipMode(n.mode);
+  const int band = atBandForKhz(n.khz, mode);
+  if(band < 0) return false;
+
+  // Operator mode FIRST. Tuning while AirTime still owns the dial would work
+  // for a few seconds and then be undone without a word: the scheduler retunes
+  // to an FM station on its own timetable, and the operator would be left
+  // listening to music on a screen that said 14300.
+  atEnterRadioMode();
+
+  Memory m;
+  memset(&m, 0, sizeof(m));
+  m.freq = (uint32_t)n.khz * 1000;
+  m.band = (uint8_t)band;
+  m.mode = mode;
+  return tuneToMemory(&m);
 }
 
 int atHfCount() { return (int)(sizeof(kHfNames) / sizeof(kHfNames[0])); }
