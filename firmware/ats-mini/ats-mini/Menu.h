@@ -156,6 +156,28 @@ int atHfCount();    const char *atHfName(int i);    int atHfIdx();    void atSet
 int atModeCount();  const char *atModeName(int i);  int atModeIdx();  void atSetModeIdx(int i);
 const char *atNetDetail();
 int atNetCount();   const char *atNetName(int i);   int atNetIdx();   void atSetNetIdx(int i);
+
+// The app's state, pre-formatted for a screen. Both the TFT layout and the web
+// status page render from this, so the two can never disagree about what the
+// radio is doing — the phone in your hand and the panel on the bench are
+// reading the same sentence.
+struct AirTimeScreen {
+  const char *clock;    // "23:31:26", or "--:--:--" before any fix
+  const char *local;    // same instant in the operator's zone
+  const char *zone;     // "CDT"
+  const char *status;   // "+/-250 ms   RDS   sync 26s ago"
+  const char *tuned;    // "FM 89.9 MHz" / "WWV 15000 kHz  LISTENING"
+  const char *clients;  // "NTP: 2 clients"
+  const char *net;      // what is on the air, or ""
+  bool synced;          // false => clock drawn in the warning colour
+  bool valid;           // false => no time at all yet
+};
+void airtimeScreen(AirTimeScreen *out);
+
+// The status page on the device's own access point. Starts and stops with the
+// AP, so it is up exactly when WiFi is — which is exactly when the WWV sampler
+// is not (PLAN.md §2).
+void airtimeWebService(bool wifi_up);
 // Tune the receiver to a net, taking the dial from AirTime to do it.
 // False if the net's frequency falls outside every band in bands[].
 bool atTuneNet(int i);

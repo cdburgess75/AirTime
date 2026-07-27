@@ -581,18 +581,18 @@ void airtimeSetup()
 // against the real 2026 transition instants.
 #define kLocalZone (*kZones[atZone])
 
-struct AirTimeScreen {
-  const char *clock;
-  const char *local;
-  const char *zone;
-  const char *status;
-  const char *tuned;
-  const char *clients;
-  const char *net;      // "NOW: Maritime Mobile 14300" / "Next: ... in 2h10"
-  bool synced;
-  bool valid;
-};
+// ── What the status page needs ──────────────────────────────────────────────
+// The adapters and the app are statics in this file. Rather than make them
+// globals so one page can read them, hand out exactly what it asks for.
+const airtime::AirTimeApp *airtimeApp() { return atApp; }
+uint32_t airtimeRdsAccepted()  { return atRds.groupsAccepted(); }
+uint32_t airtimeRdsRejected()  { return atRds.groupsRejected(); }
+uint32_t airtimeApFailures()   { return atWifi.upFailures(); }
+uint32_t airtimeNtpServed()    { return atWifi.requestsServed(); }
+int32_t  airtimeRdsTunedKhz()  { return atRds.tunedKhz(); }
 
+// AirTimeScreen is declared in Menu.h — the TFT layout and the web status page
+// both render from it.
 void airtimeScreen(AirTimeScreen *out)
 {
   // Static: the layout holds these pointers only for the length of one draw,
@@ -747,6 +747,13 @@ void airtimeLoop()
 
   atApp->loop();
   atWifi.service(*atApp);
+
+  // The status page, after NTP and never before it. A client that opens a
+  // socket and then says nothing can stall handleClient(); serving time is the
+  // job and looking at diagnostics is not, so time goes first. (Nothing here
+  // can disturb a WWV measurement: the AP is only ever up while the sampler is
+  // stopped — PLAN.md §2.)
+  airtimeWebService(atWifi.isUp());
 
   // The IO11 tap level follows the DSP volume, so a listen window has to hold
   // the level Milestone 0 calibrated — and then give the user their volume

@@ -28,19 +28,8 @@
 #include "Menu.h"
 #include "Utils.h"
 
-// Supplied by AirTimeMode.cpp — the app's state, pre-formatted for this screen.
-struct AirTimeScreen {
-  const char *clock;    // "23:31:26", or "--:--:--" before any fix
-  const char *local;    // same instant in the operator's zone
-  const char *zone;     // "CDT" — see kLocalZoneLabel in AirTimeMode.cpp
-  const char *status;   // "+/-250 ms   RDS   sync 26s ago"
-  const char *tuned;    // "FM 89.9 MHz" / "WWV 15000 kHz  LISTENING"
-  const char *clients;  // "NTP: 2 clients"
-  const char *net;      // what is on the air, or "" 
-  bool synced;          // false => clock drawn in the warning colour
-  bool valid;           // false => no time at all yet
-};
-extern void airtimeScreen(AirTimeScreen *out);
+// AirTimeScreen and airtimeScreen() live in Menu.h — the web status page
+// renders from the same struct, so the panel and the phone cannot disagree.
 
 void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
 {
