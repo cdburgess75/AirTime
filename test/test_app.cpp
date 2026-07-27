@@ -698,6 +698,72 @@ AT_TEST(app_radio_mode_stops_tuning_but_keeps_serving) {
   AT_CHECK(sim.rds.tune_count > tunes_before);
 }
 
+// Leaving operator mode has to assume the worst about the dial.
+//
+// While the mode is on, the human tunes the chip by hand and AirTime does not
+// watch. Both retune paths short-circuit on a cached value — the WWV path skips
+// tuneKhz() when the wanted band already matches, the FM path waits for a dwell
+// timer — so both would happily go on describing a frequency the radio left
+// long ago. The operator parks on 40 m; the log keeps saying 15000.
+//
+// This is the single-tuner class of bug (PLAN.md §2) in its quietest form: no
+// conflict, no error, just a receiver pointed somewhere else than the software
+// believes, which shows up only as a listen window that hears nothing.
+AT_TEST(app_radio_mode_exit_retunes_from_wherever_the_operator_left_it) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  // One propagating band and one station, so neither recovery path can happen
+  // by accident: the scheduler will want the SAME band next window (which is
+  // what makes the equality test skip the retune), and with a single station
+  // there is no dwell rotation to re-tune the FM side behind our back.
+  sim.wwv.propagating_bands = {15000};
+  FakeStation a{9110, 0x1001, true, 0};
+  sim.rds.stations = {a};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  // Four hours, because the trap needs the scheduler to have SETTLED. While it
+  // is still hunting, every window opens on a different band and retunes on the
+  // way in, which hides the bug. Once 15 MHz has proved itself the sampler stops
+  // being retuned at all -- the wanted band equals the believed band, window
+  // after window -- and that is precisely when a stale belief becomes permanent.
+  sim.advance(4 * kHour, &app);
+  AT_CHECK(app.arbiter().isSet());
+  const int32_t band_before = sim.wwv.tunedKhz();
+  AT_CHECK_EQ(band_before, 15000);
+
+  const int settled_tunes = sim.wwv.tune_count;
+  sim.advance(1 * kHour, &app);
+  AT_CHECK_EQ(sim.wwv.tune_count, settled_tunes);   // settled: no retunes at all
+
+  // The operator takes the dial and parks it on 40 m, which is what the
+  // firmware's selectBand() does to the chip underneath both adapters.
+  app.setRadioMode(true);
+  sim.advance(20 * kMin, &app);
+  sim.rds.tuneKhz(7200);
+  sim.wwv.tuneKhz(7200);
+  const int rds_tunes = sim.rds.tune_count;
+  const int wwv_tunes = sim.wwv.tune_count;
+
+  // Handing the dial back must put the FM station back immediately -- not at
+  // the next dwell rotation, which with one station never comes.
+  app.setRadioMode(false);
+  app.loop();
+  AT_CHECK_EQ(sim.rds.tune_count, rds_tunes + 1);
+  AT_CHECK_EQ(sim.rds.tunedKhz(), 9110);
+
+  // ...and the next listen window must retune WWV even though the band it
+  // wants is the very one it last asked for. That equality is exactly what made
+  // this invisible: same band, so "already there", so no retune -- and the
+  // window opens on 7200 kHz and hears nothing, forever.
+  sim.advance(90 * kMin, &app);
+  AT_CHECK(sim.wwv.tune_count > wwv_tunes);
+  AT_CHECK_EQ(sim.wwv.tunedKhz(), band_before);
+}
+
 // The §2 invariant must hold in operator mode too — it is the one rule that
 // can damage a measurement rather than merely annoy the operator.
 AT_TEST(app_radio_mode_never_breaks_the_adc_rule) {

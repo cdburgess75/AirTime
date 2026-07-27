@@ -226,6 +226,22 @@ flashing always happens from the Mac). `tools/build_fw.sh` sets `sketch.yaml` as
 during container builds because a present `default_profile` re-resolves dependencies
 from the blocked URLs even when `--fqbn` is given.
 
+**If `arduino-cli: command not found` after a container is reclaimed:** only the
+binary is lost. `~/.arduino15` (platform + index) and `~/Arduino/libraries` are on
+persistent storage and survive, so there is nothing to re-download but the ~17 MB
+executable itself — and the upstream `install.sh` cannot fetch it here, because it
+resolves through `downloads.arduino.cc`. Take it from GitHub directly:
+
+```sh
+curl -sSL -o /tmp/acli.tgz \
+  https://github.com/arduino/arduino-cli/releases/download/v1.2.2/arduino-cli_1.2.2_Linux_64bit.tar.gz
+tar -xzf /tmp/acli.tgz -C /tmp arduino-cli
+install -m755 /tmp/arduino-cli /usr/local/bin/arduino-cli
+```
+
+`/usr/local/bin` rather than `~/bin` — the latter is not on the persistent volume,
+which is how the binary went missing in the first place.
+
 ## Uncertainty-weighted steering — IMPLEMENTED, with a caveat
 
 `TimeFix.uncertainty_us` now weights how far an accepted correction steers the clock:

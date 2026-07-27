@@ -184,7 +184,12 @@ class AirTimeApp {
   // around, so there are no listen windows to coast through.
   //
   // Never persisted: every power-on comes up as a clock (see begin()).
-  void setRadioMode(bool on) { radio_mode_ = on; }
+  //
+  // Leaving the mode is the interesting direction, and it is why this is not a
+  // one-line setter: for however long the operator had the dial, every cached
+  // belief about where the chip is pointing has been going stale behind our
+  // back. See the definition.
+  void setRadioMode(bool on);
   bool radioMode() const { return radio_mode_; }
 
   void startSurvey();

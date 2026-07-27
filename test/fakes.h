@@ -136,7 +136,9 @@ class FakeWwvSampler : public IWwvSampler {
   real noise_power = 7.7e-5f;
   std::vector<int32_t> propagating_bands;  // empty => nothing is heard
 
-  void tuneKhz(int32_t khz) override { tuned_ = khz; }
+  int tune_count = 0;  // as with FakeRdsSource: retunes are observable
+
+  void tuneKhz(int32_t khz) override { tuned_ = khz; ++tune_count; }
   void start() override { running_ = true; }
   void stop() override { running_ = false; }
   bool isRunning() const override { return running_; }

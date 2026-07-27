@@ -116,6 +116,32 @@ void AirTimeApp::adoptSurveyResult() {
   persist(deps_.clock->nowUs(), /*force=*/true);
 }
 
+void AirTimeApp::setRadioMode(bool on) {
+  if (on == radio_mode_) return;
+  radio_mode_ = on;
+  if (on) return;
+
+  // Coming back from operator mode. While it was on, the human owned the dial
+  // and this object did not watch — so `tuned_wwv_khz_` and the RDS source's
+  // idea of the current station are now claims about a chip that has since been
+  // tuned somewhere else entirely, by hand.
+  //
+  // Both cached values are used to SKIP work. applyDirective() only calls
+  // wwv->tuneKhz() when the wanted band differs from tuned_wwv_khz_, so an
+  // operator who left the radio on 40 m and switched back to Clock would have
+  // the next listen window open on 7200 kHz while every log line said 15000 —
+  // and the FM side would not correct itself until the dwell timer rotated
+  // stations, which needs more than one station and several minutes.
+  //
+  // So forget both. Zero can never equal a real band, which forces the retune
+  // and the marker reset with it; the FM station is re-tuned right here.
+  tuned_wwv_khz_ = 0;
+  if (station_count_ > 0) {
+    deps_.rds->tuneKhz(stations_[station_idx_]);
+    fm_dwell_start_ = deps_.clock->nowUs();
+  }
+}
+
 Directive AirTimeApp::effectiveDirective(Directive d) const {
   // Operator mode: the dial belongs to the human. Nothing here may retune, so
   // the scheduler's listening plans are simply overruled — and with no ADC

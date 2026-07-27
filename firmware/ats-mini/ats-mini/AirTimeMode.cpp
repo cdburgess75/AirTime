@@ -38,6 +38,7 @@
 #ifdef AIRTIME
 
 #include "Common.h"
+#include "Utils.h"  // loadSSB/unloadSSB — the SSB patch state the chip needs
 #include "Menu.h"   // getCurrentUTCOffset(), utcOffsets[] — the device's own
                     // timezone setting, so local time is adjustable in the field
 
@@ -314,11 +315,21 @@ void atSetModeIdx(int i)
   atApp->setRadioMode(atModeOpt == 1);
   if(atModeOpt == 1)
   {
-    // Hand the dial back honestly. AirTime has been retuning the chip all
-    // along, so the stock UI's idea of the frequency is stale; useBand() puts
-    // the radio where the operator last left it and makes the readout true
-    // again. Volume too — a listen window may have left the calibrated level.
-    useBand(getCurrentBand());
+    // Hand the dial back properly, and that means the WHOLE stock sequence.
+    //
+    // useBand() alone is not enough and the failure is silent: for an SSB band
+    // it calls rx.setSSB(), which does nothing useful unless the SSB patch has
+    // been loaded into the SI4735 first. Observed on the device — the display
+    // read "41M USB 7200.000" while the speaker kept playing the FM station
+    // AirTime had been harvesting. The readout was honest about intent and
+    // wrong about reality, which is the exact failure this screen exists to
+    // prevent.
+    //
+    // unloadSSB() first because ssbLoaded is a cached claim about the chip,
+    // and AirTime has been calling setFM/setAM behind its back all along, so
+    // the flag cannot be trusted. Clearing it forces a genuine reload.
+    unloadSSB();
+    selectBand(bandIdx);   // loadSSB if needed -> useBand -> setBandwidth
     rx.setVolume(volume);
   }
 }
