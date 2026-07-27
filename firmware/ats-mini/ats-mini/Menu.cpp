@@ -73,19 +73,6 @@ Band *getCurrentBand() { return(&bands[bandIdx]); }
 // Main Menu
 //
 
-#ifdef AIRTIME
-// The root menu carries only what this device is FOR. Everything that tunes a
-// receiver is still present and unchanged -- it has simply moved under
-// Settings, where configuration belongs. A clock appliance whose front page is
-// twelve radio controls is a radio with a clock bolted on.
-// Volume leads, and is where the menu opens on a cold boot. It is the one
-// control an operator reaches for without planning to, and burying it under
-// Settings made the most-used knob the deepest one.
-#define MENU_VOLUME       0
-#define MENU_MODE_AT      1
-#define MENU_NETS         2
-#define MENU_SETTINGS     3
-#else
 #define MENU_MODE         0
 #define MENU_BAND         1
 #define MENU_VOLUME       2
@@ -99,21 +86,18 @@ Band *getCurrentBand() { return(&bands[bandIdx]); }
 #define MENU_AVC         10
 #define MENU_SOFTMUTE    11
 #define MENU_SETTINGS    12
-#endif
 
 #ifdef AIRTIME
-int8_t menuIdx = MENU_VOLUME;
+// Cursor into atRootMenu (below): 0 is Volume — the one control an operator
+// reaches for without planning to, and where the menu opens on a cold boot.
+// Never persisted.
+int8_t menuIdx = 0;
 #else
 int8_t menuIdx = MENU_VOLUME;
 #endif
 
 static const char *menu[] =
 {
-#ifdef AIRTIME
-  "Volume",
-  "Mode",
-  "Nets",
-#else
   "Mode",
   "Band",
   "Volume",
@@ -126,16 +110,15 @@ static const char *menu[] =
   "AGC/ATTN",
   "AVC",
   "SoftMute",
-#endif
   "Settings",
 };
 
-// The index defines above and this array are two halves of one thing, and
-// nothing in C makes them agree. They already disagreed once: a patch that
-// looked for "Soft Mute" found "SoftMute", so the defines moved and the array
-// did not. MENU_MODE_AT then pointed at "Settings", and choosing Settings
-// opened the Clock/Radio list -- a bug that compiled, ran, and simply lied
-// about where things were. Make the mismatch a build error instead.
+// This array and the MENU_* indices are two halves of one thing, and nothing
+// in C makes them agree. They disagreed once — a patch that looked for
+// "Soft Mute" found "SoftMute", the defines moved and the array did not, and
+// the result compiled, ran, and lied about where things were. Keep the
+// mismatch a build error. (In the AirTime build this pair is only a table of
+// panel-title strings; the menus themselves are tables further down.)
 static_assert(ITEM_COUNT(menu) == MENU_SETTINGS + 1,
               "menu[] and the MENU_* indices disagree");
 
@@ -143,80 +126,33 @@ static_assert(ITEM_COUNT(menu) == MENU_SETTINGS + 1,
 // Settings Menu
 //
 
-#ifdef AIRTIME
-// Relocated from the root menu. Same commands, same handlers, same order --
-// only the door they are behind has changed.
-#define MENU_MODE         0
-#define MENU_BAND         1
-#define MENU_STEP         2
-#define MENU_SEEK         3
-#define MENU_SCAN         4
-#define MENU_MEMORY       5
-#define MENU_SQUELCH      6
-#define MENU_BW           7
-#define MENU_AGC_ATT      8
-#define MENU_AVC          9
-#define MENU_SOFTMUTE    10
-#define MENU_BRIGHTNESS  11
-#define AT_SETTINGS_BASE 11
-#else
 #define MENU_BRIGHTNESS   0
-#define AT_SETTINGS_BASE  0
-#endif
-// Every one of these is offset by AT_SETTINGS_BASE, which is zero in the stock
-// build and twelve in AirTime's -- where the twelve relocated radio controls sit
-// ahead of them in settings[]. Leaving the raw literals here is not a cosmetic
-// slip: MENU_CALIBRATION(1) would collide with MENU_BAND(1), MENU_RDS(2) with
-// MENU_VOLUME(2), and so on down the list, which the compiler catches only
-// because clickSettings() switches on them (duplicate case value).
-#define MENU_CALIBRATION (AT_SETTINGS_BASE + 1)
-#define MENU_RDS         (AT_SETTINGS_BASE + 2)
-#define MENU_UTCOFFSET   (AT_SETTINGS_BASE + 3)
-#define MENU_FM_REGION   (AT_SETTINGS_BASE + 4)
-#define MENU_THEME       (AT_SETTINGS_BASE + 5)
-#define MENU_UI          (AT_SETTINGS_BASE + 6)
-#define MENU_ZOOM        (AT_SETTINGS_BASE + 7)
-#define MENU_SCROLL      (AT_SETTINGS_BASE + 8)
-#define MENU_SLEEP       (AT_SETTINGS_BASE + 9)
-#define MENU_SLEEPMODE   (AT_SETTINGS_BASE + 10)
-#define MENU_LOADEIBI    (AT_SETTINGS_BASE + 11)
-#define MENU_USBMODE     (AT_SETTINGS_BASE + 12)
-#define MENU_BLEMODE     (AT_SETTINGS_BASE + 13)
-#define MENU_WIFIMODE    (AT_SETTINGS_BASE + 14)
-#ifdef AIRTIME
-#define MENU_AT_ZONE     (AT_SETTINGS_BASE + 15)
-#define MENU_AT_BAND     (AT_SETTINGS_BASE + 16)
-#define MENU_AT_HF       (AT_SETTINGS_BASE + 17)
-#define MENU_ABOUT       (AT_SETTINGS_BASE + 18)
-#else
-#define MENU_ABOUT       (AT_SETTINGS_BASE + 15)
-#endif
-
+#define MENU_CALIBRATION  1
+#define MENU_RDS          2
+#define MENU_UTCOFFSET    3
+#define MENU_FM_REGION    4
+#define MENU_THEME        5
+#define MENU_UI           6
+#define MENU_ZOOM         7
+#define MENU_SCROLL       8
+#define MENU_SLEEP        9
+#define MENU_SLEEPMODE   10
+#define MENU_LOADEIBI    11
+#define MENU_USBMODE     12
+#define MENU_BLEMODE     13
+#define MENU_WIFIMODE    14
+#define MENU_ABOUT       15
 
 #ifdef AIRTIME
-// Top of the list, which is now the relocated radio controls. Leaving this at
-// Brightness would open Settings twelve items in, below everything that moved
-// here -- reachable only by scrolling backwards past the end.
-int8_t settingsIdx = MENU_MODE;
+// Cursor into atSettingsMenu (below): 0 is Mode, the top of the relocated
+// radio block.
+int8_t settingsIdx = 0;
 #else
 int8_t settingsIdx = MENU_BRIGHTNESS;
 #endif
 
 static const char *settings[] =
 {
-#ifdef AIRTIME
-  "Mode",
-  "Band",
-  "Step",
-  "Seek",
-  "Scan",
-  "Memory",
-  "Squelch",
-  "Bandwidth",
-  "AGC/ATTN",
-  "AVC",
-  "SoftMute",
-#endif
   "Brightness",
   "Calibration",
   "RDS",
@@ -232,41 +168,123 @@ static const char *settings[] =
   "USB Port",
   "Bluetooth",
   "Wi-Fi",
-#ifdef AIRTIME
-  // AirTime's own settings. These were compile-time constants until now, which
-  // meant a change of location or a change of mind needed a laptop, a
-  // toolchain and a reflash — the opposite of a field instrument.
-  "Time Zone",
-  "WWV Band",
-  "HF Listen",
-#endif
   "About",
 };
 
 static_assert(ITEM_COUNT(settings) == MENU_ABOUT + 1,
               "settings[] and the MENU_* indices disagree");
 
-// The relocated block has to sit at the FRONT of settings[], because the config
-// indices are all AT_SETTINGS_BASE + n and that base is what skips over it.
 #ifdef AIRTIME
-static_assert(MENU_SOFTMUTE + 1 == AT_SETTINGS_BASE,
-              "the relocated radio items must immediately precede the settings block");
+// ── The AirTime menus are tables, not parallel structures ───────────────────
+//
+// This build's menus used to be made by rearranging the stock string arrays
+// and re-deriving the index defines around them. That design produced three
+// silent bugs in as many days — duplicate case values, panel titles read from
+// eleven slots past the end of a three-entry array, a root item that opened
+// the wrong list — because a label, its position, and the command it fires
+// lived in three places that nothing forced to agree.
+//
+// Here each row is one fact: a label and the command it activates. Positions
+// index only the table they came from; activation keys off the command, which
+// is globally unique (Menu.h). There is no arithmetic to keep consistent and
+// no second structure to fall out of step with — the failure mode is gone
+// rather than guarded.
+//
+// The stock menu[]/settings[] arrays above are untouched upstream text in
+// both builds. Under AIRTIME they serve as the panel-title string tables
+// (drawVolume() names itself menu[MENU_VOLUME] exactly as upstream wrote it);
+// the menus the operator scrolls are these.
+struct MenuItem
+{
+  const char *label;
+  uint16_t cmd;
+};
+
+// The root carries what this device is FOR. Everything that tunes a receiver
+// is present and unchanged under Settings, where configuration belongs — a
+// clock appliance whose front page is twelve radio controls is a radio with a
+// clock bolted on.
+static const MenuItem atRootMenu[] =
+{
+  {"Volume",   CMD_VOLUME},
+  {"Mode",     CMD_AT_MODE},
+  {"Nets",     CMD_AT_NETS},
+  {"Settings", CMD_SETTINGS},
+};
+
+static const MenuItem atSettingsMenu[] =
+{
+  // The radio controls, relocated from the stock root menu. Same commands,
+  // same handlers, same order — only the door they are behind has changed.
+  {"Mode",        CMD_MODE},
+  {"Band",        CMD_BAND},
+  {"Step",        CMD_STEP},
+  {"Seek",        CMD_SEEK},
+  {"Scan",        CMD_SCAN},
+  {"Memory",      CMD_MEMORY},
+  {"Squelch",     CMD_SQUELCH},
+  {"Bandwidth",   CMD_BANDWIDTH},
+  {"AGC/ATTN",    CMD_AGC},
+  {"AVC",         CMD_AVC},
+  {"SoftMute",    CMD_SOFTMUTE},
+  // The stock configuration items, in their stock order.
+  {"Brightness",  CMD_BRT},
+  {"Calibration", CMD_CAL},
+  {"RDS",         CMD_RDS},
+  {"UTC Offset",  CMD_UTCOFFSET},
+  {"FM Region",   CMD_FM_REGION},
+  {"Theme",       CMD_THEME},
+  {"UI Layout",   CMD_UI},
+  {"Zoom Menu",   CMD_ZOOM},
+  {"Scroll Dir.", CMD_SCROLL},
+  {"Sleep",       CMD_SLEEP},
+  {"Sleep Mode",  CMD_SLEEPMODE},
+  {"Load EiBi",   CMD_LOADEIBI},
+  {"USB Port",    CMD_USBMODE},
+  {"Bluetooth",   CMD_BLEMODE},
+  {"Wi-Fi",       CMD_WIFIMODE},
+  // AirTime's own. These were compile-time constants once, which meant a
+  // change of location — or of mind — needed a laptop, a toolchain and a
+  // reflash: the opposite of a field instrument.
+  {"Time Zone",   CMD_AT_ZONE},
+  {"WWV Band",    CMD_AT_BAND},
+  {"HF Listen",   CMD_AT_HF},
+  {"About",       CMD_ABOUT},
+};
+
+// The cursors are int8_t.
+static_assert(ITEM_COUNT(atRootMenu) < 128 && ITEM_COUNT(atSettingsMenu) < 128,
+              "menu tables must fit an int8_t cursor");
+
+// The label a command is listed under, wherever it is listed. Panels that
+// name themselves after their menu entry use this — so a renamed entry
+// renames its panel, and no panel can ever index an array it does not belong
+// to (the out-of-bounds class this file has already produced once).
+static const char *atLabelFor(uint16_t cmd)
+{
+  for(size_t i = 0 ; i < ITEM_COUNT(atRootMenu) ; i++)
+    if(atRootMenu[i].cmd == cmd) return atRootMenu[i].label;
+  for(size_t i = 0 ; i < ITEM_COUNT(atSettingsMenu) ; i++)
+    if(atSettingsMenu[i].cmd == cmd) return atSettingsMenu[i].label;
+  return "?";
+}
 #endif
 
-// Which array a panel title comes from.
-//
-// The twelve relocated items are named by the panels that edit them --
-// drawVolume() draws the word "Volume" by looking it up rather than repeating
-// the literal. Those lookups all said menu[...] because that is where the items
-// used to live. Moving the items without moving the lookups did not fail
-// loudly: menu[] is three entries long in this build, so menu[MENU_SOFTMUTE]
-// reads eleven slots past the end of the array and hands whatever it finds to
-// drawString() as a char*. Nine of the twelve were out of bounds; the other
-// three quietly drew "Nets" and "Settings" over the wrong panels.
+// One scroller and one renderer per list in either build; these macros are the
+// only code that knows which structure backs a list. Macros rather than inline
+// functions on purpose: in the stock build they expand to the exact tokens
+// upstream wrote, so the stock binary stays byte-identical — the proof that
+// this restructure touched nothing it did not mean to.
 #ifdef AIRTIME
-#define RADIO_ITEM(i) settings[i]
+#define MENU_ROWS         ITEM_COUNT(atRootMenu)
+#define MENU_LABEL(i)     (atRootMenu[i].label)
+#define SETTINGS_ROWS     ITEM_COUNT(atSettingsMenu)
+#define SETTINGS_LABEL(i) (atSettingsMenu[i].label)
 #else
-#define RADIO_ITEM(i) menu[i]
+#define MENU_ROWS         ITEM_COUNT(menu)
+#define MENU_LABEL(i)     menu[i]
+#define SETTINGS_ROWS     ITEM_COUNT(settings)
+#define SETTINGS_LABEL(i) settings[i]
 #endif
 
 //
@@ -973,31 +991,83 @@ void doBandwidth(int16_t enc)
 
 static void doMenu(int16_t enc)
 {
-  menuIdx = wrap_range(menuIdx, enc, 0, LAST_ITEM(menu));
+  menuIdx = wrap_range(menuIdx, enc, 0, MENU_ROWS - 1);
 }
+
+#ifdef AIRTIME
+// One activation path for every row of every AirTime menu. Special behaviour
+// keys off the COMMAND — globally unique across all lists (Menu.h) — never
+// off a row's position in whichever list it came from. Position-keyed
+// dispatch is what produced all three of this file's silent menu bugs.
+//
+// The special cases are the stock bodies verbatim: Memory must snapshot the
+// dial before its list opens or it stores whatever newMemory held last time;
+// SoftMute and AVC do not exist in FM; Calibration is an SSB affair; FM
+// Region an FM one; Load EiBi is an action, not a panel.
+static void atActivate(uint16_t cmd)
+{
+  switch(cmd)
+  {
+    case CMD_MEMORY:
+      currentCmd = CMD_MEMORY;
+      newMemory.freq  = freqToHz(currentFrequency, currentMode) + currentBFO;
+      newMemory.mode  = currentMode;
+      newMemory.band  = bandIdx;
+      doMemory(0);
+      break;
+
+    case CMD_SCAN:
+      // Run a band scan around current frequency with the same
+      // step as scale resolution (10kHz for AM, 100kHz for FM)
+      currentCmd = CMD_SCAN;
+      clickScan(true);
+      break;
+
+    case CMD_SOFTMUTE:
+      if(currentMode!=FM) currentCmd = CMD_SOFTMUTE;
+      break;
+
+    case CMD_AVC:
+      if(currentMode!=FM) currentCmd = CMD_AVC;
+      break;
+
+    case CMD_CAL:
+      if(isSSB()) currentCmd = CMD_CAL;
+      break;
+
+    case CMD_FM_REGION:
+      if(currentMode==FM) currentCmd = CMD_FM_REGION;
+      break;
+
+    case CMD_LOADEIBI:
+      eibiLoadSchedule();
+      break;
+
+    default:
+      currentCmd = cmd;
+      break;
+  }
+}
+#endif
 
 static void clickMenu(int cmd, bool shortPress)
 {
   // No command yet
   currentCmd = CMD_NONE;
 
+#ifdef AIRTIME
+  (void)shortPress;
+  if(cmd >= 0 && cmd < (int)MENU_ROWS) atActivate(atRootMenu[cmd].cmd);
+#else
   switch(cmd)
   {
-#ifndef AIRTIME
     case MENU_STEP:     currentCmd = CMD_STEP;      break;
     case MENU_SEEK:     currentCmd = CMD_SEEK;      break;
     case MENU_MODE:     currentCmd = CMD_MODE;      break;
     case MENU_BW:       currentCmd = CMD_BANDWIDTH; break;
     case MENU_AGC_ATT:  currentCmd = CMD_AGC;       break;
     case MENU_BAND:     currentCmd = CMD_BAND;      break;
-#endif
-#ifdef AIRTIME
-    case MENU_VOLUME:   currentCmd = CMD_VOLUME;   break;
-    case MENU_MODE_AT:  currentCmd = CMD_AT_MODE;  break;
-    case MENU_NETS:     currentCmd = CMD_AT_NETS;  break;
-#endif
     case MENU_SETTINGS: currentCmd = CMD_SETTINGS;  break;
-#ifndef AIRTIME
     case MENU_SQUELCH:  currentCmd = CMD_SQUELCH;   break;
     case MENU_VOLUME:   currentCmd = CMD_VOLUME;    break;
 
@@ -1025,13 +1095,13 @@ static void clickMenu(int cmd, bool shortPress)
       currentCmd = CMD_SCAN;
       clickScan(true);
       break;
-#endif
   }
+#endif
 }
 
 static void doSettings(int16_t enc)
 {
-  settingsIdx = wrap_range(settingsIdx, enc, 0, LAST_ITEM(settings));
+  settingsIdx = wrap_range(settingsIdx, enc, 0, SETTINGS_ROWS - 1);
 }
 
 #ifdef AIRTIME
@@ -1063,46 +1133,12 @@ static void clickSettings(int cmd, bool shortPress)
   // No command yet
   currentCmd = CMD_NONE;
 
+#ifdef AIRTIME
+  (void)shortPress;
+  if(cmd >= 0 && cmd < (int)SETTINGS_ROWS) atActivate(atSettingsMenu[cmd].cmd);
+#else
   switch(cmd)
   {
-#ifdef AIRTIME
-    // Relocated from the root menu. These are the stock bodies verbatim, not
-    // paraphrases -- Memory has to snapshot the dial before the list opens or
-    // it stores whatever was in newMemory last time, and SoftMute/AVC are
-    // silently absent in FM because the chip has no such control there.
-    case MENU_STEP:     currentCmd = CMD_STEP;      break;
-    case MENU_SEEK:     currentCmd = CMD_SEEK;      break;
-    case MENU_MODE:     currentCmd = CMD_MODE;      break;
-    case MENU_BW:       currentCmd = CMD_BANDWIDTH; break;
-    case MENU_AGC_ATT:  currentCmd = CMD_AGC;       break;
-    case MENU_BAND:     currentCmd = CMD_BAND;      break;
-    case MENU_SQUELCH:  currentCmd = CMD_SQUELCH;   break;
-
-    case MENU_MEMORY:
-      currentCmd = CMD_MEMORY;
-      newMemory.freq  = freqToHz(currentFrequency, currentMode) + currentBFO;
-      newMemory.mode  = currentMode;
-      newMemory.band  = bandIdx;
-      doMemory(0);
-      break;
-
-    case MENU_SOFTMUTE:
-      // No soft mute in FM mode
-      if(currentMode!=FM) currentCmd = CMD_SOFTMUTE;
-      break;
-
-    case MENU_AVC:
-      // No AVC in FM mode
-      if(currentMode!=FM) currentCmd = CMD_AVC;
-      break;
-
-    case MENU_SCAN:
-      // Run a band scan around current frequency with the same
-      // step as scale resolution (10kHz for AM, 100kHz for FM)
-      currentCmd = CMD_SCAN;
-      clickScan(true);
-      break;
-#endif
     case MENU_BRIGHTNESS: currentCmd = CMD_BRT; break;
     case MENU_CALIBRATION:
       if(isSSB()) currentCmd = CMD_CAL;
@@ -1118,11 +1154,6 @@ static void clickSettings(int cmd, bool shortPress)
     case MENU_USBMODE:    currentCmd = CMD_USBMODE;    break;
     case MENU_BLEMODE:    currentCmd = CMD_BLEMODE;    break;
     case MENU_WIFIMODE:   currentCmd = CMD_WIFIMODE;   break;
-#ifdef AIRTIME
-    case MENU_AT_ZONE:    currentCmd = CMD_AT_ZONE;    break;
-    case MENU_AT_BAND:    currentCmd = CMD_AT_BAND;    break;
-    case MENU_AT_HF:      currentCmd = CMD_AT_HF;      break;
-#endif
     case MENU_FM_REGION:
       // Only in FM mode
       if(currentMode==FM) currentCmd = CMD_FM_REGION;
@@ -1133,6 +1164,7 @@ static void clickSettings(int cmd, bool shortPress)
       eibiLoadSchedule();
       break;
   }
+#endif
 }
 
 bool doSideBar(uint16_t cmd, int16_t enc, int16_t enca)
@@ -1283,17 +1315,17 @@ static void drawMenu(int x, int y, int sx)
   spr.setTextColor(TH.menu_item);
   spr.fillRoundRect(6+x, 24+y+(2*16), 66+sx, 16, 2, TH.menu_hl_bg);
 
-  int count = ITEM_COUNT(menu);
+  int count = MENU_ROWS;
   for(int i=-2 ; i<3 ; i++)
   {
     if(i==0) {
-      drawZoomedMenu(menu[abs((menuIdx+count+i)%count)]);
+      drawZoomedMenu(MENU_LABEL(abs((menuIdx+count+i)%count)));
       spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
     } else {
       spr.setTextColor(TH.menu_item);
     }
     spr.setTextDatum(MC_DATUM);
-    spr.drawString(menu[abs((menuIdx+count+i)%count)], 40+x+(sx/2), 64+y+(i*16), 2);
+    spr.drawString(MENU_LABEL(abs((menuIdx+count+i)%count)), 40+x+(sx/2), 64+y+(i*16), 2);
   }
 }
 
@@ -1311,24 +1343,24 @@ static void drawSettings(int x, int y, int sx)
   spr.setTextColor(TH.menu_item);
   spr.fillRoundRect(6+x, 24+y+(2*16), 66+sx, 16, 2, TH.menu_hl_bg);
 
-  int count = ITEM_COUNT(settings);
+  int count = SETTINGS_ROWS;
   for(int i=-2 ; i<3 ; i++)
   {
     if(i==0) {
-      drawZoomedMenu(settings[abs((settingsIdx+count+i)%count)]);
+      drawZoomedMenu(SETTINGS_LABEL(abs((settingsIdx+count+i)%count)));
       spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
     } else {
       spr.setTextColor(TH.menu_item);
     }
 
     spr.setTextDatum(MC_DATUM);
-    spr.drawString(settings[abs((settingsIdx+count+i)%count)], 40+x+(sx/2), 64+y+(i*16), 2);
+    spr.drawString(SETTINGS_LABEL(abs((settingsIdx+count+i)%count)), 40+x+(sx/2), 64+y+(i*16), 2);
   }
 }
 
 static void drawMode(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_MODE), x, y, sx, true);
+  drawCommon(menu[MENU_MODE], x, y, sx, true);
 
   int count = ITEM_COUNT(bandModeDesc);
   for(int i=-2 ; i<3 ; i++)
@@ -1351,7 +1383,7 @@ static void drawStep(int x, int y, int sx)
   int count = getLastStep(currentMode) + 1;
   int idx   = bands[bandIdx].currentStepIdx + count;
 
-  drawCommon(RADIO_ITEM(MENU_STEP), x, y, sx, true);
+  drawCommon(menu[MENU_STEP], x, y, sx, true);
 
   for(int i=-2 ; i<3 ; i++)
   {
@@ -1369,7 +1401,7 @@ static void drawStep(int x, int y, int sx)
 
 static void drawSeek(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_SEEK), x, y, sx);
+  drawCommon(menu[MENU_SEEK], x, y, sx);
   spr.drawSmoothArc(40+x+(sx/2), 66+y, 30, 27, 45, 180, TH.menu_param, TH.menu_bg);
   spr.fillTriangle(40+x+(sx/2)-5, 66+y-32, 40+x+(sx/2)+5, 66+y-27, 40+x+(sx/2)-5, 66+y-22, TH.menu_param);
   spr.drawSmoothArc(40+x+(sx/2), 66+y, 30, 27, 225, 360, TH.menu_param, TH.menu_bg);
@@ -1385,7 +1417,7 @@ static void drawSeek(int x, int y, int sx)
 
 static void drawScan(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_SCAN), x, y, sx);
+  drawCommon(menu[MENU_SCAN], x, y, sx);
   spr.setTextDatum(MC_DATUM);
   spr.setTextColor(TH.scan_rssi);
   spr.drawString("S", 40+x+(sx/2)-30, 66+y+30, 2);
@@ -1405,7 +1437,7 @@ static void drawScan(int x, int y, int sx)
 
 static void drawBand(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_BAND), x, y, sx, true);
+  drawCommon(menu[MENU_BAND], x, y, sx, true);
 
   int count = ITEM_COUNT(bands);
   for(int i=-2 ; i<3 ; i++)
@@ -1427,7 +1459,7 @@ static void drawBandwidth(int x, int y, int sx)
   int count = getLastBandwidth(currentMode) + 1;
   int idx   = bands[bandIdx].bandwidthIdx + count;
 
-  drawCommon(RADIO_ITEM(MENU_BW), x, y, sx, true);
+  drawCommon(menu[MENU_BW], x, y, sx, true);
 
   for(int i=-2 ; i<3 ; i++)
   {
@@ -1618,7 +1650,7 @@ static void drawUTCOffset(int x, int y, int sx)
 static void drawMemory(int x, int y, int sx)
 {
   char label_memory[16];
-  sprintf(label_memory, "%s %2.2d", RADIO_ITEM(MENU_MEMORY), memoryIdx + 1);
+  sprintf(label_memory, "%s %2.2d", menu[MENU_MEMORY], memoryIdx + 1);
   drawCommon(label_memory, x, y, sx, true);
 
   int count = ITEM_COUNT(memories);
@@ -1667,8 +1699,8 @@ static void drawVolume(int x, int y, int sx)
 
 static void drawAgc(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_AGC_ATT), x, y, sx);
-  drawZoomedMenu(RADIO_ITEM(MENU_AGC_ATT));
+  drawCommon(menu[MENU_AGC_ATT], x, y, sx);
+  drawZoomedMenu(menu[MENU_AGC_ATT]);
   spr.setTextDatum(MC_DATUM);
   spr.setTextColor(TH.menu_param);
 
@@ -1691,8 +1723,8 @@ static void drawAgc(int x, int y, int sx)
 
 static void drawSquelch(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_SQUELCH), x, y, sx);
-  drawZoomedMenu(RADIO_ITEM(MENU_SQUELCH));
+  drawCommon(menu[MENU_SQUELCH], x, y, sx);
+  drawZoomedMenu(menu[MENU_SQUELCH]);
   spr.setTextDatum(MC_DATUM);
 
   uint8_t squelchValue = currentSquelch[currentMode] & 0x7f;
@@ -1711,8 +1743,8 @@ static void drawSquelch(int x, int y, int sx)
 
 static void drawSoftMuteMaxAtt(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_SOFTMUTE), x, y, sx);
-  drawZoomedMenu(RADIO_ITEM(MENU_SOFTMUTE));
+  drawCommon(menu[MENU_SOFTMUTE], x, y, sx);
+  drawZoomedMenu(menu[MENU_SOFTMUTE]);
   spr.setTextDatum(MC_DATUM);
 
   spr.setTextColor(TH.menu_param);
@@ -1746,8 +1778,8 @@ static void drawCal(int x, int y, int sx)
 
 static void drawAvc(int x, int y, int sx)
 {
-  drawCommon(RADIO_ITEM(MENU_AVC), x, y, sx);
-  drawZoomedMenu(RADIO_ITEM(MENU_AVC));
+  drawCommon(menu[MENU_AVC], x, y, sx);
+  drawZoomedMenu(menu[MENU_AVC]);
   spr.setTextDatum(MC_DATUM);
 
   spr.setTextColor(TH.menu_param);
@@ -1904,38 +1936,15 @@ static void drawInfo(int x, int y, int sx)
 // Draw side bar (menu or information)
 //
 #ifdef AIRTIME
-// Root-menu lists take their title by string rather than by settings[] index.
-static void drawAtRootList(const char *title, int count, int idx,
-                           const char *(*name)(int), int x, int y, int sx)
+// The one renderer behind every AirTime list. The title is a string from the
+// menu tables (atLabelFor), so a renamed menu entry renames its panel; the
+// rows come from an accessor pair because the AirTime side owns the data and
+// the meaning — this side owns only the turning and the drawing.
+static void drawAtList(const char *title, int count, int idx,
+                       const char *(*name)(int), int x, int y, int sx)
 {
   drawCommon(title, x, y, sx, true);
   if(count <= 0) return;
-  for(int i=-2 ; i<3 ; i++)
-  {
-    if(count < 5 && ((idx+i) < 0 || (idx+i) >= count)) continue;
-    const int j = abs((idx + count + i) % count);
-    if(i==0) {
-      if(strlen(name(j)) <= 12) drawZoomedMenu(name(j));
-      spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
-    } else {
-      spr.setTextColor(TH.menu_item);
-    }
-    spr.setTextDatum(MC_DATUM);
-    spr.drawString(name(j), 40+x+(sx/2), 64+y+(i*16), 2);
-  }
-}
-
-static void drawAtNets(int x, int y, int sx)
-{
-  drawAtRootList(menu[MENU_NETS], atNetCount(), atNetIdx(), atNetName, x, y, sx);
-}
-
-static void drawAtList(int title, int count, int idx, const char *(*name)(int),
-                       int x, int y, int sx)
-{
-  drawCommon(settings[title], x, y, sx, true);
-  if(count <= 0) return;
-
   for(int i=-2 ; i<3 ; i++)
   {
     if(count < 5 && ((idx+i) < 0 || (idx+i) >= count)) continue;
@@ -1961,11 +1970,11 @@ void drawSideBar(uint16_t cmd, int x, int y, int sx)
   switch(cmd)
   {
 #ifdef AIRTIME
-    case CMD_AT_ZONE:    drawAtList(MENU_AT_ZONE, atZoneCount(), atZoneIdx(), atZoneName, x, y, sx); break;
-    case CMD_AT_BAND:    drawAtList(MENU_AT_BAND, atBandCount(), atBandIdx(), atBandName, x, y, sx); break;
-    case CMD_AT_HF:      drawAtList(MENU_AT_HF,   atHfCount(),   atHfIdx(),   atHfName,   x, y, sx); break;
-    case CMD_AT_MODE:    drawAtRootList(menu[MENU_MODE_AT], atModeCount(), atModeIdx(), atModeName, x, y, sx); break;
-    case CMD_AT_NETS:    drawAtNets(x, y, sx); break;
+    case CMD_AT_ZONE: drawAtList(atLabelFor(cmd), atZoneCount(), atZoneIdx(), atZoneName, x, y, sx); break;
+    case CMD_AT_BAND: drawAtList(atLabelFor(cmd), atBandCount(), atBandIdx(), atBandName, x, y, sx); break;
+    case CMD_AT_HF:   drawAtList(atLabelFor(cmd), atHfCount(),   atHfIdx(),   atHfName,   x, y, sx); break;
+    case CMD_AT_MODE: drawAtList(atLabelFor(cmd), atModeCount(), atModeIdx(), atModeName, x, y, sx); break;
+    case CMD_AT_NETS: drawAtList(atLabelFor(cmd), atNetCount(),  atNetIdx(),  atNetName,  x, y, sx); break;
 #endif
     case CMD_MENU:       drawMenu(x, y, sx);       break;
     case CMD_SETTINGS:   drawSettings(x, y, sx);   break;

@@ -219,8 +219,15 @@ and a runner grepping for FAIL lines reads that wreck as a pass — the bias tes
 now returns after reporting, and verification runs read the summary line, not a
 filter.
 
-Remaining from the retrospective: the Menu.cpp table restructure (its own
-careful pass), and the cosmetic `IWwvSampler` rename.
+The Menu.cpp restructure followed (same day): the AirTime menus are now
+`{label, cmd}` **tables** (`atRootMenu`/`atSettingsMenu`), activation keys off
+the globally-unique command instead of a row's position, and the stock
+`menu[]`/`settings[]` arrays and index defines returned to pristine upstream
+text in both builds — serving only as panel-title strings, with the stock
+binary byte-identical as proof the restructure touched nothing else. The
+label/position/command triple that produced three silent bugs no longer has a
+second structure to disagree with. Remaining from the retrospective: only the
+cosmetic `IWwvSampler` rename.
 
 ## How the adapters got here (historical)
 
