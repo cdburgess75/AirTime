@@ -149,6 +149,11 @@ multi-reading average says otherwise — a refinement, not a blocker.
 Nothing here blocks the clock; it keeps and serves time correctly today.
 
 **Needs the radio outdoors — Milestone 5, the real remaining work**
+
+📖 **Runbook: [`MILESTONE5.md`](MILESTONE5.md)** — what to check before leaving,
+what to record, how to read a failure, and `tools/dt_report.py`, which turns an
+evening of WSJT-X decodes into the one number this milestone turns on.
+
 - [ ] Battery-only cold start on an external antenna, no infrastructure
 - [ ] An evening of FT8: does the WSJT-X **DT column cluster near zero**? This is
       the acceptance test the whole project is for, and the only one that can
