@@ -82,6 +82,7 @@ static airtime_esp32::Esp32WiFiControl atWifi;
 static airtime_esp32::NvsTimeStore atStore;
 static airtime::AirTimeApp* atApp = nullptr;
 static bool atWasListening = false;
+static uint8_t atUserVolume = kWwvListenVolume;  // the operator's own setting
 static uint32_t atLastReport = 0;
 
 // ── Chip glue ───────────────────────────────────────────────────────────────
@@ -317,13 +318,26 @@ void airtimeLoop()
   atApp->loop();
   atWifi.service(*atApp);
 
-  // The IO11 tap level follows the DSP volume; hold the calibrated level for
-  // the whole listening window, then give the user their volume back.
+  // The IO11 tap level follows the DSP volume, so a listen window has to hold
+  // the level Milestone 0 calibrated — and then give the user their volume
+  // back. atUserVolume remembers what they had.
+  //
+  // The knob still works during a window (the stock menu is live in this build
+  // and rx.setVolume() is applied immediately by doVolume). Left alone, that
+  // would quietly de-calibrate the marker detector mid-measurement. So a turn
+  // during a window is honoured as INTENT — remembered for when the window
+  // closes — while the tap stays where the detector needs it.
   const bool listening = atApp->directive().wwv_listening;
   if(listening != atWasListening)
   {
-    rx.setVolume(listening ? kWwvListenVolume : volume);
+    if(listening) { atUserVolume = volume; rx.setVolume(kWwvListenVolume); }
+    else          { volume = atUserVolume; rx.setVolume(volume); }
     atWasListening = listening;
+  }
+  else if(listening && volume != atUserVolume)
+  {
+    atUserVolume = volume;            // they turned it; apply it afterwards
+    rx.setVolume(kWwvListenVolume);   // ...but not to the tap, not right now
   }
 
   const uint32_t nowMs = millis();
@@ -394,6 +408,23 @@ void airtimeLoop()
                     rd.stations, rd.accepted ? 'A' : 'R');
     Serial.printf("pend=%ldms] rate=%+.1fppm\n", (long)pend,
                   atApp->arbiter().ratePpm());
+
+    // What WWV has taught about each station: PI code, how late it runs, and
+    // how many times that has been measured. n reaching 3 is the moment a
+    // station's correction starts being applied — and the moment a badly-late
+    // station stops being rejected on sight and becomes useful again.
+    const airtime::StationBiasTable& sb = atApp->stationBias();
+    if(sb.count() > 0)
+    {
+      Serial.printf("  sta[");
+      for(size_t i = 0 ; i < sb.count() ; i++)
+      {
+        const airtime::StationBias& b = sb.at(i);
+        Serial.printf("%s%04X %+ldms n=%d", i ? " | " : "", b.pi,
+                      (long)(b.bias_us / 1000), b.samples);
+      }
+      Serial.printf("]\n");
+    }
   }
 }
 

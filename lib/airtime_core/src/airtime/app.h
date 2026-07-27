@@ -22,6 +22,7 @@
 #include "rds_ct.h"
 #include "scheduler.h"
 #include "sntp.h"
+#include "station_bias.h"
 #include "station_vote.h"
 #include "types.h"
 #include "wwv_marker.h"
@@ -83,6 +84,23 @@ struct AppConfig {
   int64_t wwv_pair_min_dt_us = 50LL * 1000000;
   int64_t wwv_pair_max_dt_us = 190LL * 1000000;
   int64_t wwv_pair_agree_us = 120000;
+
+  // Learn each station's constant lateness only while the clock is better than
+  // RDS itself could have made it — in practice, only just after WWV has
+  // spoken. Learning from an RDS-disciplined clock would measure a station
+  // against its own bias and pronounce it perfect.
+  //
+  // BOTH gates are needed, and the window is the load-bearing one. Uncertainty
+  // alone does not close: after a WWV fix it starts near 30 ms and grows at the
+  // 0.5 ppm floor, so it would take ~39 hours to reach 100 ms — the table would
+  // keep re-learning against a clock that had drifted all day, the bias would
+  // silently absorb that drift, and RDS would become a mirror of the clock
+  // instead of an independent check on it. Measured when this was first built
+  // with the uncertainty gate alone: the learned rate ran away to -47 ppm and
+  // the clock lost its lock.
+  int64_t station_bias_learn_below_us = 100000;
+  int64_t station_bias_learn_window_us = 10LL * 60 * 1000000;  // after a WWV fix
+  StationBiasConfig station_bias;
 
   int64_t drift_save_interval_us = 60LL * 60 * 1000000;
   int64_t restore_uncertainty_us = 3600LL * 1000000; // warm boot is a memory
@@ -158,6 +176,8 @@ class AirTimeApp {
   const WwvMarkerDetector& wwvMarker() const { return marker_; }
   const WwvFixDiag& wwvFixDiag() const { return wwv_diag_; }
   const RdsFixDiag& rdsFixDiag() const { return rds_diag_; }
+  // What WWV has taught us about each station (§4: sources correct each other).
+  const StationBiasTable& stationBias() const { return bias_; }
 
  private:
   // The scheduler's directive, adjusted for what only the app knows. Today
@@ -182,6 +202,7 @@ class AirTimeApp {
   Arbiter arbiter_;
   Scheduler sched_;
   StationVoter voter_;
+  StationBiasTable bias_;
   WwvMarkerDetector marker_;
   ClientCounter clients_;
 
@@ -199,6 +220,11 @@ class AirTimeApp {
   bool have_prev_wwv_ = false;
   int64_t prev_wwv_mono_ = 0;
   int64_t prev_wwv_offset_us_ = 0;
+  // When WWV last actually moved the clock — the only moments at which a
+  // station's disagreement is a measurement of the STATION rather than of our
+  // own accumulated drift. See station_bias_learn_window_us.
+  bool have_wwv_accept_ = false;
+  int64_t last_wwv_accept_mono_ = 0;
   WwvFixDiag wwv_diag_;
   RdsFixDiag rds_diag_;
   bool have_new_ct_ = false;

@@ -7,6 +7,7 @@ AirTimeApp::AirTimeApp(const AppDeps& deps, const AppConfig& cfg)
       cfg_(cfg),
       arbiter_(cfg.arbiter),
       sched_(cfg.scheduler),
+      bias_(cfg.station_bias),
       marker_(cfg.marker) {}
 
 void AirTimeApp::setFmStations(const int32_t* khz, std::size_t n) {
@@ -99,15 +100,31 @@ void AirTimeApp::pollRds(int64_t now) {
     RdsClockTime t;
     if (!decodeRdsClockTime(g.a, g.b, g.c, g.d, &t)) continue;
 
-    // Block A is the station's PI code — its identity for voting purposes.
-    CtReport r;
-    r.pi = g.a;
-    r.asserted_utc_us = t.utc_epoch_s * 1000000;
+    // Block A is the station's PI code — its identity, for voting and for
+    // remembering how late it runs.
+    const int64_t asserted = t.utc_epoch_s * 1000000;
     // Compare against the clock AT RECEPTION, so the implied offset carries no
     // drift term. See the note on CtReport::reference_us — projecting to "now"
     // instead creates a bias proportional to the rate error, which blinds the
     // drift estimator to the very thing it is measuring.
-    r.reference_us = arbiter_.isSet() ? arbiter_.utcAt(g.mono_us) : g.mono_us;
+    const int64_t reference = arbiter_.isSet() ? arbiter_.utcAt(g.mono_us) : g.mono_us;
+
+    // WWV teaches RDS. Just after WWV has moved the clock, whatever a station
+    // disagrees by IS its bias — so measure it, then stop. The window is what
+    // keeps the lesson honest: measure indefinitely and the bias quietly
+    // absorbs our own drift, and the station stops being an independent check.
+    if (arbiter_.isSet() && have_wwv_accept_ &&
+        (g.mono_us - last_wwv_accept_mono_) <= cfg_.station_bias_learn_window_us &&
+        arbiter_.uncertaintyUs(g.mono_us) <= cfg_.station_bias_learn_below_us) {
+      bias_.observe(g.a, reference - asserted, g.mono_us);
+    }
+
+    CtReport r;
+    r.pi = g.a;
+    // Put the station back on time before it votes. Zero until the station has
+    // been measured enough times to be trusted.
+    r.asserted_utc_us = asserted + bias_.correction(g.a);
+    r.reference_us = reference;
     r.rx_monotonic_us = g.mono_us;
     voter_.add(r);
     have_new_ct_ = true;
@@ -219,6 +236,8 @@ void AirTimeApp::pollWwv(int64_t now) {
 
     if (u.action != Action::Rejected) {
       have_prev_wwv_ = false;  // consumed: the clock moved
+      have_wwv_accept_ = true; // the teacher is in the room (see pollRds)
+      last_wwv_accept_mono_ = m.leading_edge_us;
       noteAccepted(Source::Wwv, now);
       sched_.onWwvFix(now);    // only an ACCEPTED fix may end the window
     } else {

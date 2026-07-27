@@ -318,6 +318,71 @@ AT_TEST(app_warm_boot_restores_unsynced) {
   AT_CHECK(!st.synced);
 }
 
+// WWV teaches RDS, and the point is not the milliseconds — it is that the
+// continuous source stops being vetoed.
+//
+// A station 700 ms late is useless the moment WWV pulls the clock onto the true
+// minute: every correction it then asks for exceeds the 500 ms step threshold,
+// so §4 rule 3 rejects every one, and the device runs on WWV alone — one fix an
+// hour and nothing in between. Measured in simulation before this existed: RDS
+// dropped out of the source mask entirely and never came back.
+//
+// Once its constant lateness is learned and subtracted, the same station is a
+// good source again.
+AT_TEST(app_learns_station_bias_and_keeps_rds_usable) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.crystal_ppm = -18.0;
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  sim.wwv.chain_delay_us = 25000;
+
+  FakeStation s1{9110, 0x1001, true, 700000};   // consistently 700 ms late
+  sim.rds.stations = {s1};
+
+  AppConfig cfg;
+  cfg.wwv_calibration_us = 25000;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  sim.advance(6 * kHour, &app);
+
+  // The station's error has been measured, and measured as ITS error.
+  const StationBias* b = app.stationBias().find(0x1001);
+  AT_CHECK(b != nullptr);
+  AT_CHECK(b->samples >= 3);
+  AT_CHECK_NEAR((double)b->bias_us, 700000.0, 120000.0);
+
+  // ...so it is contributing again rather than being rejected on sight, and
+  // the clock is accurate.
+  AT_CHECK(app.displayState().sources & kSrcRds);
+  AT_CHECK(app.displayState().sources & kSrcWwv);
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 100000);
+}
+
+// The correction must never be invented from nothing: with no WWV to teach it,
+// a biased station is exactly as biased as before, and the clock says so.
+// (Silently "correcting" against an RDS-disciplined clock would measure a
+// station against its own error and declare it perfect.)
+AT_TEST(app_does_not_invent_bias_without_wwv) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  // No propagating bands: WWV is never heard, so nothing can teach.
+  FakeStation s1{9110, 0x1001, true, 220000};
+  sim.rds.stations = {s1};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  sim.advance(3 * kHour, &app);
+
+  AT_CHECK_EQ(app.stationBias().correction(0x1001), 0);
+  AT_CHECK(!(app.displayState().sources & kSrcWwv));
+}
+
 // Warm boot after a long power-down — the normal way this device gets used.
 //
 // THE field failure, end to end: switched off for an hour, NVS hands back an

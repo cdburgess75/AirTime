@@ -25,6 +25,7 @@
 #include "Common.h"
 #include "Themes.h"
 #include "Draw.h"
+#include "Menu.h"
 #include "Utils.h"
 
 // Supplied by AirTimeMode.cpp — the app's state, pre-formatted for this screen.
@@ -62,10 +63,15 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
   spr.drawString("AirTime", 150, 3, 2);
 
   // ── The two clocks ────────────────────────────────────────────────────────
-  // UTC is the headline in font 7 — a 48-pixel seven-segment face whose whole
-  // character set is "1234567890:-.", i.e. a clock font. Local time sits under
-  // it in font 4 (26 px) and a different colour: same instant, plainly
-  // secondary, because UTC is what the radio serves and what FT8 runs on.
+  // LOCAL time is the headline, in font 7 — a 48-pixel seven-segment face whose
+  // whole character set is "1234567890:-.", i.e. a clock font. UTC sits under
+  // it in font 4 (26 px) and a different colour.
+  //
+  // The radio keeps and serves UTC and always will; this is purely about who
+  // is reading the screen. Someone glancing at a clock on the bench wants the
+  // time on their wrist. UTC still has to be present and unambiguous — it is
+  // what NTP carries and what a log entry needs — but it does not have to
+  // shout, and the "Z" makes it unmistakable at a glance.
   //
   // Both are right-aligned to the same edge so the two labels stack in a tidy
   // column. Amber instead of white while unsynchronised — §5 wants the device
@@ -74,22 +80,22 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
 
   spr.setTextDatum(TR_DATUM);
   spr.setTextColor(clock_colour);
-  spr.drawString(s.clock, 248, 20, 7);
+  spr.drawString(s.valid ? s.local : s.clock, 248, 20, 7);
 
   spr.setTextDatum(TL_DATUM);
   spr.setTextColor(TH.text_muted);
-  spr.drawString("UTC", 254, 50, 2);
+  spr.drawString(s.valid ? s.zone : "UTC", 254, 50, 2);
 
   if(s.valid)
   {
     // The theme's meter green: every theme keeps it a legible accent, and it
-    // reads as clearly "not the UTC number" at a glance.
+    // reads as clearly "the other number" at a glance.
     spr.setTextDatum(TR_DATUM);
     spr.setTextColor(TH.smeter_bar);
-    spr.drawString(s.local, 248, 74, 4);
+    spr.drawString(s.clock, 248, 74, 4);
 
     spr.setTextDatum(TL_DATUM);
-    spr.drawString(s.zone, 254, 80, 2);
+    spr.drawString("UTC", 254, 80, 2);
   }
 
   // ── What it can be trusted to, and what the radio is doing ────────────────
@@ -120,6 +126,18 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
   // Signal strength stays: it is the one stock reading still true here, and it
   // tells you at a glance whether the station being harvested is receivable.
   drawSMeter(getStrength(rssi), METER_OFFSET_X, METER_OFFSET_Y);
+
+  // The stock menu, drawn LAST so it sits over the clock.
+  //
+  // Every ats-mini control still works in this build — press the encoder and
+  // turn for volume, bandwidth, AGC, theme, UTC offset. Dropping the side bar
+  // when this layout replaced the stock one left those controls functional but
+  // invisible, which is worse than removing them: the owner asked how to
+  // change the volume while it was in fact already changing under his hand.
+  // The bar appears only while a command is active, so the clock has the
+  // screen to itself the rest of the time.
+  if(currentCmd != CMD_NONE)
+    drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
 }
 
 #endif  // AIRTIME
