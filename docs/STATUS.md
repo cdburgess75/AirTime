@@ -3,15 +3,19 @@
 Live checklist for the build. Milestone contents come from [`PLAN.md §7`](PLAN.md#7-milestones).
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked/gate
 
-Last updated: batch 4 adds the hardware seam (`hal.h`), the §5 display
-formatting, the WWV phase-correction helper, and **`AirTimeApp`** — the wiring
-that makes a device — plus a **fully simulated ATS Mini** (`test/fakes.h`) that
-runs the real app end to end. **81 tests / 2151 checks** passing via `make test`.
+Last updated 2026-07-27. **153 tests / 6100 checks** via `make test`.
 
-The simulated device cold-starts from RDS, outvotes a lying station, lets WWV
-refine the coarse fix, learns its crystal (27.99 ppm measured against a true
-28 ppm), survives a warm boot honestly unsynced, and serves accurate stratum-1
-NTP to a simulated laptop — all with WiFi and ADC2 never live together.
+**The clock works.** Milestones 0-4 are done and Milestones 2 and 3 are verified
+over the air: `sntp 192.168.4.1` → **−0.005106 ± 0.070630**, no internet, no GPS.
+What remains is field acceptance (Milestone 5) and the things that make it
+pleasant to own.
+
+A **fully simulated ATS Mini** (`test/fakes.h`) runs the real app end to end: it
+cold-starts from RDS, outvotes a lying station, lets WWV refine the coarse fix,
+learns its crystal (27.99 ppm measured against a true 28 ppm), survives a warm
+boot honestly unsynced, hands the dial to an operator and takes it back, and
+serves accurate stratum-1 NTP to a simulated laptop — all with WiFi and ADC2
+never live together.
 
 > **Milestone 0 is complete (2026-07-25) and the pre-flash gate is lifted.** The device
 > has a verified backup, has been erased and restored on purpose, runs a build made from
@@ -75,9 +79,9 @@ the recovery drill, the IO11 beat test, a results table to fill in, and troubles
   ~15 stations agree on the correct minute within ±3.2 s while broken clocks agree with nobody — the minute-consensus design is confirmed by data. Sloppy-station offsets repeat within ~0.5 s run-to-run; tight ones within 100 ms.
 - [x] RDS CT‑group (group 4A) decode — `rds_ct` ✅ host-tested
 - [x] Multi‑station **voting** logic — `station_vote` ✅ host-tested (scan is hardware)
-- [ ] Minute‑boundary set *(needs disciplined clock — batch 2)*
-- [ ] Timezone config
-- [x] Persist last‑known date/time to NVS — `NvsTimeStore` ✍️ written, compiles for target; on‑device verify pending
+- [x] Minute‑boundary set ✅ the clock is disciplined and serving; `sntp` read **−0.005106 ± 0.070630** on device
+- [x] Timezone config ✅ `timezone` — eight zones as DST *rules*, host-tested against the real 2026 transitions; Settings → Time Zone, persisted in NVS
+- [x] Persist last‑known date/time to NVS — `NvsTimeStore` ✅ **verified on device**: a warm boot restores the time and correctly reports itself UNSYNCED until a real source speaks
 
 ## 🟢 Milestone 2 — Serve — **VERIFIED ON DEVICE (2026-07-26)**
 **Deliverable: laptop runs FT8 synced to the radio, no internet.**
@@ -118,7 +122,7 @@ multi-reading average says otherwise — a refinement, not a blocker.
 - [x] Band stepping 5/10/15 MHz with per‑band success + SNR logging and learned band preference — `scheduler` ✅ (holds a band that is producing markers; the dwell bounds patience with a *silent* band)
 - [x] Markers detected over the air ✅ (`run=798–800 ms`, tone ~400× floor, ticks duration-rejected)
 - [x] Marker → accepted fix chain ✅ host-tested (consecutive-marker self-corroboration; see "three bugs in one chain")
-- [ ] **Accepted fix verified ON DEVICE** — awaiting the next log with the `fix[]` line
+- [x] **Accepted fix verified ON DEVICE** ✅ `fix[wwv +207ms pair=n A | rds −728ms n=3 A]`, and `sntp` −0.005106 ± 0.070630 immediately after
 - [ ] Calibration constant *(genuinely hardware-dependent: measure once on-device, validate via WSJT‑X DT)*
 
 ## 🟡 Milestone 4 — Arbiter + confidence
@@ -140,7 +144,39 @@ multi-reading average says otherwise — a refinement, not a blocker.
 
 ---
 
-## What is left (the core logic is done)
+## What is actually left (2026-07-27)
+
+Nothing here blocks the clock; it keeps and serves time correctly today.
+
+**Needs the radio outdoors — Milestone 5, the real remaining work**
+- [ ] Battery-only cold start on an external antenna, no infrastructure
+- [ ] An evening of FT8: does the WSJT-X **DT column cluster near zero**? This is
+      the acceptance test the whole project is for, and the only one that can
+      fail in a way the bench cannot predict.
+- [ ] Multi-day soak — does drift learning hold across temperature swings?
+
+**Refinements, in rough order of value**
+- [ ] **Time-of-day WWV band choice.** The band list {15, 10, 5} MHz is tuned for
+      daytime propagation. A night cold-start begins on a band that is dead after
+      dark and has to fail its way down. The clock knows the hour; it should use it.
+- [ ] **CW decoder wiring.** The core is built and host-tested at 7–35 WPM but is
+      reachable from nothing. It wants ~5 ms sampler blocks (a 40 WPM dit is
+      30 ms) and it needs the tuner, so it belongs behind operator mode.
+- [ ] **Web config page** — time zone, nets, stations — so a field change does not
+      mean scrolling an encoder. The status page is the read half of this.
+- [ ] **Status page polish.** Functional, not yet good-looking.
+- [ ] **W1AW CW schedule**, if wanted. The placeholder entries were removed rather
+      than shipped wrong; adding them back needs the real published times.
+
+**Not blocking, and bounded**
+- `wwv_calibration_us = 0`. The −5 ms residual above bounds the receive-chain
+  delay below one sntp reading's noise, so this is a refinement a multi-reading
+  average could make, not an open question.
+- SkyWave's live NetLogger feed is not applicable on-device: the radio runs a
+  bare SoftAP with no route to the internet, by design. It would be a `tools/`
+  import at most.
+
+## How the adapters got here (historical)
 
 Every remaining item needs either the physical device or a decision from the
 owner. The pure logic of the spec is written and host-tested.
@@ -157,10 +193,10 @@ so each one is a fill-in-the-blank against a contract the tests already exercise
 | `IWiFiControl` | SoftAP up/down + the UDP/123 socket — `wifi_control` | ✍️ written |
 | `ITimeStore` | NVS via Preferences — `time_store` | ✍️ written |
 | *(glue)* | `AirTimeMode.cpp` in the sketch, `-DAIRTIME` builds | ✍️ written |
-| *(not an interface)* | TFT + encoder → `AirTimeApp::displayState` / operator calls | ⬜ next |
+| *(not an interface)* | TFT + encoder → `AirTimeApp::displayState` / operator calls | ✅ on device |
 
-All of the above **compiles and links for the esp32s3 target** (verified in the dev
-container — see "Firmware integration" below). None of it has run on the device yet.
+All of the above **runs on the device** — Milestones 2 and 3 are verified over the air.
+The dev container compile-checks every change before it reaches the owner's Mac.
 
 **Genuinely hardware-dependent** — the calibration constant (§4: SI4732 DSP group
 delay + amp + ADC latency, est. 10–40 ms), the local FM station survey (M1), and
