@@ -45,6 +45,14 @@
 
 namespace airtime_esp32 {
 
+// Return contract for RdsChipOps::read — the refusals are distinct on purpose,
+// because each names a different broken thing: NotFm means the chip is not
+// where the software believes; NoSync means it is there but the RDS decoder
+// has nothing to lock to (config or propagation); 0 means locked but the FIFO
+// is empty right now, which is the only healthy kind of nothing.
+constexpr int kRdsReadNotFm = -2;
+constexpr int kRdsReadNoSync = -1;
+
 // Implemented by the integration layer, where the SI4735 instance lives.
 struct RdsChipOps {
   // Optional: current RSSI on the tuned frequency, 0..127. Leave null when the
@@ -107,10 +115,23 @@ class Esp32RdsSource : public airtime::IRdsSource {
   uint32_t groupsAccepted() const { return accepted_; }
   uint32_t groupsRejected() const { return rejected_; }
 
+  // The pipeline, stage by stage. Field-earned: a device sat at "0 groups
+  // used" with a pegged S-meter, and nothing could say whether reads were
+  // refused (chip not in FM), the decoder had no sync (config/signal), the
+  // FIFO was simply empty, or the chip was never asked. One counter per
+  // verdict of read(); together they name the failing stage outright.
+  uint32_t pollsNotFm() const { return not_fm_; }
+  uint32_t pollsNoSync() const { return no_sync_; }
+  uint32_t pollsEmpty() const { return empty_; }
+
  private:
   RdsSourceConfig cfg_;
   RdsChipOps ops_{};
   airtime::IMonotonicClock* clock_ = nullptr;
+
+  uint32_t not_fm_ = 0;
+  uint32_t no_sync_ = 0;
+  uint32_t empty_ = 0;
 
   int32_t tuned_khz_ = 0;
   int64_t next_poll_us_ = 0;

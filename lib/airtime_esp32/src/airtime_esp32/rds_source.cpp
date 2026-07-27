@@ -17,7 +17,11 @@ bool Esp32RdsSource::poll(airtime::RdsGroup* out) {
   uint8_t ble[4];
   for (int i = 0; i < cfg_.max_reads_per_poll; ++i) {
     const int r = ops_.read(w, ble, ops_.ctx);
-    if (r <= 0) return false;
+    // Distinct refusals, distinctly counted — the pipeline diagnostic that
+    // turns "0 groups, strong signal" from a mystery into a named stage.
+    if (r == kRdsReadNotFm)  { ++not_fm_;  return false; }
+    if (r == kRdsReadNoSync) { ++no_sync_; return false; }
+    if (r <= 0)              { ++empty_;   return false; }
 
     if (r >= 2) next_poll_us_ = now;  // more waiting: let the next call in now
 

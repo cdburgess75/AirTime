@@ -61,6 +61,9 @@ using fs::FS;
 const airtime::AirTimeApp *airtimeApp();
 uint32_t airtimeRdsAccepted();
 uint32_t airtimeRdsRejected();
+uint32_t airtimeRdsNotFm();
+uint32_t airtimeRdsNoSync();
+uint32_t airtimeRdsEmpty();
 uint32_t airtimeApFailures();
 uint32_t airtimeNtpServed();
 int32_t  airtimeRdsTunedKhz();
@@ -215,6 +218,14 @@ static void atHandleRoot()
     atKv("FM RDS", "nothing yet");
   atRowf("<tr><th>RDS groups</th><td>%lu used, %lu discarded as unverifiable</td></tr>",
          (unsigned long)airtimeRdsAccepted(), (unsigned long)airtimeRdsRejected());
+  // Stage-by-stage, so "0 used" names its own cause: not-FM polls mean the
+  // chip is not where the software believes; no-sync with a strong S-meter
+  // means the RDS decoder has nothing to lock to; empty is healthy waiting.
+  atRowf("<tr><th>RDS pipeline</th><td class=\"%s\">"
+         "%lu not-FM, %lu no-sync, %lu empty</td></tr>",
+         (airtimeRdsNotFm() > 10 || airtimeRdsNoSync() > 100) ? "w" : "",
+         (unsigned long)airtimeRdsNotFm(), (unsigned long)airtimeRdsNoSync(),
+         (unsigned long)airtimeRdsEmpty());
   atSend("</table>");
 
   // ── What the radio is physically doing ───────────────────────────────────

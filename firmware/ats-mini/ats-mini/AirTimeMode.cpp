@@ -227,10 +227,12 @@ static int atRdsRssi(void*)
 static int atRdsRead(uint16_t w[4], uint8_t ble[4], void*)
 {
   // The SI4735 library skips the I2C transaction outside FM mode, leaving a
-  // stale status struct; the adapter relies on this <0 to never read it.
-  if(!rx.isCurrentTuneFM()) return -1;
+  // stale status struct; the adapter relies on this <0 to never read it. The
+  // two refusals are DIFFERENT diagnoses and return distinct codes — see
+  // kRdsReadNotFm/kRdsReadNoSync in rds_source.h.
+  if(!rx.isCurrentTuneFM()) return airtime_esp32::kRdsReadNotFm;
   rx.getRdsStatus(1, 0, 0);       // INTACK: pop one group, ack the flags
-  if(!rx.getRdsSync()) return -1;
+  if(!rx.getRdsSync()) return airtime_esp32::kRdsReadNoSync;
   bool fresh = rx.getRdsReceived() || rx.getNumRdsFifoUsed() > 0;
   if(!fresh) return 0;
   rx.getRdsRawGroup(w, ble);
@@ -688,6 +690,9 @@ void airtimeSetup()
 const airtime::AirTimeApp *airtimeApp() { return atApp; }
 uint32_t airtimeRdsAccepted()  { return atRds.groupsAccepted(); }
 uint32_t airtimeRdsRejected()  { return atRds.groupsRejected(); }
+uint32_t airtimeRdsNotFm()     { return atRds.pollsNotFm(); }
+uint32_t airtimeRdsNoSync()    { return atRds.pollsNoSync(); }
+uint32_t airtimeRdsEmpty()     { return atRds.pollsEmpty(); }
 uint32_t airtimeApFailures()   { return atWifi.upFailures(); }
 uint32_t airtimeNtpServed()    { return atWifi.requestsServed(); }
 int32_t  airtimeRdsTunedKhz()  { return atRds.tunedKhz(); }
@@ -784,15 +789,18 @@ void airtimeScreen(AirTimeScreen *out)
   // that it is searching". The frequency was already on screen; the missing
   // word was SEARCHING — an amber screen that names its target reads as a
   // process, where one that just sits there reads as a fault.
+  // Short on purpose: this row shares its line with the NTP-clients string
+  // drawn from the right, and the first cut of the SEARCHING prefix grew the
+  // text until the two overprinted — photographed in the field as
+  // "for RDSTAm0 clients". Fits in 21 characters or it collides.
   if(atApp->directive().wwv_listening)
-    snprintf(tunedBuf, sizeof(tunedBuf), "%sWWV %ld kHz  LISTENING",
-             st.synced ? "" : "SEARCHING  ",
+    snprintf(tunedBuf, sizeof(tunedBuf), "%sWWV %ld kHz",
+             st.synced ? "" : "SEARCH ",
              (long)atApp->directive().wwv_band_khz);
   else
-    snprintf(tunedBuf, sizeof(tunedBuf), "%sFM %.1f MHz  %s",
-             st.synced ? "" : "SEARCHING  ",
-             (double)atRds.tunedKhz() / 100.0,
-             st.synced ? "RDS" : "for RDS time");
+    snprintf(tunedBuf, sizeof(tunedBuf), "%sFM %.1f RDS",
+             st.synced ? "" : "SEARCH ",
+             (double)atRds.tunedKhz() / 100.0);
 
   snprintf(clientsBuf, sizeof(clientsBuf), "NTP: %d client%s",
            st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
