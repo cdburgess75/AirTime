@@ -445,6 +445,13 @@ const char *atModeName(int i)
   return b;
 }
 int atModeIdx() { return atModeOpt; }
+bool airtimeOwnsDial()
+{
+  // Clock mode is the only mode in which the dial is AirTime's. CW copy
+  // and the waterfall both run on a frequency the operator chose by ear.
+  return(atApp != nullptr && atApp->mode() == airtime::OpMode::Clock);
+}
+
 bool airtimeRadioMode() { return atApp != nullptr && atApp->radioMode(); }
 bool airtimeCwMode()    { return atApp != nullptr && atApp->cwMode(); }
 bool airtimeSpectrumMode()

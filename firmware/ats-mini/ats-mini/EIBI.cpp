@@ -438,6 +438,26 @@ bool eibiInstallEmbedded(bool force)
 
   for(size_t i = 0 ; i <= kEibiTextLen ; i++)
   {
+    // Come up for air. The download path this loop was cloned from yields
+    // naturally — it blocks on delay(1) whenever the socket has nothing —
+    // and dropping that was harmless while the embedded copy was a 12-entry
+    // seed parsed in a few hundred microseconds. At 480 KB and 8142 flash
+    // writes it is tens of seconds of uninterrupted work inside setup(),
+    // which starves the idle task and lets the task watchdog reboot the chip
+    // before AirTime is ever constructed: a boot loop that looks exactly like
+    // "the clock stopped syncing", because the clock never got to start.
+    if(!(i & 0x3FF)) delay(1);
+
+    // Progress, on the same cadence the download path uses. A minute of blank
+    // screen reads as a hang; a moving counter reads as work.
+    if(!(i & 0x7FFF))
+    {
+      char statusMessage[64];
+      sprintf(statusMessage, "... %u%%, %d entries ...",
+              (unsigned)(i * 100 / (kEibiTextLen ? kEibiTextLen : 1)), lineCnt);
+      drawScreen(eibiMessage, statusMessage);
+    }
+
     char c = (i == kEibiTextLen) ? '\n' : (char)src[i];
 
     if(c!='\n' && charCnt<sizeof(charBuf)-1) charBuf[charCnt++] = c;

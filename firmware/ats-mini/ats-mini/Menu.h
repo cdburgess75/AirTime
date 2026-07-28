@@ -193,6 +193,10 @@ void airtimeWebService(bool wifi_up);
 // False if the net's frequency falls outside every band in bands[].
 bool atTuneNet(int i);
 bool airtimeRadioMode();
+// True while AirTime is driving the tuner rather than the operator —
+// i.e. clock mode, whether harvesting RDS or listening for WWV. Callers
+// use it to keep expensive or meaningless work off a dial they do not own.
+bool airtimeOwnsDial();
 // CW copy: a third mode, in which the access point is DOWN (the audio tap and
 // the WiFi radio cannot both be live) and the panel becomes a text terminal.
 bool airtimeCwMode();

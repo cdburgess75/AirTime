@@ -997,6 +997,16 @@ void loop()
   // Periodically check schedule
   if((currentTime - lastScheduleCheck) > SCHEDULE_CHECK_TIME)
   {
+#ifdef AIRTIME
+    // Not while AirTime owns the dial. The lookup is a binary search over a
+    // 300 KB file in flash, and an ESP32 flash read disables the instruction
+    // cache for its duration — which stalls BOTH cores, including the audio
+    // sampler task timing an 800 ms WWV marker to the millisecond. It is also
+    // pointless: we know what is on 10000 kHz. In clock mode the dial is ours
+    // and the answer is never news; in radio mode it is the operator's and
+    // this is exactly the feature they want.
+    if(!airtimeOwnsDial())
+#endif
     needRedraw |= identifyFrequency(currentFrequency + currentBFO / 1000, true);
     lastScheduleCheck = currentTime;
   }
