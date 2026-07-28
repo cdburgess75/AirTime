@@ -216,6 +216,18 @@ int airtimeAboutLines(const char *out[], int max);
 // redraw. Never touches the tuner — see the note on atCycleOpt for what this
 // replaced and why.
 bool atCycleTurn(int16_t enc);
+// The same instrument, reachable from the web app. Index 0 is OFF; 1..count
+// select a mode. atCycleName(0) is "Off", so a picker can render the whole
+// range without special-casing it.
+int atCycleIdx();
+int atCycleCount();                 // number of modes, NOT counting Off
+const char *atCycleName(int i);
+long atCyclePeriodMs(int i);        // 0 for Off
+void atSetCycleIdx(int i);
+// The operator's zone offset from UTC in seconds, DST applied for right now.
+// The phone app renders local time from the RADIO's UTC plus this, so the
+// phone's own clock never enters — which is rather the point of the device.
+int atLocalOffsetS();
 // CW copy: a third mode, in which the access point is DOWN (the audio tap and
 // the WiFi radio cannot both be live) and the panel becomes a text terminal.
 bool airtimeCwMode();

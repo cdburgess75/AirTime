@@ -535,6 +535,29 @@ int airtimeAboutLines(const char *out[], int max)
 // The encoder, on the clock face. Wraps through OFF and every mode so a full
 // turn always gets you home; saved on every change because the alternative is
 // an operator discovering after a power cycle that the radio forgot.
+int atCycleIdx() { return atCycleOpt; }
+int atCycleCount() { return (int)airtime::kCycleModeCount; }
+
+const char *atCycleName(int i)
+{
+  if(i <= 0) return("Off");
+  if(i > (int)airtime::kCycleModeCount) return("?");
+  return(airtime::kCycleModes[i - 1].name);
+}
+
+long atCyclePeriodMs(int i)
+{
+  if(i <= 0 || i > (int)airtime::kCycleModeCount) return(0);
+  return((long)(airtime::kCycleModes[i - 1].period_us / 1000));
+}
+
+void atSetCycleIdx(int i)
+{
+  if(i < 0 || i > (int)airtime::kCycleModeCount || i == atCycleOpt) return;
+  atCycleOpt = i;
+  atSaveSettings();
+}
+
 bool atCycleTurn(int16_t enc)
 {
   if(!enc) return(false);
@@ -830,6 +853,17 @@ void airtimeSetup()
 // kZoneHawaii / kZoneUtc — see airtime/timezone.h, which is host-tested
 // against the real 2026 transition instants.
 #define kLocalZone (*kZones[atZone])
+
+int atLocalOffsetS()
+{
+  if(atApp == nullptr) return(0);
+  const airtime::DisplayState st = atApp->displayState();
+  if(!st.clock_valid) return(0);
+  const int64_t utc_s = st.utc_us / 1000000;
+  const char *zone = "";
+  return((int)(airtime::localEpochS(kLocalZone, utc_s, &zone) - utc_s));
+}
+
 
 // ── What the status page needs ──────────────────────────────────────────────
 // The adapters and the app are statics in this file. Rather than make them

@@ -43,6 +43,7 @@
 
 #include "Common.h"
 #include "Menu.h"
+#include "EIBI.h"   // eibiEntryCount — the app reports what the device HOLDS
 
 // WebServer.h declares a serveStatic() taking an unqualified `FS&` without
 // including the header that names it, so it does not compile on its own.
@@ -56,6 +57,7 @@
 using fs::FS;
 #include <WebServer.h>
 #include <airtime_core.h>
+#include "AirTimeIcon.h"
 
 // Supplied by AirTimeMode.cpp — the live app, or nullptr before setup runs.
 const airtime::AirTimeApp *airtimeApp();
@@ -135,7 +137,227 @@ static const char kStyle[] =
   "th{color:#575}p.note{color:#666}}"
   "</style>";
 
-static void atHandleRoot()
+
+// ── The phone app ───────────────────────────────────────────────────────────
+//
+// Add to Home Screen on an iPhone joined to the AirTime access point and this
+// becomes a full-screen app: no browser chrome, its own icon, the clock in the
+// size a clock deserves. The apple-mobile-web-app-* meta tags below are what
+// iOS keys on; the icon is a real PNG because iOS ignores SVG and data: URIs
+// for apple-touch-icon.
+//
+// ── What it deliberately does NOT have ──────────────────────────────────────
+//
+// A service worker, which is what would let it open with the last known state
+// while the radio is off the air. Service workers require a secure context and
+// this is plain HTTP on 192.168.4.1 — there is no certificate to be had for an
+// IP address on an island network, so the browser will not register one. The
+// app therefore needs the access point up to load at all, and says so plainly
+// when it cannot reach the radio rather than spinning forever.
+//
+// ── Why it interpolates instead of polling fast ─────────────────────────────
+//
+// A clock that ticks once per HTTP round trip looks broken. /api is polled
+// every 2 s and the browser advances the display itself between polls from the
+// device's UTC and its own monotonic clock, resyncing on each reply. The
+// phone's own wall clock is never consulted — that would defeat the entire
+// point of the device.
+static const char kApp[] =
+"<!doctype html><html lang=en><head><meta charset=utf-8>"
+"<meta name=viewport content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
+"<title>AirTime</title>"
+"<meta name=apple-mobile-web-app-capable content=yes>"
+"<meta name=mobile-web-app-capable content=yes>"
+"<meta name=apple-mobile-web-app-status-bar-style content=black-translucent>"
+"<meta name=apple-mobile-web-app-title content=AirTime>"
+"<meta name=theme-color content=#0d1220>"
+"<link rel=apple-touch-icon href=/icon.png>"
+"<link rel=icon href=/icon.png>"
+"<link rel=manifest href=/manifest.json>"
+"<style>"
+"*{box-sizing:border-box}"
+"body{margin:0;background:#0d1220;color:#e9eef7;"
+"font:16px/1.4 -apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;"
+"padding:max(14px,env(safe-area-inset-top)) 14px max(14px,env(safe-area-inset-bottom));"
+"-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}"
+".hd{display:flex;align-items:baseline;justify-content:space-between;opacity:.5;"
+"font-size:11px;letter-spacing:.14em;text-transform:uppercase}"
+".clk{font:600 clamp(52px,19vw,88px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;"
+"font-variant-numeric:tabular-nums;margin:6px 0 0;letter-spacing:-.02em}"
+".utc{font:15px/1 ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.6;margin-top:6px}"
+".pill{display:inline-block;margin-top:12px;padding:5px 12px;border-radius:999px;"
+"font-size:12px;font-weight:600;letter-spacing:.06em;background:#16351f;color:#5fd08a}"
+".pill.w{background:#3a2a10;color:#ffb02e}"
+".bar{margin-top:16px;height:44px;border-radius:12px;background:#161d31;"
+"position:relative;overflow:hidden}"
+".bar>i{position:absolute;inset:0 auto 0 0;width:0;background:#2f6df6;"
+"transition:width .1s linear}"
+".bar.odd>i{background:#c86bf0}.bar.w>i{background:#7a5a1e}"
+".bar>b,.bar>u{position:absolute;top:13px;font-size:14px;font-weight:600;"
+"text-decoration:none;font-variant-numeric:tabular-nums}"
+".bar>b{left:14px}.bar>u{right:14px}"
+"h2{font-size:11px;letter-spacing:.14em;text-transform:uppercase;opacity:.45;"
+"margin:26px 0 8px;font-weight:600}"
+".card{background:#141b2d;border-radius:14px;padding:2px 14px}"
+".r{display:flex;justify-content:space-between;gap:12px;padding:9px 0;"
+"border-bottom:1px solid #1e2740;font-size:14px}"
+".r:last-child{border-bottom:0}"
+".r>span:first-child{opacity:.55;flex:0 0 auto}"
+".r>span:last-child{text-align:right;font-variant-numeric:tabular-nums}"
+".w{color:#ffb02e}"
+".seg{display:flex;flex-wrap:wrap;gap:7px;margin-top:2px}"
+".seg button{flex:1 1 auto;min-width:74px;padding:11px 8px;border:0;border-radius:10px;"
+"background:#1c2540;color:#cdd6e8;font:600 13px/1 inherit;-webkit-appearance:none}"
+".seg button.on{background:#2f6df6;color:#fff}"
+".seg button:active{opacity:.6}"
+"p{opacity:.42;font-size:12px;line-height:1.5}"
+"#off{position:fixed;inset:0;background:#0d1220ee;display:none;place-items:center;"
+"text-align:center;padding:32px;backdrop-filter:blur(3px)}"
+"#off.on{display:grid}"
+"#off div{max-width:22rem}#off h3{font-size:17px;margin:0 0 10px;color:#ffb02e}"
+"</style></head><body>"
+"<div class=hd><span>AirTime</span><span id=ver></span></div>"
+"<div class=clk id=clk>--:--:--</div>"
+"<div class=utc id=utc>&nbsp;</div>"
+"<span class=pill id=pill>starting</span>"
+"<div class=bar id=bar style=display:none><i id=barf></i><b id=barn></b><u id=bart></u></div>"
+"<h2>Cycle</h2><div class=seg id=seg></div>"
+"<h2>Clock</h2><div class=card id=cconf></div>"
+"<h2>Receiver</h2><div class=card id=crx></div>"
+"<h2>Serving</h2><div class=card id=cntp></div>"
+"<p id=note></p>"
+"<div id=off><div><h3>Radio is off the air</h3>"
+"<p style=opacity:.7>The access point goes down while the radio listens for WWV "
+"&mdash; the ESP32 cannot read the audio tap and run its WiFi radio at the same "
+"time. It comes back by itself, usually within a couple of minutes.</p></div></div>"
+"<script>"
+"var D=null,T0=0,U0=0,P=0;"
+"function q(i){return document.getElementById(i)}"
+"function pad(n,w){n=String(n);while(n.length<(w||2))n='0'+n;return n}"
+"function hms(ms){var d=new Date(ms);return pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds())}"
+"function rows(el,a){var h='';for(var i=0;i<a.length;i++)h+='<div class=r><span>'+a[i][0]+"
+"'</span><span class=\"'+(a[i][2]?'w':'')+'\">'+a[i][1]+'</span></div>';el.innerHTML=h}"
+"function seg(){if(!D)return;var h='';for(var i=0;i<=D.cyc.n;i++)"
+"h+='<button onclick=setc('+i+') class=\"'+(i==D.cyc.i?'on':'')+'\">'+D.cyc.l[i]+'</button>';"
+"q('seg').innerHTML=h}"
+"function setc(i){fetch('/set?cycle='+i).then(function(){return pull()})}"
+"function paint(){"
+"if(!D){requestAnimationFrame(paint);return}"
+"var now=U0+(performance.now()-T0);"                     /* device UTC, ms */
+"q('clk').textContent=D.val?hms(now+D.tzo*1000):'--:--:--';"
+"q('utc').innerHTML=D.val?(D.zone+' &nbsp;&middot;&nbsp; '+hms(now)+' UTC'):'&nbsp;';"
+"if(P>0&&D.val){var b=q('bar');b.style.display='';"
+"var into=((now%P)+P)%P,slot=Math.floor(now/P);"
+"q('barf').style.width=(into/P*100)+'%';"
+"b.className='bar'+(!D.syn?' w':(slot%2?' odd':''));"
+"q('barn').textContent=D.cyc.l[D.cyc.i]+' '+(P%1000?(P/1000).toFixed(1):P/1000)+'s';"
+"var rem=(P-into)/1000;q('bart').textContent='T-'+rem.toFixed(rem<10?2:1)+'s';}"
+"else q('bar').style.display='none';"
+"requestAnimationFrame(paint)}"
+"function apply(j){D=j;U0=j.utc;T0=performance.now();P=j.cyc.p;"
+"q('off').className='';q('ver').textContent=j.v;"
+"var p=q('pill');p.textContent=j.val?(j.syn?'SYNCED '+j.unc:'UNSYNCED'):'NO TIME YET';"
+"p.className='pill'+(j.syn?'':' w');"
+"rows(q('cconf'),[['uncertainty',j.unc,!j.syn],['sources',j.src,j.src=='none'],"
+"['last verified',j.age,!j.syn],['crystal',j.ppm],['on the air',j.net||'-']]);"
+"rows(q('crx'),[['dial',j.rx.d],['chip mode',j.rx.fm?'FM':'AM/SSB'],"
+"['signal','RSSI '+j.rx.r+' SNR '+j.rx.s,j.rx.r<10],['doing',j.rx.g],"
+"['schedule',j.eibi?(j.eibi+' entries'):'NOT INSTALLED',!j.eibi]]);"
+"rows(q('cntp'),[['NTP','192.168.4.1:123'],['clients',j.ntp.c],"
+"['requests answered',j.ntp.a],['uptime',j.up]]);"
+"seg();"
+"q('note').textContent='Polls every 2 s; the clock runs from the radio\\u2019s own time '"
+"+'between polls, never the phone\\u2019s. Full diagnostics at /status.'}"
+"function pull(){return fetch('/api',{cache:'no-store'}).then(function(r){return r.json()})"
+".then(apply).catch(function(){q('off').className='on'})}"
+"pull();setInterval(pull,2000);requestAnimationFrame(paint);"
+"</script></body></html>";
+
+static void atHandleApp()
+{
+  atServer->sendHeader("Cache-Control", "no-store");
+  atServer->send(200, "text/html; charset=utf-8", kApp);
+}
+
+static void atHandleIcon()
+{
+  atServer->sendHeader("Cache-Control", "max-age=86400");
+  atServer->send_P(200, "image/png", (const char*)kAirTimeIcon, kAirTimeIconLen);
+}
+
+static void atHandleManifest()
+{
+  atServer->send(200, "application/manifest+json",
+    "{\"name\":\"AirTime\",\"short_name\":\"AirTime\",\"display\":\"standalone\","
+    "\"background_color\":\"#0d1220\",\"theme_color\":\"#0d1220\",\"start_url\":\"/\","
+    "\"icons\":[{\"src\":\"/icon.png\",\"sizes\":\"180x180\",\"type\":\"image/png\"}]}");
+}
+
+// Live state, small and flat. Everything the app draws comes from here; the
+// page itself is static and cacheable.
+static void atHandleApi()
+{
+  const airtime::AirTimeApp *app = airtimeApp();
+  AirTimeScreen s;
+  airtimeScreen(&s);
+
+  atServer->sendHeader("Cache-Control", "no-store");
+  atServer->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  atServer->send(200, "application/json", "");
+
+  if(app == nullptr) { atSend("{\"v\":\"" AIRTIME_VERSION "\",\"val\":0}"); atSend(""); return; }
+
+  const airtime::DisplayState st = app->displayState();
+  char srcs[32];
+  airtime::formatSources(st.sources, srcs, sizeof(srcs));
+
+  // utc as milliseconds: 1.8e12 today, comfortably inside a JS safe integer,
+  // and the app only ever needs millisecond resolution to draw with.
+  atRowf("{\"v\":\"%s\",\"val\":%d,\"syn\":%d,\"utc\":%lld,\"tzo\":%d,\"zone\":\"%s\",",
+         AIRTIME_VERSION, st.clock_valid ? 1 : 0, st.synced ? 1 : 0,
+         (long long)(st.utc_us / 1000), atLocalOffsetS(), s.zone);
+  atRowf("\"unc\":\"%s\",\"age\":\"%s\",\"src\":\"%s\",",
+         atMs(st.uncertainty_us), st.clock_valid ? atAge(st.since_sync_us) : "never",
+         srcs);
+  atRowf("\"ppm\":\"%+.2f ppm\",\"net\":\"%s\",", app->arbiter().ratePpm(), s.net);
+  atRowf("\"rx\":{\"d\":\"%s\",\"fm\":%d,\"r\":%d,\"s\":%d,\"g\":\"%s\"},",
+         s.tuned, rx.isCurrentTuneFM() ? 1 : 0, (int)rssi, (int)snr,
+         app->cwMode()    ? "CW copy" :
+         app->radioMode() ? "operator has the dial" :
+         app->surveying() ? "surveying the FM band" :
+         st.phase == airtime::Phase::Listening ? "listening for WWV" :
+         st.phase == airtime::Phase::Acquiring ? "acquiring" : "serving time");
+  atRowf("\"ntp\":{\"c\":%d,\"a\":%lu},\"eibi\":%d,",
+         st.ntp_clients, (unsigned long)airtimeNtpServed(), eibiEntryCount());
+
+  const uint32_t up = millis() / 1000;
+  atRowf("\"up\":\"%luh %02lum\",", (unsigned long)(up / 3600),
+         (unsigned long)((up / 60) % 60));
+
+  // The cycle picker's whole model in one object: current index, how many
+  // modes exist, the period to animate, and every label.
+  atRowf("\"cyc\":{\"i\":%d,\"n\":%d,\"p\":%ld,\"l\":[",
+         atCycleIdx(), atCycleCount(), atCyclePeriodMs(atCycleIdx()));
+  for(int i = 0 ; i <= atCycleCount() ; i++)
+    atRowf("%s\"%s\"", i ? "," : "", atCycleName(i));
+  atSend("]}}");
+  atSend("");
+}
+
+// Settings the app is allowed to change. Deliberately only the ones that
+// cannot take the access point down under the operator's feet: switching to
+// CW or the waterfall, or forcing a listen window, kills the WiFi radio and
+// with it this connection (PLAN.md §2). Those stay on the device's own menu,
+// where the person pressing the button is looking at the screen.
+static void atHandleSet()
+{
+  if(atServer->hasArg("cycle"))
+    atSetCycleIdx(atServer->arg("cycle").toInt());
+  atServer->sendHeader("Cache-Control", "no-store");
+  atServer->send(200, "text/plain", "ok");
+}
+
+static void atHandleStatus()
 {
   const airtime::AirTimeApp *app = airtimeApp();
 
@@ -352,8 +574,13 @@ void airtimeWebService(bool wifi_up)
     if(atServer == nullptr)
     {
       atServer = new WebServer(80);
-      atServer->on("/", atHandleRoot);
-      atServer->onNotFound(atHandleRoot);   // any path, one page
+      atServer->on("/", atHandleApp);
+      atServer->on("/status", atHandleStatus);
+      atServer->on("/api", atHandleApi);
+      atServer->on("/set", atHandleSet);
+      atServer->on("/icon.png", atHandleIcon);
+      atServer->on("/manifest.json", atHandleManifest);
+      atServer->onNotFound(atHandleApp);
     }
     atServer->begin();
     atServerUp = true;
