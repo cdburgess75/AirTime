@@ -180,6 +180,15 @@ struct AirTimeScreen {
   // back from the field is a PHOTOGRAPH OF THE SCREEN, so the screen has to
   // be able to answer the question on its own.
   const char *diag;
+  // ── The digital-mode cycle instrument ─────────────────────────────────────
+  // Empty name = off, which is the default and leaves the clock face exactly
+  // as it was. When on it TAKES the bottom row from net/diag: the screen is
+  // 170 px and there is no eighteenth row to be had, and an operator who
+  // turned this on has said which one they want.
+  const char *cycle;       // "FT8 15s", or "" when off
+  const char *cycle_t;     // "T-3.47s"
+  float cycle_fraction;    // 0..1, how far into the slot
+  bool cycle_odd;          // slot parity — FT8 alternates TX and RX on it
   bool synced;          // false => clock drawn in the warning colour
   bool valid;           // false => no time at all yet
 };
@@ -202,6 +211,11 @@ bool airtimeOwnsDial();
 // there is exactly one place that decides what the device says about itself.
 // Returns how many of `out` were filled.
 int airtimeAboutLines(const char *out[], int max);
+// The encoder, on the clock face: steps the digital-mode cycle instrument
+// through OFF and every mode. True if anything changed and the panel should
+// redraw. Never touches the tuner — see the note on atCycleOpt for what this
+// replaced and why.
+bool atCycleTurn(int16_t enc);
 // CW copy: a third mode, in which the access point is DOWN (the audio tap and
 // the WiFi radio cannot both be live) and the panel becomes a text terminal.
 bool airtimeCwMode();

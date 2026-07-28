@@ -14,6 +14,7 @@
 #include "airtime/app.h"
 #include "airtime/arbiter.h"
 #include "airtime/disciplined_clock.h"
+#include "airtime/cycle.h"
 #include "airtime/dial.h"
 #include "airtime/display.h"
 #include "airtime/drift.h"

@@ -861,6 +861,19 @@ void loop()
       {
         case CMD_NONE:
         case CMD_SCAN:
+#ifdef AIRTIME
+          // On the clock face the dial is not a tuning dial. Turning it here
+          // used to retune the chip off the station AirTime was harvesting AND
+          // write the new frequency into the operator's saved band — undone at
+          // the next dwell rotation up to 75 seconds later, silently, with RDS
+          // decode dead in the meantime. It drives the cycle instrument now,
+          // and nothing below this line runs: no tune, no band save.
+          if(airtimeOwnsDial())
+          {
+            needRedraw |= atCycleTurn(encCount);
+            break;
+          }
+#endif
           // Tuning
           needRedraw |= doTune(encCountAccel);
           // Current frequency may have changed

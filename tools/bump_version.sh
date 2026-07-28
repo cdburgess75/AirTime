@@ -1,11 +1,11 @@
 #!/bin/bash
-# Advance AIRTIME_VERSION under the vYY.MM.DD.NNN convention: today's date,
+# Advance AIRTIME_VERSION under the vYYYY.MM.DD.NNN convention: today's date,
 # then NNN counting the day's builds from 001.
 #
 #   tools/bump_version.sh          # rewrites Common.h, prints the new version
 #
-# Same day  -> the build number increments (v26.07.27.001 -> v26.07.27.002).
-# New day   -> the number resets            (v26.07.27.003 -> v26.07.28.001).
+# Same day  -> the build number increments (v2026.07.27.001 -> v2026.07.27.002).
+# New day   -> the number resets            (v2026.07.27.003 -> v2026.07.28.001).
 #
 # Run it before cutting anything an operator will see; the About screen and
 # the serial banner both carry this string, and "which firmware is this radio
@@ -18,11 +18,11 @@ COMMON="$(cd "$(dirname "$0")/.." && pwd)/firmware/ats-mini/ats-mini/Common.h"
 CUR=$(sed -n 's/.*AIRTIME_VERSION "\(v[^"]*\)".*/\1/p' "$COMMON")
 [ -n "$CUR" ] || { echo "bump_version: no AIRTIME_VERSION in Common.h" >&2; exit 1; }
 
-TODAY=$(date +%y.%m.%d)
-if [ "${CUR:1:8}" = "$TODAY" ]; then
+TODAY=$(date +%Y.%m.%d)
+if [ "${CUR:1:10}" = "$TODAY" ]; then
   # 10# forces base ten: "008" and "009" are octal to the shell otherwise,
   # and 009 is not even valid octal — the ninth build of a day would fail.
-  N=$((10#${CUR:10} + 1))
+  N=$((10#${CUR:12} + 1))
 else
   N=1
 fi

@@ -122,6 +122,21 @@ static const char* const kModeNames[] = {"Clock", "Radio", "CW Copy", "Waterfall
 static int atModeOpt = 0;
 static int atHfOpt = 0;
 
+// ── The digital-mode cycle instrument ───────────────────────────────────────
+// 0 = off; 1..kCycleModeCount selects airtime::kCycleModes[opt-1].
+//
+// This is what the encoder does on the clock face. It used to call the stock
+// tuning path, which retuned the chip off the station AirTime was harvesting
+// AND wrote the new frequency into the operator's saved band — undone at the
+// next dwell rotation up to 75 seconds later, silently, with RDS decode dead
+// in the meantime. The one knob on a time appliance should not be a booby
+// trap; it should show you the thing the appliance is FOR.
+//
+// Off by default, so a clock nobody has touched still reads like a clock.
+// Persisted, because an operator running FT8 all evening should not have to
+// re-choose it after every power cycle.
+static int atCycleOpt = 0;
+
 // ── Nets worth knowing about ────────────────────────────────────────────────
 // The feature the clock earns: a receiver that knows UTC to milliseconds can
 // answer "is it on NOW", not merely "what frequency is it on".
@@ -286,7 +301,8 @@ static int atRdsRead(uint16_t w[4], uint8_t ble[4], void*)
 
 static void atSaveSettings()
 {
-  const uint8_t blob[3] = {1, (uint8_t)atZone, (uint8_t)atBandOpt};  // [version, ...]
+  const uint8_t blob[4] = {2, (uint8_t)atZone, (uint8_t)atBandOpt,
+                           (uint8_t)atCycleOpt};  // [version, ...]
   atStore.saveBlob("cfg", blob, sizeof(blob));
 }
 
@@ -295,9 +311,14 @@ static void atLoadSettings()
   uint8_t blob[8];
   size_t n = 0;
   if(!atStore.loadBlob("cfg", blob, sizeof(blob), &n)) return;
-  if(n < 3 || blob[0] != 1) return;            // unknown format: keep defaults
+  // Version 1 blobs predate the cycle instrument and are still perfectly good
+  // — read what they carry and leave the rest at its default, rather than
+  // discarding a zone the operator set weeks ago over one missing byte.
+  if(n < 3 || (blob[0] != 1 && blob[0] != 2)) return;   // unknown: keep defaults
   if(blob[1] < kZoneCount)    atZone    = blob[1];
   if(blob[2] < kBandOptCount) atBandOpt = blob[2];
+  if(blob[0] >= 2 && n >= 4 && blob[3] <= (uint8_t)airtime::kCycleModeCount)
+    atCycleOpt = blob[3];
 }
 
 int atZoneCount() { return kZoneCount; }
@@ -509,6 +530,21 @@ int airtimeAboutLines(const char *out[], int max)
            (unsigned long)(up % 60));
   out[n] = l[n]; ++n;
   return n;
+}
+
+// The encoder, on the clock face. Wraps through OFF and every mode so a full
+// turn always gets you home; saved on every change because the alternative is
+// an operator discovering after a power cycle that the radio forgot.
+bool atCycleTurn(int16_t enc)
+{
+  if(!enc) return(false);
+  const int n = (int)airtime::kCycleModeCount + 1;   // +1 for OFF
+  int v = (atCycleOpt + (enc > 0 ? 1 : -1)) % n;
+  if(v < 0) v += n;
+  if(v == atCycleOpt) return(false);
+  atCycleOpt = v;
+  atSaveSettings();
+  return(true);
 }
 
 bool airtimeOwnsDial()
@@ -822,6 +858,8 @@ void airtimeScreen(AirTimeScreen *out)
   static char clientsBuf[24] = "";
   static char netBuf[40]     = "";
   static char diagBuf[48]    = "";
+  static char cycleBuf[24]   = "";
+  static char cycleTBuf[16]  = "";
 
   if(atApp == nullptr)
   {
@@ -829,6 +867,8 @@ void airtimeScreen(AirTimeScreen *out)
     out->status = statusBuf;
     out->tuned = tunedBuf; out->clients = clientsBuf; out->net = netBuf;
     out->diag = diagBuf;
+    out->cycle = cycleBuf; out->cycle_t = cycleTBuf;
+    out->cycle_fraction = 0.0f; out->cycle_odd = false;
     out->synced = false;   out->valid = false;
     return;
   }
@@ -947,6 +987,36 @@ void airtimeScreen(AirTimeScreen *out)
              (unsigned long)atRds.groupsAccepted());
   }
 
+  // ── The cycle instrument ──────────────────────────────────────────────────
+  // Off, or before any fix at all, it draws nothing: a slot boundary computed
+  // from a clock we do not believe is worse than no boundary, because it looks
+  // exactly as authoritative as a correct one.
+  cycleBuf[0] = cycleTBuf[0] = 0;
+  out->cycle_fraction = 0.0f;
+  out->cycle_odd = false;
+  if(atCycleOpt > 0 && st.clock_valid)
+  {
+    const airtime::CycleMode &m = airtime::kCycleModes[atCycleOpt - 1];
+    const airtime::CyclePhase ph = airtime::cyclePhaseAt(st.utc_us, m.period_us);
+
+    // Period as the operator quotes it: "15s", "7.5s", "120s".
+    const long ms = (long)(m.period_us / 1000);
+    if(ms % 1000)
+      snprintf(cycleBuf, sizeof(cycleBuf), "%s %ld.%lds", m.name, ms / 1000,
+               (ms % 1000) / 100);
+    else
+      snprintf(cycleBuf, sizeof(cycleBuf), "%s %lds", m.name, ms / 1000);
+
+    // Two decimals under ten seconds — that is the range where an operator is
+    // watching for the boundary and where our millisecond accuracy is the
+    // point. One decimal above, so a WSPR countdown does not jitter uselessly.
+    const double rem = (double)ph.remain_us / 1e6;
+    snprintf(cycleTBuf, sizeof(cycleTBuf), rem < 10.0 ? "T-%.2fs" : "T-%.1fs", rem);
+
+    out->cycle_fraction = ph.fraction;
+    out->cycle_odd = ph.odd_slot;
+  }
+
   // A survey owns the dial for half an hour. Saying so is the difference
   // between "working" and "broken" from the operator's side.
   if(atApp->surveying())
@@ -959,6 +1029,8 @@ void airtimeScreen(AirTimeScreen *out)
     out->status = statusBuf;
     out->tuned  = tunedBuf; out->clients = clientsBuf; out->net = netBuf;
     out->diag   = diagBuf;
+    out->cycle = cycleBuf; out->cycle_t = cycleTBuf;
+    out->cycle_fraction = 0.0f; out->cycle_odd = false;
     out->synced = st.synced; out->valid = st.clock_valid;
     return;
   }
@@ -993,6 +1065,8 @@ void airtimeScreen(AirTimeScreen *out)
   out->clients = clientsBuf;
   out->net    = netBuf;
   out->diag   = diagBuf;
+  out->cycle  = cycleBuf;
+  out->cycle_t = cycleTBuf;
   out->synced = st.synced;
   out->valid  = st.clock_valid;
 }

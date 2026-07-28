@@ -407,17 +407,40 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
 
     // What is on the air right now — the line only an accurate clock can
     // write. Shown in the accent colour so it reads as news, not status.
-    if(s.net[0])
+    // The cycle instrument owns this row when it is on. The panel is 170 px
+    // and there is no eighteenth row to be had; an operator who turned this on
+    // has said which one they want, and one spin back to OFF returns the other.
+    if(s.cycle && s.cycle[0])
+    {
+      // Bar first, text over it. Unfilled ground so the slot's full width is
+      // legible even at zero, then the elapsed portion in the parity colour:
+      // FT8 alternates transmit and receive on that parity, so the colour
+      // flipping every slot IS the information, not decoration.
+      //
+      // Amber whenever the clock is not synchronised. The boundary is only as
+      // good as the time behind it, and an instrument that looks equally
+      // confident when it is guessing is worse than no instrument.
+      const int y = 150, h = 18;
+      int w = (int)(s.cycle_fraction * 320.0f + 0.5f);
+      if(w < 0) w = 0; else if(w > 320) w = 320;
+
+      spr.fillRect(0, y, 320, h, TH.menu_bg);
+      spr.fillRect(0, y, w, h, !s.synced      ? TH.text_warn
+                             : s.cycle_odd    ? TH.rds_text
+                                              : TH.smeter_bar);
+
+      spr.setTextColor(TH.text);
+      spr.setTextDatum(TL_DATUM);
+      spr.drawString(s.cycle, 4, y + 1, 2);
+      spr.setTextDatum(TR_DATUM);
+      spr.drawString(s.cycle_t, 316, y + 1, 2);
+    }
+    else if(s.net[0])
     {
       spr.setTextDatum(TC_DATUM);
       spr.setTextColor(TH.smeter_bar);
       spr.drawString(s.net, 160, 150, 2);
     }
-    // Nothing on the air to announce because there is no trustworthy clock —
-    // so spend the row saying WHY instead. The two are mutually exclusive by
-    // construction (net text is only built when synced), and a screen that
-    // can explain its own failure is worth more than one that stays pretty
-    // while an operator and I trade guesses about it.
     else if(s.diag && s.diag[0])
     {
       spr.setTextDatum(TC_DATUM);
