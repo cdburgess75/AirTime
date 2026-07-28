@@ -413,6 +413,17 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
       spr.setTextColor(TH.smeter_bar);
       spr.drawString(s.net, 160, 150, 2);
     }
+    // Nothing on the air to announce because there is no trustworthy clock —
+    // so spend the row saying WHY instead. The two are mutually exclusive by
+    // construction (net text is only built when synced), and a screen that
+    // can explain its own failure is worth more than one that stays pretty
+    // while an operator and I trade guesses about it.
+    else if(s.diag && s.diag[0])
+    {
+      spr.setTextDatum(TC_DATUM);
+      spr.setTextColor(TH.text_warn);
+      spr.drawString(s.diag, 160, 150, 2);
+    }
   }
 
   // Signal strength stays: it is the one stock reading still true here, and it

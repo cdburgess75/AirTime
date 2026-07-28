@@ -175,6 +175,11 @@ struct AirTimeScreen {
   const char *tuned;    // "FM 89.9 MHz" / "WWV 15000 kHz  LISTENING"
   const char *clients;  // "NTP: 2 clients"
   const char *net;      // what is on the air, or ""
+  // Why it is still searching: "RSSI 14 SNR 2  no-sync 812  g0". Empty once
+  // synced. The web page carries the same numbers, but what actually comes
+  // back from the field is a PHOTOGRAPH OF THE SCREEN, so the screen has to
+  // be able to answer the question on its own.
+  const char *diag;
   bool synced;          // false => clock drawn in the warning colour
   bool valid;           // false => no time at all yet
 };

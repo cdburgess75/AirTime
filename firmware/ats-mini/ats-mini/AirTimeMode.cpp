@@ -748,12 +748,14 @@ void airtimeScreen(AirTimeScreen *out)
   static char tunedBuf[40]   = "";
   static char clientsBuf[24] = "";
   static char netBuf[40]     = "";
+  static char diagBuf[48]    = "";
 
   if(atApp == nullptr)
   {
     out->clock = clockBuf; out->local = localBuf; out->zone = zoneBuf;
     out->status = statusBuf;
     out->tuned = tunedBuf; out->clients = clientsBuf; out->net = netBuf;
+    out->diag = diagBuf;
     out->synced = false;   out->valid = false;
     return;
   }
@@ -843,6 +845,35 @@ void airtimeScreen(AirTimeScreen *out)
   snprintf(clientsBuf, sizeof(clientsBuf), "NTP: %d client%s",
            st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
 
+  // ── Why it is still searching ─────────────────────────────────────────────
+  // Only while unsynced: once time is good this row is noise, and the net
+  // line wants the space. Three numbers, chosen because between them they
+  // separate every way the RDS path fails:
+  //
+  //   RSSI/SNR   is there anything on the frequency at all? Below ~10 dBuV
+  //              there is nothing to decode and no firmware change will help.
+  //   the stage  which refusal dominates. not-FM means the chip is not where
+  //              we think it is; no-sync means the decoder never locked on a
+  //              signal we do have; empty means it locked and the FIFO is
+  //              simply not producing.
+  //   g          groups actually accepted. Non-zero with no sync means RDS
+  //              works and the fault is downstream, in the CT decode.
+  diagBuf[0] = 0;
+  if(!st.synced)
+  {
+    const uint32_t nf = atRds.pollsNotFm();
+    const uint32_t ns = atRds.pollsNoSync();
+    const uint32_t mt = atRds.pollsEmpty();
+    const char *stage = "not-FM";
+    uint32_t worst = nf;
+    if(ns > worst) { worst = ns; stage = "no-sync"; }
+    if(mt > worst) { worst = mt; stage = "empty";   }
+    if(worst == 0) stage = "idle";
+    snprintf(diagBuf, sizeof(diagBuf), "RSSI %d SNR %d  %s %lu  g%lu",
+             (int)rssi, (int)snr, stage, (unsigned long)worst,
+             (unsigned long)atRds.groupsAccepted());
+  }
+
   // A survey owns the dial for half an hour. Saying so is the difference
   // between "working" and "broken" from the operator's side.
   if(atApp->surveying())
@@ -854,6 +885,7 @@ void airtimeScreen(AirTimeScreen *out)
     out->clock  = clockBuf; out->local = localBuf; out->zone = zoneBuf;
     out->status = statusBuf;
     out->tuned  = tunedBuf; out->clients = clientsBuf; out->net = netBuf;
+    out->diag   = diagBuf;
     out->synced = st.synced; out->valid = st.clock_valid;
     return;
   }
@@ -887,6 +919,7 @@ void airtimeScreen(AirTimeScreen *out)
   out->tuned  = tunedBuf;
   out->clients = clientsBuf;
   out->net    = netBuf;
+  out->diag   = diagBuf;
   out->synced = st.synced;
   out->valid  = st.clock_valid;
 }
