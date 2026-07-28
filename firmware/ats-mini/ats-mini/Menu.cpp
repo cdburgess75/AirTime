@@ -210,6 +210,11 @@ static const MenuItem atRootMenu[] =
   {"Mode",     CMD_AT_MODE},
   {"Nets",     CMD_AT_NETS},
   {"Settings", CMD_SETTINGS},
+  // One click from the clock face. It lived at Settings->About, which is where
+  // you put a thing nobody is meant to find; the first question about any
+  // field problem is "what is it running", and the answer should not be a
+  // scavenger hunt.
+  {"About",    CMD_ABOUT},
 };
 
 // The root menu when the dial is the operator's (Radio, CW copy, Waterfall).
@@ -859,7 +864,13 @@ static void doScrollDir(int16_t enc)
 uint8_t doAbout(int16_t enc)
 {
   static uint8_t aboutScreen = 0;
+#ifdef AIRTIME
+  // Four pages under AIRTIME: the AirTime page is page 0, because it is the
+  // one an operator of THIS build actually wants.
+  aboutScreen = clamp_range(aboutScreen, enc, 0, 3);
+#else
   aboutScreen = clamp_range(aboutScreen, enc, 0, 2);
+#endif
   return aboutScreen;
 }
 

@@ -21,6 +21,12 @@ struct StationSchedule
 bool eibiAvailable();
 bool eibiLoadSchedule();
 #ifdef AIRTIME
+// How many entries the device actually HOLDS, and which dataset they came
+// from — read from the installed file, not from the image's claim about it.
+// The two disagree for exactly as long as an install is failing, which is the
+// moment the answer matters.
+int eibiEntryCount();
+const char *kEibiInstalledVersion();
 // Install the schedule compiled into the image (EiBiData.h) into LittleFS.
 // force=false is a no-op when the installed dataset already matches — cheap
 // enough to call every boot. force=true reinstalls unconditionally (the

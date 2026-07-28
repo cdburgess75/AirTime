@@ -403,6 +403,29 @@ static bool eibiParseLine(const char *line, StationSchedule &entry)
 #include "EiBiData.h"
 #define EIBI_VER_PATH "/eibi.ver"
 
+int eibiEntryCount()
+{
+  fs::File f = LittleFS.open(EIBI_PATH, "rb");
+  if(!f) return(0);
+  const size_t bytes = f.size();
+  f.close();
+  return((int)(bytes / sizeof(StationSchedule)));
+}
+
+const char *kEibiInstalledVersion()
+{
+  static char ver[32];
+  ver[0] = '\0';
+  fs::File vf = LittleFS.open(EIBI_VER_PATH, "rb");
+  if(vf)
+  {
+    size_t n = vf.read((uint8_t*)ver, sizeof(ver) - 1);
+    ver[n < sizeof(ver) ? n : sizeof(ver) - 1] = '\0';
+    vf.close();
+  }
+  return(ver[0] ? ver : "unknown");
+}
+
 bool eibiInstallEmbedded(bool force)
 {
   static const char *eibiMessage = "Loading EiBi Schedule";

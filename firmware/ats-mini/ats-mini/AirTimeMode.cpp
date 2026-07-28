@@ -445,6 +445,72 @@ const char *atModeName(int i)
   return b;
 }
 int atModeIdx() { return atModeOpt; }
+// ── What this device is, in the order you would ask ─────────────────────────
+// Every line here has been wanted during a real field problem: which build is
+// on the unit, is the clock trustworthy right now, what is it listening to,
+// and does it actually hold the schedule it claims to. Uptime last, because
+// it is how you tell a reboot loop from a long quiet run.
+int airtimeAboutLines(const char *out[], int max)
+{
+  static char l[7][64];
+  int n = 0;
+  if(atApp == nullptr || max <= 0) return 0;
+
+  const airtime::DisplayState st = atApp->displayState();
+
+  char unc[24], src[24], age[16];
+  airtime::formatUncertainty(st.uncertainty_us, unc, sizeof(unc));
+  airtime::formatSources(st.sources, src, sizeof(src));
+  airtime::formatAge(st.since_sync_us, age, sizeof(age));
+  // formatUncertainty spends a UTF-8 "±" the TFT fonts do not carry; the
+  // screen strings in this file are ASCII for exactly that reason.
+  const char *u = unc;
+  while(*u && (unsigned char)*u >= 0x80) u++;
+
+  if(!st.clock_valid)
+    snprintf(l[n], sizeof(l[n]), "Clock:  no fix yet");
+  else if(!st.synced)
+    snprintf(l[n], sizeof(l[n]), "Clock:  UNSYNCED, coasting (+/-%s)", u);
+  else
+    snprintf(l[n], sizeof(l[n]), "Clock:  SYNCED +/-%s, %s ago", u, age);
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "Source: %s        NTP: %d client%s",
+           src, st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "FM:     %.1f  %.1f  %.1f MHz",
+           (double)kFmStations[0] / 100.0, (double)kFmStations[1] / 100.0,
+           (double)kFmStations[2] / 100.0);
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "WWV:    %ld  %ld  %ld kHz  (%s first)",
+           (long)kWwvBands[0], (long)kWwvBands[1], (long)kWwvBands[2],
+           kBandNames[atBandOpt]);
+  out[n] = l[n]; if(++n >= max) return n;
+
+  // The schedule the device HOLDS, not the one the image carries — they differ
+  // for exactly as long as an install is failing, which is when you need to
+  // know. Counted from the file, so it cannot inherit a stale claim.
+  const int entries = eibiEntryCount();
+  if(entries > 0)
+    snprintf(l[n], sizeof(l[n]), "EiBi:   %d entries, dataset %s",
+             entries, kEibiInstalledVersion());
+  else
+    snprintf(l[n], sizeof(l[n]), "EiBi:   NOT INSTALLED");
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "AP:     AirTime, 192.168.4.1:123");
+  out[n] = l[n]; if(++n >= max) return n;
+
+  const uint32_t up = millis() / 1000;
+  snprintf(l[n], sizeof(l[n]), "Uptime: %luh %02lum %02lus",
+           (unsigned long)(up / 3600), (unsigned long)((up / 60) % 60),
+           (unsigned long)(up % 60));
+  out[n] = l[n]; ++n;
+  return n;
+}
+
 bool airtimeOwnsDial()
 {
   // Clock mode is the only mode in which the dial is AirTime's. CW copy

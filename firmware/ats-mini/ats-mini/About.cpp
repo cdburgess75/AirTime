@@ -144,6 +144,28 @@ static void drawAboutAuthors(uint8_t arrow)
   spr.pushSprite(0, 0);
 }
 
+#ifdef AIRTIME
+//
+// Show AIRTIME screen
+//
+// The first page of About in this build, because it is the one an operator of
+// THIS firmware wants: which build, is the clock good, what is it listening
+// to, and does it hold the schedule it claims to. Every line here was wanted
+// during a real field problem.
+//
+static void drawAboutAirTime(uint8_t arrow)
+{
+  drawAboutCommon(arrow);
+
+  const char *lines[8];
+  const int n = airtimeAboutLines(lines, 8);
+  for(int i = 0 ; i < n ; i++)
+    spr.drawString(lines[i], 2, 70 + 16 * (i - 1), 2);
+
+  spr.pushSprite(0, 0);
+}
+#endif
+
 //
 // Draw ABOUT screens
 //
@@ -151,9 +173,17 @@ void drawAbout()
 {
   switch(doAbout(0))
   {
+#ifdef AIRTIME
+    // AirTime first; the stock pages keep their order behind it.
+    case 0: drawAboutAirTime(1); break;
+    case 1: drawAboutHelp(3); break;
+    case 2: drawAboutAuthors(3); break;
+    case 3: drawAboutSystem(2); break;
+#else
     case 0: drawAboutHelp(1); break;
     case 1: drawAboutAuthors(3); break;
     case 2: drawAboutSystem(2); break;
+#endif
     default: break;
   }
 }
