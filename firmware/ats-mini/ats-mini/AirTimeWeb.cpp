@@ -239,8 +239,23 @@ static void atHandleRoot()
   // signal here" and "chip is not where we think" stop being guesses.
   atKv("chip mode", rx.isCurrentTuneFM() ? "FM" : "AM/SSB",
        !rx.isCurrentTuneFM() && !app->radioMode() && !app->cwMode());
+  // ...and this is the REST OF THE FIRMWARE's story about the chip. stock's
+  // currentMode picks the S-meter's dBuV->S curve, the squelch slot and the
+  // AGC table, so when it disagrees with the tuner the meter below is drawn
+  // on the wrong scale and the numbers mean nothing. A field photo showed six
+  // bars beside zero RDS groups purely because of this. Kept as a tripwire.
+  {
+    static const char *kModeTxt[] = {"FM", "LSB", "USB", "AM"};
+    const bool agrees = ((currentMode == FM) == rx.isCurrentTuneFM());
+    atRowf("<tr><th>stock mode</th><td class=\"%s\">%s%s</td></tr>",
+           agrees ? "" : "w",
+           currentMode < 4 ? kModeTxt[currentMode] : "?",
+           agrees ? "" : " &mdash; DISAGREES with tuner, meter is unreliable");
+  }
   atRowf("<tr><th>signal</th><td class=\"%s\">RSSI %d dBuV, SNR %d dB</td></tr>",
          rssi < 10 ? "w" : "", rssi, snr);
+  atRowf("<tr><th>AGC</th><td class=\"%s\">%s, attenuator %d</td></tr>",
+         disableAgc ? "w" : "", disableAgc ? "OFF" : "on", (int)agcNdx);
   const char *ph = app->cwMode()      ? "CW copy - NTP is off the air"
                  : app->radioMode()   ? "operator has the dial"
                  : app->surveying()   ? "surveying the FM band"

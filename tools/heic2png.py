@@ -1,52 +1,47 @@
 #!/usr/bin/env python3
-"""Convert HEIC/HEIF photos to PNG so they can actually be looked at.
+"""Convert HEIC/HEIF (iPhone photos) to PNG so they can be read as images.
 
-    tools/heic2png.py IMG_8006.HEIC            -> IMG_8006.png
-    tools/heic2png.py ~/Desktop/*.HEIC         -> alongside each source
-    tools/heic2png.py IMG.HEIC -o /tmp/shot.png
+    python3 tools/heic2png.py IMG_8011.heic [more.heic ...]
+    python3 tools/heic2png.py /path/to/dir      # every .heic in the directory
 
-iPhones shoot HEIC by default and most tooling cannot read it. Screen photos
-of the radio are the main way this project gets evidence from hardware, so a
-photo that cannot be opened is a debugging session that does not happen.
-
-Downscales to 2000 px on the long edge by default: a 12 MP screen photo is
-mostly empty desk, and the panel is 320x170.
+Writes <name>.png beside each input and prints the output paths.
+Downscales to 2000 px on the long edge; a 12 MP phone photo is far more
+pixels than any screen-reading needs, and the smaller file loads faster.
 """
-import sys, os
+import sys, pathlib
 from PIL import Image
 import pillow_heif
 
 pillow_heif.register_heif_opener()
+MAXEDGE = 2000
 
-
-def convert(src, dst=None, max_edge=2000):
-    if dst is None:
-        dst = os.path.splitext(src)[0] + ".png"
+def convert(src: pathlib.Path) -> pathlib.Path:
     im = Image.open(src)
     im = im.convert("RGB")
-    if max_edge and max(im.size) > max_edge:
-        scale = max_edge / max(im.size)
-        im = im.resize((round(im.width * scale), round(im.height * scale)),
-                       Image.LANCZOS)
-    im.save(dst, "PNG")
-    return dst, im.size
+    if max(im.size) > MAXEDGE:
+        im.thumbnail((MAXEDGE, MAXEDGE), Image.LANCZOS)
+    dst = src.with_suffix(".png")
+    im.save(dst, "PNG", optimize=True)
+    return dst
 
-
-def main():
-    args = [a for a in sys.argv[1:] if a != "-o"]
-    out = None
-    if "-o" in sys.argv:
-        out = sys.argv[sys.argv.index("-o") + 1]
-        args = [a for a in args if a != out]
-    if not args:
-        sys.exit(__doc__)
-    for src in args:
-        try:
-            dst, size = convert(src, out if len(args) == 1 else None)
-            print(f"{src} -> {dst}  {size[0]}x{size[1]}")
-        except Exception as e:                       # noqa: BLE001
-            print(f"{src}: FAILED — {e}", file=sys.stderr)
-
+def main(argv):
+    if not argv:
+        print(__doc__)
+        return 1
+    targets = []
+    for a in argv:
+        p = pathlib.Path(a)
+        if p.is_dir():
+            targets += sorted(q for q in p.iterdir()
+                              if q.suffix.lower() in (".heic", ".heif"))
+        else:
+            targets.append(p)
+    if not targets:
+        print("no HEIC/HEIF files found", file=sys.stderr)
+        return 1
+    for src in targets:
+        print(convert(src))
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main(sys.argv[1:]))

@@ -199,21 +199,59 @@ static uint32_t atLastReport = 0;
 
 // ── Chip glue ───────────────────────────────────────────────────────────────
 
+// The single-tuner rule, extended to the firmware AirTime lives inside.
+//
+// The core learned that there is one dial (see AirTimeApp::tuneRds). The glue
+// had not: these functions drove the SI4732 directly and left stock's
+// `currentMode` describing whatever band the operator last selected. Stock
+// branches on that global constantly, so the rest of the firmware went on
+// reasoning about a radio that no longer existed:
+//
+//   * getStrength() picks the HF dBuV->S-point table for currentMode != FM.
+//     An ordinary FM station reads ~45 dBuV, which on the HF scale is S9+10 —
+//     six bars. The "pegged S-meter over 0 RDS groups" in the field photo was
+//     this, not a strong signal. Every reading taken through it was junk.
+//   * currentSquelch[currentMode] applies the wrong band's squelch, and can
+//     mute the audio the WWV tap is listening to.
+//   * doAgc() writes the wrong band's AGC/attenuator table into the front end:
+//     the SSB index range is 0..1 where FM's is 0..27, so an SSB "attenuate"
+//     lands as a very different setting once the chip is back on FM.
+//
+// So say what the radio is, then configure it the way selectBand() does for
+// that mode. doSoftMute/doAvc are no-ops in FM and are deliberately left off
+// the WWV path — soft mute attenuates weak signals, which is precisely the
+// minute marker we are straining to hear. doStep is skipped too: it writes a
+// clamped step index back into bands[bandIdx], and that band belongs to the
+// operator, not to us. The step is passed to setFM/setAM explicitly instead.
 static void atTuneFm(int32_t khz10, void*)
 {
+  currentMode = FM;               // the chip is about to be an FM radio: say so
   rx.setFM(6400, 10800, (uint16_t)khz10, 10);
+  // setFM() power-cycles the tuner, which resets every property to its default
+  // AND wipes any resident SSB patch. Re-apply what FM needs, in stock's order.
+  rx.setFMDeEmphasis(fmRegions[FmRegionIdx].value);
   rx.setGpioCtl(1, 0, 0);
   rx.setGpio(0, 0, 0);            // FM antenna path
+  doAgc(0);                       // FM's own AGC table, not the last band's
   rx.RdsInit();
   rx.setRdsConfig(1, 2, 2, 2, 2); // chip-level ceiling; adapter gates tighter
+
+  // The patch died with the power cycle above. ssbLoaded is a claim ABOUT the
+  // chip, and leaving it set makes the next loadSSB() skip a reload the chip
+  // genuinely needs — SSB then plays as AM, which is the "radio mode playing
+  // FM audio at 7200" bug arriving by a second route.
+  unloadSSB();
 }
 
 static void atTuneWwv(int32_t khz, void*)
 {
+  currentMode = AM;               // WWV is AM, and the S-meter should know it
   rx.setAM(150, 30000, (uint16_t)khz, 5);
   rx.setGpioCtl(1, 0, 0);
   rx.setGpio(1, 0, 0);            // whip/SW antenna path
   rx.setBandwidth(2, 1);          // 3 kHz — the 1000 Hz marker passes cleanly
+  doAgc(0);                       // AM's AGC table, for the same reason
+  unloadSSB();                    // setAM() power-cycles too
 }
 
 static int atRdsRssi(void*)
