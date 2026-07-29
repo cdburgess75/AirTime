@@ -9,6 +9,7 @@ namespace {
 constexpr int64_t kSec = 1000000;
 constexpr int64_t kFt8 = 15 * kSec;
 constexpr int64_t kFt4 = 7500000;   // 7.5 s — the one fractional period
+constexpr int64_t kFt2 = 3750000;   // half of FT4, quarter of FT8
 constexpr int64_t kWspr = 120 * kSec;
 }  // namespace
 
@@ -131,4 +132,41 @@ AT_TEST(cycle_mode_table_is_sane) {
     AT_CHECK(divides || whole_minutes);
   }
   AT_CHECK(std::string(kCycleModes[0].name) == "FT8");
+}
+
+AT_TEST(cycle_ft2_is_a_clean_quarter_of_ft8) {
+  // FT2's published T/R period is 3.75 s, and the halving relationship to FT4
+  // and FT8 is the thing to pin: coverage that rounds it to the "3.8 s" the
+  // write-ups quote would put 15.789 slots in a minute, and the boundary would
+  // walk off the band a little further every minute while still LOOKING right
+  // on screen. That is precisely the failure this device exists not to have.
+  AT_CHECK_EQ(kFt2 * 2, kFt4);
+  AT_CHECK_EQ(kFt2 * 4, kFt8);
+  AT_CHECK_EQ(60 * kSec / kFt2, 16);
+
+  // Boundaries at every 3.75 s through a full minute, and nowhere between.
+  for (int i = 0; i < 16; ++i) {
+    const int64_t t = i * kFt2;
+    AT_CHECK_EQ(cyclePhaseAt(t, kFt2).into_us, 0);
+    AT_CHECK(cyclePhaseAt(t - 1, kFt2).into_us != 0);
+  }
+  // The minute closes exactly on a slot edge — the property that makes plain
+  // modular arithmetic off the epoch correct for this mode at all.
+  AT_CHECK_EQ(cyclePhaseAt(60 * kSec, kFt2).into_us, 0);
+
+  // Every FT8 edge is also an FT2 edge; the reverse is true only one time in
+  // four. Nesting like that is what lets an operator switch modes mid-session
+  // and see the bar stay in step with the band.
+  for (int i = 0; i < 8; ++i)
+    AT_CHECK_EQ(cyclePhaseAt(i * kFt8, kFt2).into_us, 0);
+}
+
+AT_TEST(cycle_ft2_is_in_the_table) {
+  bool found = false;
+  for (std::size_t i = 0; i < kCycleModeCount; ++i)
+    if (std::string(kCycleModes[i].name) == "FT2") {
+      found = true;
+      AT_CHECK_EQ(kCycleModes[i].period_us, kFt2);
+    }
+  AT_CHECK(found);
 }

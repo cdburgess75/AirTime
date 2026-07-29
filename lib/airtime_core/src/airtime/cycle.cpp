@@ -5,6 +5,14 @@ namespace airtime {
 const CycleMode kCycleModes[] = {
     {"FT8",       15000000},
     {"FT4",        7500000},
+    // 3.75 s: exactly half FT4, a quarter of FT8, 16 slots to the minute. The
+    // press rounds it to "3.8 s", which would NOT divide a minute and would
+    // quietly walk off the band — hence the invariant asserted in the tests.
+    //
+    // Two incompatible protocols answer to this name (Decodium's original and
+    // WSJT-X Improved's open-source one) and it does not matter here: they
+    // share the T/R period, and a slot boundary is all this instrument draws.
+    {"FT2",        3750000},
     {"JS8 Normal",15000000},
     {"JS8 Fast",  10000000},
     {"JS8 Turbo",  6000000},

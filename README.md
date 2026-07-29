@@ -9,7 +9,7 @@ AirTime runs entirely on an *unmodified* [AMNVOLT ATS Mini V4](docs/PLAN.md#2-ta
 > broadcast FM, a WWV minute marker on 15 MHz pulls the phase onto the second,
 > and the laptop takes its time from the radio's own access point. Milestones
 > 0–4 are verified on hardware; what remains is an evening of FT8 decodes
-> (Milestone 5). `make test` → **172 tests, 6309 checks passing**. The story of
+> (Milestone 5). `make test` → **174 tests, 6359 checks passing**. The story of
 > how it got there — including the bugs that each made the device
 > *confidently wrong* — is in [`docs/STATUS.md`](docs/STATUS.md).
 
@@ -64,7 +64,7 @@ the operator wanted while the radio was already on the bench.
 
 - **FT8/JS8 cycle instrument.** Turn the encoder on the clock face and a bar
   fills across the current transmit slot with a millisecond countdown to the
-  next one — FT8, FT4, JS8 (Normal/Fast/Turbo/Slow), JT65, WSPR. The fill colour
+  next one — FT8, FT4, **FT2** (3.75 s), JS8 (Normal/Fast/Turbo/Slow), JT65, WSPR. The fill colour
   follows **slot parity**, so FT8's transmit/receive alternation is visible at a
   glance. It doubles as a check on the computer being disciplined: if WSJT‑X
   starts transmitting at a visibly different moment than the bar rolls over, the
@@ -152,7 +152,7 @@ visible instead of inferred.
 - **PSRAM variant:** upstream ships `esp32s3-ospi` and `esp32s3-qspi` profiles. This unit reports 8 MB PSRAM (the `R8`, octal), so **OSPI** — which is also upstream's default. Confirm via non-zero PSRAM in Settings→About.
 
 ```
-make test                  # host core: 172 tests, 6309 checks
+make test                  # host core: 174 tests, 6359 checks
 tools/build_fw.sh airtime  # the device build
 tools/build_fw.sh stock    # upstream, unmodified — see below
 ```
@@ -262,7 +262,7 @@ AirTime/
 │           ├── display.*         The §5 display lines
 │           └── app.*             AirTimeApp — wires it all to the seam
 ├── lib/airtime_esp32/         ESP32 adapters: RDS chip, ADC sampler, SoftAP, NVS
-├── test/                     20 suites, 172 cases + fakes.h, a simulated ATS Mini
+├── test/                     20 suites, 174 cases + fakes.h, a simulated ATS Mini
 │                             (one shared tuner, because the device has one)
 ├── tools/
 │   ├── build_fw.sh        Compile a firmware flavour (airtime|fast|stock|probe|survey)
