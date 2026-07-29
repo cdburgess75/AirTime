@@ -276,7 +276,9 @@ static const char kApp[] =
 static void atHandleApp()
 {
   atServer->sendHeader("Cache-Control", "no-store");
-  atServer->send(200, "text/html; charset=utf-8", kApp);
+  // send_P, not send: the latter copies 6 KB into an Arduino String on every
+  // page load, and this heap is shared with the RDS and NTP paths.
+  atServer->send_P(200, "text/html; charset=utf-8", kApp, sizeof(kApp) - 1);
 }
 
 static void atHandleIcon()

@@ -405,11 +405,19 @@ static bool eibiParseLine(const char *line, StationSchedule &entry)
 
 int eibiEntryCount()
 {
+  // Cached after the first read. This is called from /api, which the phone app
+  // polls every 2 seconds — and an ESP32 flash read disables the instruction
+  // cache for its duration, stalling BOTH cores. Doing that twice a minute for
+  // a number that only changes when a schedule is installed is a steady tax on
+  // the RDS polling happening in the same loop, paid for nothing.
+  static int cached = -1;
+  if(cached >= 0) return(cached);
   fs::File f = LittleFS.open(EIBI_PATH, "rb");
-  if(!f) return(0);
+  if(!f) return(0);          // not installed yet; do not cache the absence
   const size_t bytes = f.size();
   f.close();
-  return((int)(bytes / sizeof(StationSchedule)));
+  cached = (int)(bytes / sizeof(StationSchedule));
+  return(cached);
 }
 
 const char *kEibiInstalledVersion()

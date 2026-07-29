@@ -1022,13 +1022,23 @@ void airtimeScreen(AirTimeScreen *out)
   }
 
   // ── The cycle instrument ──────────────────────────────────────────────────
-  // Off, or before any fix at all, it draws nothing: a slot boundary computed
-  // from a clock we do not believe is worse than no boundary, because it looks
-  // exactly as authoritative as a correct one.
+  // Off, or unsynchronised, it draws nothing. Two reasons, and the second one
+  // cost a debugging round:
+  //
+  //  * A slot boundary computed from a clock we do not believe is worse than
+  //    no boundary, because it looks exactly as authoritative as a correct one.
+  //  * It shares the bottom row with the diagnostic line — the RSSI/SNR/stage
+  //    readout that exists to explain WHY the radio is not syncing. Gating on
+  //    clock_valid rather than synced meant that the moment an operator turned
+  //    the instrument on, the one row that could answer "why is it unsynced"
+  //    was covered by an instrument that was itself meaningless.
+  //
+  // So: the instrument appears when the clock is trustworthy, and the
+  // diagnosis appears when it is not. They are never both wanted at once.
   cycleBuf[0] = cycleTBuf[0] = 0;
   out->cycle_fraction = 0.0f;
   out->cycle_odd = false;
-  if(atCycleOpt > 0 && st.clock_valid)
+  if(atCycleOpt > 0 && st.synced)
   {
     const airtime::CycleMode &m = airtime::kCycleModes[atCycleOpt - 1];
     const airtime::CyclePhase ph = airtime::cyclePhaseAt(st.utc_us, m.period_us);
