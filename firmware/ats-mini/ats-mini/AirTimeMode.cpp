@@ -247,7 +247,34 @@ static void atTuneFm(int32_t khz10, void*)
   rx.setFMDeEmphasis(fmRegions[FmRegionIdx].value);
   rx.setGpioCtl(1, 0, 0);
   rx.setGpio(0, 0, 0);            // FM antenna path
-  doAgc(0);                       // FM's own AGC table, not the last band's
+
+  // AGC hard on, no attenuation — NOT doAgc(), which would apply whatever the
+  // operator last chose in the AGC/ATTN menu.
+  //
+  // That setting is a LISTENING preference: you attenuate a local blowtorch so
+  // it stops splattering. This is not listening. It is a 57 kHz subcarrier at
+  // roughly 5% modulation depth being decoded at the edge of lock, and there is
+  // no signal level at which discarding front-end gain helps it. A field unit
+  // sat at RSSI 14 dBuV, SNR 10 dB, refusing to acquire block sync 1040 polls
+  // running — an attenuator inherited from an evening of listening is a way to
+  // land exactly there, and it would persist across reboots in NVS while
+  // looking like nothing at all.
+  //
+  // Radio mode is unaffected: selectBand() re-applies the operator's choice on
+  // the way in, and this path is only ever reached while AirTime owns the dial.
+  // The globals are set alongside so the status page keeps telling the truth.
+  disableAgc = 0;
+  agcNdx = 0;
+  rx.setAutomaticGainControl(0, 0);
+
+  // Let the front end settle before the RDS decoder is configured on top of it.
+  // setFM() above power-cycles the tuner; stock's useBand() ends its whole
+  // sequence with delay(100) and calls it "wait a bit for things to calm down",
+  // which is the kind of comment that is load-bearing more often than it looks.
+  // Configuring a decoder into a chip that is still coming up is a good way to
+  // have the configuration quietly not take.
+  delay(100);
+
   rx.RdsInit();
   rx.setRdsConfig(1, 2, 2, 2, 2); // chip-level ceiling; adapter gates tighter
 

@@ -87,6 +87,11 @@ void enterFmMode()
   rx.setFM(6400, 10800, (uint16_t)kScanStart, 10);
   rx.setGpioCtl(1, 0, 0);
   rx.setGpio(0, 0, 0);            // FM antenna path (see useBand)
+  // AGC on, no attenuation — same reasoning as atTuneFm(). A survey that scored
+  // the dial through an inherited attenuator would build a station list biased
+  // toward the loudest neighbours and quietly drop every usable weak one.
+  rx.setAutomaticGainControl(0, 0);
+  delay(100);                     // let the power-cycled front end settle
   rx.setRdsConfig(1, 2, 2, 2, 2);
 }
 

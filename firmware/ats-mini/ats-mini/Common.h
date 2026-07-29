@@ -10,7 +10,7 @@
 // the next value; run it before cutting anything an operator will see. Shown
 // on the About screen and in the serial banner, which is also how you tell
 // whether a flash actually took.
-#define AIRTIME_VERSION "v2026.07.29.002"
+#define AIRTIME_VERSION "v2026.07.29.003"
 #endif
 #include <SI4735-fixed.h>
 
