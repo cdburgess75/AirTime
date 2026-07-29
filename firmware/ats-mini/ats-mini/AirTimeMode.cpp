@@ -238,8 +238,23 @@ static uint32_t atLastReport = 0;
 // minute marker we are straining to hear. doStep is skipped too: it writes a
 // clamped step index back into bands[bandIdx], and that band belongs to the
 // operator, not to us. The step is passed to setFM/setAM explicitly instead.
+// Two things the diagnostic could not previously distinguish, both cheap.
+//
+// atFmTunes: every atTuneFm() power-cycles the tuner, and RDS needs several
+// uninterrupted seconds to acquire block sync. The dwell rotation is meant to
+// retune every 75 s; if something is retuning far more often, the decoder would
+// never get a fair run at it and the symptom would look exactly like a signal
+// too weak to lock. One counter tells the two apart.
+//
+// atRdsSyncFound: whether the chip has EVER reported acquiring sync, even once
+// and even briefly. Zero means the decoder truly never locks; non-zero means it
+// locks and loses it, which is a different fault with a different fix.
+static uint32_t atFmTunes = 0;
+static uint32_t atRdsSyncFound = 0;
+
 static void atTuneFm(int32_t khz10, void*)
 {
+  ++atFmTunes;
   currentMode = FM;               // the chip is about to be an FM radio: say so
   rx.setFM(6400, 10800, (uint16_t)khz10, 10);
   // setFM() power-cycles the tuner, which resets every property to its default
@@ -312,6 +327,7 @@ static int atRdsRead(uint16_t w[4], uint8_t ble[4], void*)
   // kRdsReadNotFm/kRdsReadNoSync in rds_source.h.
   if(!rx.isCurrentTuneFM()) return airtime_esp32::kRdsReadNotFm;
   rx.getRdsStatus(1, 0, 0);       // INTACK: pop one group, ack the flags
+  if(rx.getRdsSyncFound()) ++atRdsSyncFound;
   if(!rx.getRdsSync()) return airtime_esp32::kRdsReadNoSync;
   bool fresh = rx.getRdsReceived() || rx.getNumRdsFifoUsed() > 0;
   if(!fresh) return 0;
@@ -1043,9 +1059,10 @@ void airtimeScreen(AirTimeScreen *out)
     if(ns > worst) { worst = ns; stage = "no-sync"; }
     if(mt > worst) { worst = mt; stage = "empty";   }
     if(worst == 0) stage = "idle";
-    snprintf(diagBuf, sizeof(diagBuf), "RSSI %d SNR %d  %s %lu  g%lu",
+    snprintf(diagBuf, sizeof(diagBuf), "R%d S%d %s%lu g%lu t%lu f%lu",
              (int)rssi, (int)snr, stage, (unsigned long)worst,
-             (unsigned long)atRds.groupsAccepted());
+             (unsigned long)atRds.groupsAccepted(),
+             (unsigned long)atFmTunes, (unsigned long)atRdsSyncFound);
   }
 
   // ── The cycle instrument ──────────────────────────────────────────────────
