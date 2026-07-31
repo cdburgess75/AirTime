@@ -996,3 +996,63 @@ AT_TEST(app_cw_traffic_never_disciplines_the_clock) {
   AT_CHECK(iabs(sim.clockErrorUs(app) - err_before) < 1000);
   AT_CHECK(app.cwText().size() > 0);   // ...but it WAS decoded
 }
+
+AT_TEST(app_manual_time_breaks_the_cold_start_deadlock) {
+  // The deadlock: WWV's minute marker carries phase but not identity, so with
+  // no RDS the device can never start a clock at all. effectiveDirective()
+  // refuses to open a listen window until the arbiter has a SOURCE fix,
+  // precisely because a marker alone cannot resolve which minute it is.
+  //
+  // An operator with a wristwatch supplies the missing identity. That is all
+  // WWV needs — its window is +/-30 s.
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+
+  AirTimeApp app(sim.deps());
+  app.begin();
+  AT_CHECK(!app.arbiter().hasSourceFix());   // shut: no listening possible
+
+  app.setManualUtc(sim.true_utc_us);
+  AT_CHECK(app.arbiter().hasSourceFix());    // open: WWV may now listen
+  AT_CHECK(app.displayState().clock_valid);
+}
+
+AT_TEST(app_manual_time_does_not_claim_to_be_synchronised) {
+  // A wristwatch is not a time standard and the device must not say it is.
+  // At +/-5 s the estimate is an order of magnitude outside the 1 s sync
+  // threshold, so the clock stays flagged UNSYNCED and NTP keeps telling
+  // clients not to trust it — while still being good enough to bootstrap WWV,
+  // which is the entire job. Serving authoritative time off a manual entry is
+  // exactly the "confidently wrong" failure this project keeps meeting.
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+
+  AirTimeApp app(sim.deps());
+  app.begin();
+  app.setManualUtc(sim.true_utc_us);
+
+  const auto st = app.displayState();
+  AT_CHECK(st.clock_valid);
+  AT_CHECK(!st.synced);
+  AT_CHECK(st.uncertainty_us >= 1000000);
+  AT_CHECK(st.uncertainty_us <= 10000000);
+  // ...and it landed where it was told, within the sim's own advance.
+  AT_CHECK(st.utc_us > sim.true_utc_us - 2000000);
+  AT_CHECK(st.utc_us < sim.true_utc_us + 2000000);
+}
+
+AT_TEST(app_manual_time_is_inside_the_wwv_ambiguity_window) {
+  // The number that matters: WWV can only resolve the minute if the clock is
+  // already within half a minute. A manual set claiming 5 s clears that with
+  // an order of magnitude to spare, which is why this is a real escape hatch
+  // and not a gesture.
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+
+  AirTimeApp app(sim.deps());
+  app.begin();
+  app.setManualUtc(sim.true_utc_us + 4000000);   // operator four seconds late
+
+  const int64_t err = app.displayState().utc_us - sim.true_utc_us;
+  AT_CHECK(err < 30000000 && err > -30000000);
+}

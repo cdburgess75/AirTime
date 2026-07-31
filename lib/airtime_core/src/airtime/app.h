@@ -171,6 +171,23 @@ class AirTimeApp {
   // from the Milestone 1 station survey.
   void setFmStations(const int32_t* khz, std::size_t n);
 
+  // Operator-set time — tier 3 in PLAN.md §4, described there as the "always
+  // available fallback" and until now not available at all: the arbiter has
+  // always had Source::Manual and nothing could ever produce one.
+  //
+  // It matters more than a fallback usually would, because of the deadlock it
+  // breaks. WWV's minute marker carries phase but not identity, so it cannot
+  // start a clock, only refine one — which makes every cold start depend on
+  // RDS, which depends on a broadcast FM station being receivable. An operator
+  // with a wristwatch can supply the missing identity in five seconds, and WWV
+  // takes it from ±5 s to ±30 ms on the next marker.
+  //
+  // independent_support = 2 is not a fiction. Rule 3 requires two independent
+  // sources OR explicit operator confirmation for a correction over 500 ms, and
+  // a human deliberately setting the time IS that confirmation — this is the
+  // encoding of it, not a way around it.
+  void setManualUtc(int64_t utc_us);
+
   // WWV band rotation, first entry tried first (default 5/10/15 MHz). A warm
   // start like the FM list: order it by what actually works at the QTH — the
   // learned per-band preference takes over as soon as any band delivers.

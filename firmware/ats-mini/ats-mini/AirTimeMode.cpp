@@ -58,10 +58,27 @@
 // sender on this dial measured 0.9 s to 6.2 hours from truth — excluded.
 // This list is a WARM START for this location, not the mechanism: the
 // self-survey design (STATUS.md, "Field variability") supersedes it.
+// ── CORRECTED FOR THE ACTUAL QTH ────────────────────────────────────────────
+// The previous list was surveyed against the NEW ORLEANS dial. The radio lives
+// in Loranger, Tangipahoa Parish (ZIP 70446) — about fifty miles north of it.
+// Every station in that list was therefore a fringe signal, which is the best
+// explanation anyone has offered for RSSI 14 dBuV on what should be a strong
+// local, and for a clock that synced on a good night and not otherwise.
+//
+// 89.3 first: WRKF Baton Rouge is NPR, 28 kW, with a documented 60-mile radius
+// that explicitly covers Hammond and Ponchatoula — Loranger sits inside it. US
+// public stations are the most reliable RDS clock-time senders there are, and
+// the old list had the device sitting on 89.9 (New Orleans NPR, distant) with
+// 89.3 six-tenths of a megahertz away the whole time.
+//
+// These are RESEARCHED, not measured. The three offsets that used to be
+// documented here were real measurements and are gone with the frequencies
+// they belonged to; nothing below carries a learned bias yet. Run Survey Dial
+// at the bench to replace this with fact — that is what it is for.
 static const int32_t kFmStations[] = {
-    8990,   // 89.9  WWNO   pi=A920  +37..+87 ms (n=3) — the anchor
-    10470,  // 104.7 WJSH   pi=6E47  +216 ms (n=1)
-    10750,  // 107.5 K-LOVE pi=33CB  +352..+367 ms (n=2)
+    8930,   // 89.3  WRKF   Baton Rouge NPR, 28 kW, covers Tangipahoa Parish
+    10710,  // 107.1 WHMD   Hammond — genuinely local, ~10 miles
+    8990,   // 89.9  WWNO   New Orleans NPR — kept: it has produced CT here
 };
 static const size_t kFmStationCount =
     sizeof(kFmStations) / sizeof(kFmStations[0]);

@@ -115,6 +115,24 @@ void AirTimeApp::adoptSurveyResult() {
   persist(deps_.clock->nowUs(), /*force=*/true);
 }
 
+void AirTimeApp::setManualUtc(int64_t utc_us) {
+  const int64_t now = deps_.clock->nowUs();
+  TimeFix f;
+  f.source = Source::Manual;
+  f.mono_us = now;
+  f.utc_us = utc_us;
+  // What an operator reading a watch and pressing a button is actually worth.
+  // Deliberately not optimistic: claiming better than this would let a manual
+  // set outrank a WWV marker in the blend, and the whole point is to hand off
+  // to WWV as fast as possible.
+  f.uncertainty_us = 5000000;
+  f.independent_support = 2;   // the operator's own confirmation, see header
+  arbiter_.update(f);
+  ever_synced_ = ever_synced_ || arbiter_.isSynced(now);
+  learned_dirty_ = true;
+  persist(now, /*force=*/true);
+}
+
 void AirTimeApp::tuneRds(int32_t khz) {
   deps_.rds->tuneKhz(khz);
   // One tuner: the dial is on FM now, whatever the WWV cache used to claim.
