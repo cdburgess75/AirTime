@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0d1117">
+<title>ALPR Proximity Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --amber: #d29922;
+    --red: #f85149;
+    --green: #3fb950;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- Alert banner ---------- */
+  #alertBanner {
+    display: none;
+    background: var(--red);
+    color: #fff;
+    font-weight: 700;
+    font-size: 16px;
+    padding: 12px 14px;
+    text-align: center;
+    flex: 0 0 auto;
+    animation: bannerPulse 1s ease-in-out infinite alternate;
+  }
+  #alertBanner.show { display: block; }
+  @keyframes bannerPulse { from { filter: brightness(1); } to { filter: brightness(1.25); } }
+
+  /* ---------- Map ---------- */
+  #map { flex: 1 1 auto; min-height: 0; background: #111; }
+  .leaflet-container { background: #1a1a1a; }
+
+  /* ---------- Status bar ---------- */
+  #statusBar {
+    flex: 0 0 auto;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    align-items: center;
+    padding: 8px 12px;
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  #statusBar .stat b { color: var(--text); font-weight: 600; }
+  #statusBar .stat.warn b { color: var(--amber); }
+  #statusBar .stat.bad b  { color: var(--red); }
+  #statusBar .stat.good b { color: var(--green); }
+
+  /* ---------- Floating controls ---------- */
+  .fabs {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 1000;
+  }
+  .fab {
+    width: 46px; height: 46px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 20px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,.5);
+    user-select: none;
+  }
+  .fab.active { background: var(--accent); border-color: var(--accent); color: #04121f; }
+  .fab.muted-on { background: var(--red); border-color: var(--red); color: #fff; }
+
+  /* ---------- Drawer (settings / about) ---------- */
+  #drawer {
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: min(340px, 92vw);
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    z-index: 1100;
+    transform: translateX(105%);
+    transition: transform .25s ease;
+    overflow-y: auto;
+    padding: 16px;
+    -webkit-overflow-scrolling: touch;
+  }
+  #drawer.open { transform: translateX(0); }
+  #drawer h2 { font-size: 17px; margin-bottom: 12px; }
+  #drawer h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 18px 0 8px; }
+  .setting {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+  .setting label { display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer; }
+  .setting .val { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+  .setting input[type=range] { width: 100%; margin-top: 8px; accent-color: var(--accent); }
+  .setting input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); flex: 0 0 auto; }
+  .btnRow { display: flex; gap: 8px; margin-top: 10px; }
+  .btn {
+    flex: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .btn:active { filter: brightness(1.3); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
+  .btn.danger  { color: var(--red); border-color: var(--red); }
+  #drawerClose {
+    position: absolute; top: 10px; right: 12px;
+    background: none; border: none; color: var(--muted);
+    font-size: 24px; cursor: pointer; line-height: 1;
+  }
+  #about { font-size: 13.5px; color: var(--muted); line-height: 1.55; }
+  #about p { margin-bottom: 8px; }
+  #about b { color: var(--text); }
+
+  /* ---------- Empty / error state ---------- */
+  #emptyState {
+    position: absolute; inset: 0;
+    z-index: 1200;
+    background: rgba(13,17,23,.92);
+    display: none;
+    align-items: center; justify-content: center;
+    text-align: center;
+    padding: 24px;
+  }
+  #emptyState.show { display: flex; }
+  #emptyState .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    max-width: 340px;
+  }
+  #emptyState h2 { font-size: 17px; margin-bottom: 10px; }
+  #emptyState p { font-size: 14px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+
+  /* ---------- Toast ---------- */
+  #toast {
+    position: absolute;
+    left: 50%; bottom: 70px;
+    transform: translateX(-50%);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 13px;
+    padding: 8px 14px;
+    border-radius: 20px;
+    z-index: 1300;
+    opacity: 0;
+    transition: opacity .3s;
+    pointer-events: none;
+    max-width: 90vw;
+    text-align: center;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ---------- Markers ---------- */
+  .userDot {
+    width: 16px; height: 16px;
+    background: var(--accent);
+    border: 3px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 8px rgba(88,166,255,.9);
+  }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: var(--panel); color: var(--text);
+  }
+  .camPopup { font-size: 13px; line-height: 1.5; }
+  .camPopup b { font-size: 14px; }
+  .camPopup .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div id="alertBanner" role="alert"></div>
+
+<div id="map"></div>
+
+<div id="statusBar">
+  <span class="stat" id="stGps">GPS: <b>waiting…</b></span>
+  <span class="stat" id="stCams">Cameras: <b>–</b></span>
+  <span class="stat" id="stAge">Data: <b>none</b></span>
+  <span class="stat" id="stNearest">Nearest: <b>–</b></span>
+</div>
+
+<div class="fabs">
+  <button class="fab" id="fabMute" title="Mute alerts">🔔</button>
+  <button class="fab active" id="fabFollow" title="Follow my position">◎</button>
+  <button class="fab" id="fabSettings" title="Settings">⚙</button>
+</div>
+
+<div id="drawer">
+  <button id="drawerClose" aria-label="Close">×</button>
+  <h2>Settings</h2>
+
+  <h3>Alerts</h3>
+  <div class="setting">
+    <label>Alert radius <span class="val" id="alertRadiusVal"></span></label>
+    <input type="range" id="alertRadius" min="100" max="1000" step="50">
+  </div>
+  <div class="setting">
+    <label>Only alert if camera is ahead (±60°)
+      <input type="checkbox" id="headingFilter"></label>
+  </div>
+  <div class="setting">
+    <label>Audio beep <input type="checkbox" id="chAudio" checked></label>
+  </div>
+  <div class="setting">
+    <label>Visual banner <input type="checkbox" id="chVisual" checked></label>
+  </div>
+  <div class="setting">
+    <label>Vibration <input type="checkbox" id="chHaptic" checked></label>
+  </div>
+
+  <h3>Data</h3>
+  <div class="setting">
+    <label>Fetch radius <span class="val" id="fetchRadiusVal"></span></label>
+    <input type="range" id="fetchRadius" min="2" max="30" step="1">
+  </div>
+  <div class="setting">
+    <label>Refresh cache after <span class="val" id="maxAgeVal"></span></label>
+    <input type="range" id="maxAge" min="1" max="168" step="1">
+  </div>
+  <div class="btnRow">
+    <button class="btn primary" id="btnRefresh">Refresh cameras now</button>
+  </div>
+  <div class="btnRow">
+    <button class="btn danger" id="btnClearCache">Clear cache</button>
+  </div>
+
+  <h3>About</h3>
+  <div id="about">
+    <p><b>What this is:</b> a passive privacy-awareness map of known ALPR
+    (automated license-plate reader) cameras, e.g. Flock Safety units, drawn
+    from the crowdsourced DeFlock tags in OpenStreetMap.</p>
+    <p><b>The dataset is incomplete.</b> An empty area does <b>not</b> mean
+    no cameras — mobile/trailer units and unmapped installs won't appear,
+    and mapped locations can be wrong, moved, or stale. The data age shown
+    in the status bar tells you how fresh your copy is.</p>
+    <p><b>This app is passive.</b> It reads public map data and your own
+    device GPS. It transmits nothing to any camera and does not interfere
+    with any signal or system.</p>
+    <p class="muted">Data © OpenStreetMap contributors (ODbL), via the
+    Overpass API. Map tiles © OpenStreetMap.</p>
+  </div>
+</div>
+
+<div id="emptyState">
+  <div class="card">
+    <h2 id="emptyTitle">No camera data yet</h2>
+    <p id="emptyMsg">Couldn't reach the camera database and there's no cached
+    copy. Check your connection and try again.</p>
+    <button class="btn primary" id="btnRetry">Retry</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+"use strict";
+
+/* ============================================================
+   Config & persisted settings
+   ============================================================ */
+const LS_SETTINGS = "alprmap.settings.v1";
+const LS_CACHE    = "alprmap.cameras.v1";
+const LS_VIEW     = "alprmap.lastview.v1";
+
+const DEFAULTS = {
+  alertRadiusM: 300,     // alert threshold (m)
+  fetchRadiusKm: 10,     // Overpass around: radius (km)
+  maxAgeH: 24,           // re-fetch cache older than this (hours)
+  headingFilter: false,  // only alert if camera roughly ahead
+  chAudio: true,
+  chVisual: true,
+  chHaptic: true,
+  muted: false,
+  follow: true,
+};
+
+let S = loadSettings();
+function loadSettings() {
+  try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(LS_SETTINGS) || "{}")); }
+  catch (e) { return Object.assign({}, DEFAULTS); }
+}
+function saveSettings() {
+  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(S)); } catch (e) {}
+}
+
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+
+/* ============================================================
+   State
+   ============================================================ */
+let map, userMarker, accCircle;
+let cameras = [];            // normalized camera objects
+let camMarkers = new Map();  // id -> L.CircleMarker
+let cache = loadCache();     // { cameras, fetchedAt, center:{lat,lon}, radiusM }
+let pos = null;              // { lat, lon, accuracy, heading, speed }
+let nearest = null;          // { cam, dist }
+let fetching = false;
+let geoDenied = false;
+let alertState = new Map();  // camId -> { inside: bool, lastAlert: ms }
+const ALERT_COOLDOWN_MS = 5 * 60 * 1000;  // re-alert same camera after 5 min even if still inside
+const HYSTERESIS = 1.2;                   // must exit radius*1.2 to re-arm
+
+/* ============================================================
+   Map setup
+   ============================================================ */
+function initMap() {
+  let view = { lat: 39.5, lon: -98.35, zoom: 4 };  // continental US fallback
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_VIEW) || "null");
+    if (v && isFinite(v.lat)) view = v;
+  } catch (e) {}
+  if (cache && cache.center) {
+    view = { lat: cache.center.lat, lon: cache.center.lon, zoom: 13 };
+  }
+
+  map = L.map("map", { zoomControl: true }).setView([view.lat, view.lon], view.zoom);
+
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(map);
+
+  map.on("moveend", () => {
+    const c = map.getCenter();
+    try {
+      localStorage.setItem(LS_VIEW, JSON.stringify({ lat: c.lat, lon: c.lng, zoom: map.getZoom() }));
+    } catch (e) {}
+    maybeRefetchForPan(c.lat, c.lng);
+  });
+
+  // Manual drag pauses follow-me so the map doesn't fight the user.
+  map.on("dragstart", () => setFollow(false));
+}
+
+/* ============================================================
+   Geolocation
+   ============================================================ */
+function initGeo() {
+  if (!("geolocation" in navigator)) {
+    geoDenied = true;
+    setStat("stGps", "unsupported", "bad");
+    return;
+  }
+  navigator.geolocation.watchPosition(onPos, onPosErr, {
+    enableHighAccuracy: true,
+    maximumAge: 2000,
+    timeout: 15000,
+  });
+}
+
+function onPos(p) {
+  geoDenied = false;
+  pos = {
+    lat: p.coords.latitude,
+    lon: p.coords.longitude,
+    accuracy: p.coords.accuracy,
+    heading: (typeof p.coords.heading === "number" && !isNaN(p.coords.heading)) ? p.coords.heading : null,
+    speed: p.coords.speed,
+  };
+
+  const ll = [pos.lat, pos.lon];
+  if (!userMarker) {
+    userMarker = L.marker(ll, {
+      icon: L.divIcon({ className: "", html: '<div class="userDot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] }),
+      zIndexOffset: 1000,
+    }).addTo(map);
+    accCircle = L.circle(ll, {
+      radius: pos.accuracy, color: "#58a6ff", weight: 1, opacity: 0.5, fillOpacity: 0.08,
+    }).addTo(map);
+    if (map.getZoom() < 13) map.setView(ll, 15);
+  } else {
+    userMarker.setLatLng(ll);
+    accCircle.setLatLng(ll).setRadius(pos.accuracy);
+  }
+
+  if (S.follow) map.panTo(ll, { animate: true, duration: 0.5 });
+
+  const q = pos.accuracy <= 20 ? "good" : pos.accuracy <= 60 ? "" : "warn";
+  setStat("stGps", "±" + Math.round(pos.accuracy) + " m", q);
+
+  ensureData(pos.lat, pos.lon);
+  checkProximity();
+}
+
+function onPosErr(err) {
+  if (err.code === err.PERMISSION_DENIED) {
+    geoDenied = true;
+    setStat("stGps", "denied — no alerts", "bad");
+    toast("Location denied. Map and cameras still work; proximity alerts are off.");
+    // Still useful without GPS: load data around the map view.
+    const c = map.getCenter();
+    ensureData(c.lat, c.lng);
+  } else {
+    setStat("stGps", "no fix", "warn");
+  }
+}
+
+/* ============================================================
+   Data layer — Overpass fetch, normalize, cache
+   ============================================================ */
+function loadCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(LS_CACHE) || "null");
+    if (c && Array.isArray(c.cameras)) return c;
+  } catch (e) {}
+  return null;
+}
+
+function saveCache(c) {
+  try { localStorage.setItem(LS_CACHE, JSON.stringify(c)); } catch (e) {}
+}
+
+function normalize(el) {
+  const t = el.tags || {};
+  return {
+    id: el.id,
+    lat: el.lat,
+    lon: el.lon,
+    operator: t.operator || null,
+    direction: t.direction != null && t.direction !== "" && isFinite(+t.direction) ? +t.direction : null,
+    brand: t.manufacturer || t.brand || null,
+    reported: t.start_date || t.survey_date || t["check_date"] || null,
+  };
+}
+
+function overpassQuery(lat, lon, radiusM) {
+  return `[out:json][timeout:25];
+(
+  node["surveillance:type"="ALPR"](around:${radiusM},${lat},${lon});
+  node["man_made"="surveillance"]["surveillance:type"="ALPR"](around:${radiusM},${lat},${lon});
+);
+out body;`;
+}
+
+async function fetchCameras(lat, lon) {
+  if (fetching) return;
+  fetching = true;
+  setStat("stAge", "fetching…");
+  const radiusM = S.fetchRadiusKm * 1000;
+  const body = "data=" + encodeURIComponent(overpassQuery(lat, lon, radiusM));
+
+  let lastErr = null;
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 30000);
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        signal: ctl.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const json = await res.json();
+      const cams = (json.elements || [])
+        .filter(e => e.type === "node" && isFinite(e.lat) && isFinite(e.lon))
+        .map(normalize);
+      cache = { cameras: cams, fetchedAt: Date.now(), center: { lat, lon }, radiusM };
+      saveCache(cache);
+      applyCameras(cams);
+      updateAgeStat();
+      toast(cams.length + " ALPR camera" + (cams.length === 1 ? "" : "s") + " loaded within " + S.fetchRadiusKm + " km");
+      hideEmptyState();
+      fetching = false;
+      return;
+    } catch (e) {
+      lastErr = e;
+      // try next mirror
+    }
+  }
+
+  fetching = false;
+  // All endpoints failed — fall back to cache, surface quietly.
+  if (cache) {
+    applyCameras(cache.cameras);
+    updateAgeStat();
+    toast("Camera database unreachable — using cached data");
+  } else {
+    setStat("stAge", "offline, no cache", "bad");
+    showEmptyState("No camera data yet",
+      "Couldn't reach the camera database (" + (lastErr && lastErr.name === "AbortError" ? "timed out" : String(lastErr && lastErr.message || lastErr)) +
+      ") and there's no cached copy yet. Check your connection and retry.");
+  }
+}
+
+/** Fetch if we have no data, the cache is stale, or the point of interest
+    has drifted outside the cached coverage. */
+function ensureData(lat, lon) {
+  if (fetching) return;
+  if (!cache) { fetchCameras(lat, lon); return; }
+  const ageMs = Date.now() - cache.fetchedAt;
+  if (ageMs > S.maxAgeH * 3600 * 1000) { fetchCameras(lat, lon); return; }
+  const d = haversine(lat, lon, cache.center.lat, cache.center.lon);
+  if (d > cache.radiusM * 0.6) fetchCameras(lat, lon);
+}
+
+function maybeRefetchForPan(lat, lon) {
+  // Panning far beyond the cached box pulls fresh data for the new area,
+  // but only when we're not tracking the user (GPS drives fetches otherwise).
+  if (S.follow && pos) return;
+  if (!cache) return;
+  const d = haversine(lat, lon, cache.center.lat, cache.center.lon);
+  if (d > cache.radiusM) ensureDataDebounced(lat, lon);
+}
+let panTimer = null;
+function ensureDataDebounced(lat, lon) {
+  clearTimeout(panTimer);
+  panTimer = setTimeout(() => fetchCameras(lat, lon), 1200);
+}
+
+/* ============================================================
+   Camera markers
+   ============================================================ */
+function applyCameras(cams) {
+  cameras = cams || [];
+  // Remove markers no longer present
+  const ids = new Set(cameras.map(c => c.id));
+  for (const [id, m] of camMarkers) {
+    if (!ids.has(id)) { map.removeLayer(m); camMarkers.delete(id); }
+  }
+  for (const cam of cameras) {
+    if (!camMarkers.has(cam.id)) {
+      const m = L.circleMarker([cam.lat, cam.lon], markerStyle("far"))
+        .bindPopup(popupHtml(cam))
+        .addTo(map);
+      camMarkers.set(cam.id, m);
+    }
+  }
+  updateCamCountStat();
+  checkProximity();
+}
+
+function markerStyle(state) {
+  const base = { radius: 8, weight: 2, fillOpacity: 0.85 };
+  if (state === "alert") return Object.assign(base, { color: "#fff", fillColor: "#f85149", radius: 10 });
+  if (state === "near")  return Object.assign(base, { color: "#fff", fillColor: "#d29922" });
+  return Object.assign(base, { color: "#aaa", fillColor: "#6e7681" });
+}
+
+function popupHtml(cam) {
+  const esc = s => String(s).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  const rows = [];
+  rows.push("<b>ALPR camera</b>");
+  if (cam.operator) rows.push("Operator: " + esc(cam.operator));
+  if (cam.brand) rows.push("Brand: " + esc(cam.brand));
+  if (cam.direction != null) rows.push("Facing: " + cam.direction + "&deg; (" + compass(cam.direction) + ")");
+  if (cam.reported) rows.push('<span class="muted">Reported: ' + esc(cam.reported) + "</span>");
+  rows.push('<span class="muted">OSM node ' + cam.id + "</span>");
+  return '<div class="camPopup">' + rows.join("<br>") + "</div>";
+}
+
+function compass(deg) {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
+/* ============================================================
+   Proximity + alerting
+   ============================================================ */
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+            Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function bearing(lat1, lon1, lat2, lon2) {
+  const toRad = d => d * Math.PI / 180;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+            Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function checkProximity() {
+  if (!pos || cameras.length === 0) { updateMarkerColors(); return; }
+
+  const threshold = S.alertRadiusM;
+  nearest = null;
+
+  for (const cam of cameras) {
+    // Cheap bounding-box pre-filter (~1° lat ≈ 111 km)
+    if (Math.abs(cam.lat - pos.lat) > 0.1 || Math.abs(cam.lon - pos.lon) > 0.15) {
+      const st = alertState.get(cam.id);
+      if (st) st.inside = false;
+      continue;
+    }
+    const d = haversine(pos.lat, pos.lon, cam.lat, cam.lon);
+    if (!nearest || d < nearest.dist) nearest = { cam, dist: d };
+
+    let st = alertState.get(cam.id);
+    if (!st) { st = { inside: false, lastAlert: 0 }; alertState.set(cam.id, st); }
+
+    if (d <= threshold) {
+      const cooled = Date.now() - st.lastAlert > ALERT_COOLDOWN_MS;
+      if (!st.inside || cooled) {
+        if (passesHeadingFilter(cam)) {
+          st.inside = true;
+          st.lastAlert = Date.now();
+          fireAlert(cam, d);
+        }
+      }
+    } else if (d > threshold * HYSTERESIS) {
+      st.inside = false;  // left the radius — re-arm for the next approach
+    }
+  }
+
+  setStat("stNearest",
+    nearest ? fmtDist(nearest.dist) : "–",
+    nearest && nearest.dist <= threshold ? "bad" :
+    nearest && nearest.dist <= threshold * 2 ? "warn" : "");
+
+  updateMarkerColors();
+  updateBanner();
+}
+
+function passesHeadingFilter(cam) {
+  if (!S.headingFilter) return true;
+  if (pos.heading == null) return true;  // no heading data → don't suppress
+  const brg = bearing(pos.lat, pos.lon, cam.lat, cam.lon);
+  let diff = Math.abs(brg - pos.heading) % 360;
+  if (diff > 180) diff = 360 - diff;
+  return diff <= 60;
+}
+
+function updateMarkerColors() {
+  const threshold = S.alertRadiusM;
+  for (const cam of cameras) {
+    const m = camMarkers.get(cam.id);
+    if (!m) continue;
+    let state = "far";
+    if (pos) {
+      const d = haversine(pos.lat, pos.lon, cam.lat, cam.lon);
+      if (d <= threshold) state = "alert";
+      else if (d <= threshold * 2) state = "near";
+    }
+    m.setStyle(markerStyle(state));
+  }
+}
+
+/* ---------- Alert channels ---------- */
+let audioCtx = null;
+
+function fireAlert(cam, dist) {
+  if (S.muted) return;
+  if (S.chAudio) beep();
+  if (S.chHaptic && navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  // Banner is driven continuously by updateBanner(); the fire just ensures it shows now.
+  updateBanner();
+}
+
+function beep() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const t0 = audioCtx.currentTime;
+    for (const [start, dur] of [[0, 0.12], [0.2, 0.12]]) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, t0 + start);
+      gain.gain.exponentialRampToValueAtTime(0.4, t0 + start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + start + dur);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t0 + start);
+      osc.stop(t0 + start + dur + 0.05);
+    }
+  } catch (e) {}
+}
+
+function updateBanner() {
+  const el = document.getElementById("alertBanner");
+  const show = S.chVisual && !S.muted && nearest && nearest.dist <= S.alertRadiusM;
+  if (show) {
+    const op = nearest.cam.operator ? " — " + nearest.cam.operator : "";
+    el.textContent = "⚠ ALPR camera " + fmtDist(nearest.dist) + " away" + op;
+    el.classList.add("show");
+  } else {
+    el.classList.remove("show");
+  }
+}
+
+/* ============================================================
+   Status bar / UI helpers
+   ============================================================ */
+function setStat(id, text, cls) {
+  const el = document.getElementById(id);
+  el.className = "stat" + (cls ? " " + cls : "");
+  el.querySelector("b").textContent = text;
+}
+
+function fmtDist(m) {
+  return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(1) + " km";
+}
+
+function fmtAge(ms) {
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return min + " min ago";
+  const h = Math.floor(min / 60);
+  if (h < 48) return h + " h ago";
+  return Math.floor(h / 24) + " d ago";
+}
+
+function updateAgeStat() {
+  if (!cache) { setStat("stAge", "none", "warn"); return; }
+  const age = Date.now() - cache.fetchedAt;
+  const stale = age > S.maxAgeH * 3600 * 1000;
+  setStat("stAge", fmtAge(age), stale ? "warn" : "");
+}
+
+function updateCamCountStat() {
+  setStat("stCams", String(cameras.length));
+}
+
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 4000);
+}
+
+function showEmptyState(title, msg) {
+  document.getElementById("emptyTitle").textContent = title;
+  document.getElementById("emptyMsg").textContent = msg;
+  document.getElementById("emptyState").classList.add("show");
+}
+function hideEmptyState() {
+  document.getElementById("emptyState").classList.remove("show");
+}
+
+/* ============================================================
+   Controls
+   ============================================================ */
+function setFollow(on) {
+  S.follow = on;
+  saveSettings();
+  document.getElementById("fabFollow").classList.toggle("active", on);
+  if (on && pos) map.panTo([pos.lat, pos.lon]);
+}
+
+function setMuted(on) {
+  S.muted = on;
+  saveSettings();
+  const b = document.getElementById("fabMute");
+  b.classList.toggle("muted-on", on);
+  b.textContent = on ? "🔕" : "🔔";
+  updateBanner();
+}
+
+function bindUI() {
+  document.getElementById("fabFollow").onclick = () => setFollow(!S.follow);
+  document.getElementById("fabMute").onclick = () => {
+    // First tap also unlocks the audio context on mobile.
+    if (!S.muted) beepUnlockOnly();
+    setMuted(!S.muted);
+  };
+  document.getElementById("fabSettings").onclick = () =>
+    document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawerClose").onclick = () =>
+    document.getElementById("drawer").classList.remove("open");
+
+  // Sliders
+  const bindSlider = (id, valId, key, fmt, onChange) => {
+    const input = document.getElementById(id);
+    const val = document.getElementById(valId);
+    input.value = S[key];
+    val.textContent = fmt(S[key]);
+    input.oninput = () => {
+      S[key] = +input.value;
+      val.textContent = fmt(S[key]);
+      saveSettings();
+      if (onChange) onChange();
+    };
+  };
+  bindSlider("alertRadius", "alertRadiusVal", "alertRadiusM", v => v + " m", () => { checkProximity(); });
+  bindSlider("fetchRadius", "fetchRadiusVal", "fetchRadiusKm", v => v + " km");
+  bindSlider("maxAge", "maxAgeVal", "maxAgeH", v => v + " h", updateAgeStat);
+
+  // Checkboxes
+  const bindCheck = (id, key) => {
+    const input = document.getElementById(id);
+    input.checked = !!S[key];
+    input.onchange = () => { S[key] = input.checked; saveSettings(); updateBanner(); };
+  };
+  bindCheck("headingFilter", "headingFilter");
+  bindCheck("chAudio", "chAudio");
+  bindCheck("chVisual", "chVisual");
+  bindCheck("chHaptic", "chHaptic");
+
+  document.getElementById("btnRefresh").onclick = () => {
+    const c = pos ? { lat: pos.lat, lng: pos.lon } : map.getCenter();
+    fetchCameras(c.lat, c.lng);
+    document.getElementById("drawer").classList.remove("open");
+  };
+
+  document.getElementById("btnClearCache").onclick = () => {
+    try { localStorage.removeItem(LS_CACHE); } catch (e) {}
+    cache = null;
+    applyCameras([]);
+    alertState.clear();
+    updateAgeStat();
+    toast("Cache cleared");
+  };
+
+  document.getElementById("btnRetry").onclick = () => {
+    hideEmptyState();
+    const c = pos ? { lat: pos.lat, lng: pos.lon } : map.getCenter();
+    fetchCameras(c.lat, c.lng);
+  };
+
+  setMuted(S.muted);
+  setFollow(S.follow);
+}
+
+// Create/resume the AudioContext inside a user gesture so later
+// programmatic beeps aren't blocked by autoplay policy.
+function beepUnlockOnly() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (e) {}
+}
+document.addEventListener("pointerdown", beepUnlockOnly, { once: true });
+
+/* ============================================================
+   Boot
+   ============================================================ */
+initMap();
+bindUI();
+
+if (cache) {
+  applyCameras(cache.cameras);
+  updateAgeStat();
+} else {
+  setStat("stAge", "none", "warn");
+}
+
+initGeo();
+
+// Keep the data-age display live even when nothing else changes.
+setInterval(updateAgeStat, 60000);
+</script>
+</body>
+</html>
