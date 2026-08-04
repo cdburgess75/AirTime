@@ -23,6 +23,7 @@
 #include "airtime/app.h"
 #include "airtime/hal.h"
 #include "airtime/rds_ct.h"
+#include "airtime/wwv_timecode.h"
 
 namespace airtime_fake {
 
@@ -195,6 +196,21 @@ class FakeWwvSampler : public IWwvSampler {
   int64_t detector_block_us = 20000;
   int rejected_detector_sets = 0;   // calls made while running — the race
 
+  // ── The 100 Hz subcarrier channel ──────────────────────────────────────────
+  // A propagating band carries the real WWV time code: one pulse per second,
+  // starting sub_lead_us after the second, whose width is the symbol for that
+  // second of the minute (encodeFrame — the shared-table inverse, so this
+  // proves the CHAIN, not the bit map). Power levels follow the marker's
+  // measured-scale convention: the subcarrier gets about a quarter of the tick
+  // tones' modulation, and the 20 Hz bin's floor sits under the marker bin's.
+  int64_t sub_block_us = 50000;
+  real sub_tone_power = 4.7e-4f;
+  real sub_noise_power = 3.0e-5f;
+  int64_t sub_lead_us = 30000;      // NIST: the code pulse opens 30 ms in
+  real sub_detector_hz = 100.0f;    // what the app pointed the channel at
+  int64_t sub_detector_block_us = 50000;
+  bool sub_carrier_present = true;  // false: band propagates, code absent
+
   void tuneKhz(int32_t khz) override {
     tuned_ = khz;
     ++tune_count;
@@ -206,6 +222,12 @@ class FakeWwvSampler : public IWwvSampler {
     if (running_) { ++rejected_detector_sets; return false; }
     detector_tone_hz = tone_hz;
     detector_block_us = bus;
+    return true;
+  }
+  bool setSubDetector(real tone_hz, int64_t bus) override {
+    if (running_) { ++rejected_detector_sets; return false; }
+    sub_detector_hz = tone_hz;
+    sub_detector_block_us = bus;
     return true;
   }
   void start() override { running_ = true; }
@@ -220,12 +242,22 @@ class FakeWwvSampler : public IWwvSampler {
     return true;
   }
 
+  bool nextSubPower(int64_t* mono_us, real* power) override {
+    if (sub_queue_.empty()) return false;
+    *mono_us = sub_queue_.front().first;
+    *power = sub_queue_.front().second;
+    sub_queue_.pop_front();
+    return true;
+  }
+
   void pump(int64_t true_utc_us, int64_t mono_us) {
     if (!running_) {
       next_block_true_ = true_utc_us;  // resync on restart
+      next_sub_block_true_ = true_utc_us;
       return;
     }
     if (next_block_true_ == 0) next_block_true_ = true_utc_us;
+    if (next_sub_block_true_ == 0) next_sub_block_true_ = true_utc_us;
 
     while (next_block_true_ <= true_utc_us) {
       const int64_t t = next_block_true_;
@@ -233,6 +265,18 @@ class FakeWwvSampler : public IWwvSampler {
       const int64_t stamp = mono_us - (true_utc_us - t);
       queue_.push_back({stamp, powerAt(t)});
       next_block_true_ += block_us;
+    }
+
+    // The channel exists only while the app has it pointed somewhere.
+    if (sub_detector_hz <= 0.0f) {
+      next_sub_block_true_ = true_utc_us;
+      return;
+    }
+    while (next_sub_block_true_ <= true_utc_us) {
+      const int64_t t = next_sub_block_true_;
+      const int64_t stamp = mono_us - (true_utc_us - t);
+      sub_queue_.push_back({stamp, subPowerAt(t)});
+      next_sub_block_true_ += sub_block_us;
     }
   }
 
@@ -276,10 +320,41 @@ class FakeWwvSampler : public IWwvSampler {
     return rel < marker_us ? tone_power : noise_power;
   }
 
+  real subPowerAt(int64_t true_utc_us) const {
+    if (!propagates() || !sub_carrier_present) return sub_noise_power;
+    // What was being TRANSMITTED at the instant now arriving.
+    const int64_t tx = true_utc_us - chain_delay_us;
+    int64_t tx_s = tx / 1000000;
+    int64_t within = tx - tx_s * 1000000;
+    if (within < 0) { within += 1000000; --tx_s; }
+
+    // One frame of symbols per minute, cached — pump() asks tens of times a
+    // second and the encode walks the calendar.
+    const int64_t minute_epoch = (tx_s / 60) * 60;
+    if (minute_epoch != enc_minute_) {
+      encodeFrame(wwvTimeFromEpochS(minute_epoch), enc_frame_);
+      enc_minute_ = minute_epoch;
+    }
+    const int sec = (int)(tx_s - minute_epoch);
+    int64_t width_us = 0;
+    switch (enc_frame_[sec]) {
+      case TcSymbol::Zero:   width_us = 170000; break;
+      case TcSymbol::One:    width_us = 470000; break;
+      case TcSymbol::Marker: width_us = 770000; break;
+      default:               width_us = 0;      break;
+    }
+    const bool on = within >= sub_lead_us && within < sub_lead_us + width_us;
+    return on ? sub_tone_power : sub_noise_power;
+  }
+
   bool running_ = false;
   int32_t tuned_ = 0;
   int64_t next_block_true_ = 0;
+  int64_t next_sub_block_true_ = 0;
   std::deque<std::pair<int64_t, real>> queue_;
+  std::deque<std::pair<int64_t, real>> sub_queue_;
+  mutable int64_t enc_minute_ = -1;
+  mutable TcSymbol enc_frame_[60] = {};
 };
 
 // --- WiFi -------------------------------------------------------------------

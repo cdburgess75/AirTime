@@ -51,7 +51,32 @@ int bcd(const TcSymbol (&sym)[60], const BitWeight (&bits)[N]) {
   return v;
 }
 
+// The inverse of bcd(): scatter a value across its weighted seconds. Greedy
+// from the largest weight, which is exact for these tables because each is a
+// BCD digit set (weights within a digit sum to less than the next digit up).
+template <std::size_t N>
+void unbcd(int v, TcSymbol (&sym)[60], const BitWeight (&bits)[N]) {
+  for (std::size_t i = N; i > 0; --i) {
+    const BitWeight& b = bits[i - 1];
+    if (v >= b.weight) {
+      sym[b.second] = TcSymbol::One;
+      v -= b.weight;
+    }
+  }
+}
+
 bool isLeap(int y) { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
+
+// The seven seconds that define the frame's shape: 0 plus the six position
+// markers. If all seven read Marker, the alignment cannot be wrong — the
+// chance of seven noise bursts landing in exactly those cells is not a thing
+// a fading path produces.
+bool markerSkeletonIntact(const TcSymbol* s) {
+  if (s[0] != TcSymbol::Marker) return false;
+  for (std::size_t i = 0; i < sizeof(kMarkerSeconds); ++i)
+    if (s[kMarkerSeconds[i]] != TcSymbol::Marker) return false;
+  return true;
+}
 
 }  // namespace
 
@@ -81,11 +106,12 @@ WwvTime decodeFrame(const TcSymbol* sym, std::size_t n, int century_hint_year) {
   for (std::size_t i = 0; i < 60; ++i)
     if (s[i] == TcSymbol::Invalid) return out;
 
-  // Position markers where the format says they are. This is the cheapest and
-  // strongest structural check available: six seconds that must all be the
-  // long pulse, and nothing else may be.
-  for (std::size_t i = 0; i < sizeof(kMarkerSeconds); ++i)
-    if (s[kMarkerSeconds[i]] != TcSymbol::Marker) return out;
+  // Position markers where the format says they are — second 0 included, which
+  // the original hunt guaranteed by construction but a frame that FOLLOWED a
+  // kept alignment does not. This is the cheapest and strongest structural
+  // check available: seven seconds that must all be the long pulse, and
+  // nothing else may be.
+  if (!markerSkeletonIntact(s)) return out;
   for (std::size_t i = 1; i < 60; ++i) {
     bool expected = false;
     for (std::size_t k = 0; k < sizeof(kMarkerSeconds); ++k)
@@ -134,9 +160,47 @@ int64_t wwvTimeToEpochS(const WwvTime& t) {
   return days * 86400 + (int64_t)t.hour * 3600 + (int64_t)t.minute * 60;
 }
 
+WwvTime wwvTimeFromEpochS(int64_t epoch_s) {
+  WwvTime t;
+  int64_t days = epoch_s / 86400;
+  int64_t sod = epoch_s - days * 86400;
+  if (sod < 0) { sod += 86400; --days; }
+  int mo = 0, dy = 0;
+  mjdToCivil((int32_t)(days + 40587), &t.year, &mo, &dy);
+  t.day_of_year =
+      (int)(days + 40587 - civilToMjd(t.year, 1, 1)) + 1;  // Jan 1 is day 1
+  t.hour = (int)(sod / 3600);
+  t.minute = (int)((sod % 3600) / 60);
+  t.valid = true;
+  return t;
+}
+
+void encodeFrame(const WwvTime& t, TcSymbol out[60]) {
+  TcSymbol s[60];
+  for (std::size_t i = 0; i < 60; ++i) s[i] = TcSymbol::Zero;
+  s[0] = TcSymbol::Marker;
+  for (std::size_t i = 0; i < sizeof(kMarkerSeconds); ++i)
+    s[kMarkerSeconds[i]] = TcSymbol::Marker;
+
+  unbcd(t.minute, s, kMinuteBits);
+  unbcd(t.hour, s, kHourBits);
+  unbcd(t.day_of_year, s, kDoyBits);
+  unbcd(((t.year % 100) + 100) % 100, s, kYearBits);
+  int dut = t.dut1_ms;
+  if (dut >= 0) s[kDut1SignSecond] = TcSymbol::One;
+  else dut = -dut;
+  unbcd(dut, s, kDut1Bits);
+  if (t.dst_now) s[kDstNowSecond] = TcSymbol::One;
+  if (t.dst_soon) s[kDstSoonSecond] = TcSymbol::One;
+  if (t.leap_warning) s[kLeapWarnSecond] = TcSymbol::One;
+
+  for (std::size_t i = 0; i < 60; ++i) out[i] = s[i];
+}
+
 void WwvTimecodeDecoder::reset() {
   fill_ = 0;
   framed_ = false;
+  last_was_marker_ = false;  // a pair must not straddle a retune
   pending_ = WwvTime();
   confirmed_ = WwvTime();
   frame_start_us_ = pending_start_us_ = confirmed_start_us_ = 0;
@@ -164,30 +228,39 @@ bool WwvTimecodeDecoder::onSecond(int64_t pulse_ms, int64_t second_start_us) {
   frame_[fill_++] = s;
   if (fill_ < kFrameBits) return false;
 
-  // A whole minute is in hand.
+  // A whole minute is in hand. Snapshot it for rawFrame() before anything can
+  // overwrite it — the status page polls on its own schedule.
   fill_ = 0;
   ++frames_seen_;
+  for (std::size_t i = 0; i < kFrameBits; ++i) last_frame_[i] = frame_[i];
   const int64_t start_us = frame_start_us_;
   frame_start_us_ = second_start_us + 1000000;   // next frame opens next second
   const WwvTime got = decodeFrame(frame_, kFrameBits, century_hint_);
 
   if (!got.valid) {
-    // Lost it. Re-hunt rather than assume the next 60 seconds line up: a frame
-    // that failed its structure checks probably means the alignment is wrong,
-    // not that one bit was noisy.
-    framed_ = false;
-    pending_ = WwvTime();
+    // An intact marker skeleton means the alignment is certainly right and
+    // only the data was unreadable (fading, the voice announcement) — keep
+    // the frame position and the pending candidate, and let the next minute
+    // try. A broken skeleton means the alignment itself is suspect: re-hunt.
+    if (!markerSkeletonIntact(frame_)) {
+      framed_ = false;
+      pending_ = WwvTime();
+    }
     return false;
   }
+  ++frames_decoded_;
 
   // ── Corroboration ─────────────────────────────────────────────────────────
-  // Nothing is believed on one frame's evidence. The next frame must read
-  // exactly one minute later, which a mis-alignment or a wrong bit weight
-  // cannot fake twice running.
+  // Nothing is believed on one frame's evidence. A second frame must read an
+  // exact whole number of minutes later — epoch arithmetic a mis-alignment or
+  // a wrong bit weight cannot fake twice running. Up to three minutes, so the
+  // frame a fade or the voice announcement ruined does not force the two
+  // clean frames either side of it to start over.
   if (pending_.valid) {
     const int64_t a = wwvTimeToEpochS(pending_);
     const int64_t b = wwvTimeToEpochS(got);
-    if (b - a == 60) {
+    const int64_t d = b - a;
+    if (d >= 60 && d <= 180 && d % 60 == 0) {
       confirmed_ = got;
       confirmed_start_us_ = start_us;
       ++frames_confirmed_;

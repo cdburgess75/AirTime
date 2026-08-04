@@ -528,28 +528,105 @@ AT_TEST(app_serves_accurate_ntp) {
   AT_CHECK_EQ(app.displayState().ntp_clients, 2);
 }
 
-// The device has ONE tuner. Before the arbiter is seeded, WWV listening must
-// not run at all: markers are ±30 s ambiguous (pollWwv discards them unseeded),
-// and on hardware a pre-seed listen window starves the RDS path that CAN seed.
-// First real boot showed the old behaviour: chip parked on AM from t=0.
-AT_TEST(app_wwv_defers_until_seeded) {
+// The device has ONE tuner, and the boot hunt belongs to RDS: through the
+// whole ACQUIRING phase, WWV listening must not run — a pre-seed window there
+// starves the one path that seeds in about a minute when it works at all.
+// (First real boot showed the old failure: chip parked on AM from t=0.)
+// After acquisition times out, unseeded listen windows are allowed — that is
+// the timecode's job now — so this test pins the boundary, not a blanket ban.
+AT_TEST(app_wwv_defers_to_rds_while_acquiring) {
   Sim sim;
   sim.true_utc_us = startUtcUs();
   sim.wwv.propagating_bands = {5000, 10000, 15000};
-  // No RDS stations: nothing can seed, so listening must never start.
-  AirTimeApp app(sim.deps());
+  sim.wwv.sub_carrier_present = false;  // nothing for a window to find
+  // No RDS stations either: acquisition runs its full course.
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
   app.begin();
 
-  for (int i = 0; i < 30; ++i) {
-    sim.advance(kMin, &app);
+  while (app.scheduler().phase() == Phase::Acquiring) {
     AT_CHECK(!sim.wwv.isRunning());
+    sim.advance(10 * kS, &app);
   }
+  AT_CHECK(app.scheduler().phase() == Phase::Serving);
 
-  // A manual seed makes WWV useful — and allowed.
+  // A manual seed still opens the gate on demand, exactly as before.
   app.operatorSetTime(sim.true_utc_us);
   app.operatorListenNow();
   sim.advance(30 * kS, &app);
   AT_CHECK(sim.wwv.isRunning());
+}
+
+// ── The structural fix for the FM-poor QTH ──────────────────────────────────
+// No FM stations at all, a band that propagates, and nobody touching the
+// radio: the 100 Hz timecode must start the clock BY ITSELF. Acquiring times
+// out (RDS had its chance), the unseeded cadence opens a listen window, the
+// decoder hunts the frame, reads two whole frames in lockstep, and the
+// arbiter seeds from a fix that knows the date. This is the test that says
+// the hurricane case works.
+AT_TEST(app_timecode_cold_starts_from_hf_alone) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs() + 17 * kMin + 23 * kS;  // nothing aligned
+  sim.crystal_ppm = 12.0;
+  sim.wwv.propagating_bands = {10000};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;   // keep the dial quiet; nothing to survey anyway
+  AirTimeApp app(sim.deps(), cfg);
+  app.begin();
+
+  // Acquire (5 min) + up to one unseeded interval (15 min) + a window long
+  // enough to sweep dead bands onto 10 MHz and read the code. Step small
+  // enough that pump() emits every 50 ms sub block.
+  bool seeded = false;
+  for (int i = 0; i < 40 * 60 && !seeded; ++i) {
+    sim.advance(kS, &app, 10000);
+    seeded = app.arbiter().hasSourceFix();
+  }
+
+  AT_CHECK(seeded);
+  AT_CHECK(app.arbiter().isSet());
+  const int64_t now = sim.clock.mono_us;
+  AT_CHECK(app.arbiter().isSynced(now));
+  // Identity is the claim: the right MINUTE, and phase inside the timecode's
+  // own ±250 ms model (block quantisation + the 30 ms lead, both simulated).
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 300000);
+  // The screen should say WWV did this.
+  AT_CHECK((app.displayState().sources & kSrcWwv) != 0);
+  AT_CHECK(app.wwvTimecodeDiag().have);
+  AT_CHECK(app.wwvTimecodeDiag().accepted);
+  AT_CHECK(app.wwvTimecode().framesConfirmed() >= 1);
+  // The silicon rule survived the whole unseeded dance.
+  AT_CHECK(!sim.adc_wifi_conflict);
+  // And the fix ended the window: the device went back to serving.
+  sim.advance(5 * kS, &app);
+  AT_CHECK(sim.wifi.isUp());
+}
+
+// Same sky, but the subcarrier is absent (band propagates, code unreadable):
+// the device must keep LOOKING without ever inventing a time. The marker path
+// alone stays gated unseeded — a boundary with no identity — so hours later
+// the clock is still honestly unset and NTP still flags itself unusable.
+AT_TEST(app_timecode_absent_never_fakes_a_seed) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {10000};
+  sim.wwv.sub_carrier_present = false;
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  app.begin();
+
+  sim.advance(2 * kHour, &app, 10000);
+
+  AT_CHECK(!app.arbiter().hasSourceFix());
+  AT_CHECK(!app.displayState().clock_valid);
+  AT_CHECK(!sim.adc_wifi_conflict);
+  // Markers were heard (the band table may learn) — but never believed.
+  AT_CHECK(app.wwvMarker().diag().markers > 0);
+  AT_CHECK(!app.wwvFixDiag().have);
 }
 
 // While a WWV listen window owns the tuner, the FM dwell rotation must hold

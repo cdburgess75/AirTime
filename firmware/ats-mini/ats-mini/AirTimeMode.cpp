@@ -88,8 +88,14 @@ static const size_t kFmStationCount =
 // which matches §4's daytime expectation (10/15 by day, 5 at night). The
 // scheduler's learned per-band preference takes over once anything delivers;
 // this only decides where a fresh boot looks FIRST, so the first window is
-// spent on the likeliest band instead of sweeping two dead ones.
-static const int32_t kWwvBands[] = {15000, 10000, 5000};
+// spent on the likeliest band instead of sweeping dead ones.
+//
+// 20 MHz joined when the timecode chain made unseeded listening real: §4
+// always allowed it, and at ~1000 miles from Fort Collins it is often the
+// strongest daytime path of all. Last in the sweep — unproven here — but a
+// band the rotation can now discover instead of never trying. (2.5 MHz stays
+// out: 2.5 kW into a groundwave-scale distance is not a Louisiana signal.)
+static const int32_t kWwvBands[] = {15000, 10000, 5000, 20000};
 static const size_t kWwvBandCount = sizeof(kWwvBands) / sizeof(kWwvBands[0]);
 
 // ── Settings the operator can actually reach ────────────────────────────────
@@ -117,8 +123,8 @@ static int atZone = 1;   // Central; the owner's QTH, and a sane default
 // which is the right answer once the radio has heard anything at all; the
 // explicit choices are for a fresh location where waiting out a sweep of dead
 // bands is just lost time.
-static const char* const kBandNames[] = {"Auto", "15 MHz", "10 MHz", "5 MHz"};
-static const int32_t kBandKhz[] = {0, 15000, 10000, 5000};
+static const char* const kBandNames[] = {"Auto", "15 MHz", "10 MHz", "5 MHz", "20 MHz"};
+static const int32_t kBandKhz[] = {0, 15000, 10000, 5000, 20000};
 static const int kBandOptCount = sizeof(kBandKhz) / sizeof(kBandKhz[0]);
 static int atBandOpt = 0;
 
@@ -565,9 +571,16 @@ int airtimeAboutLines(const char *out[], int max)
            (double)kFmStations[2] / 100.0);
   out[n] = l[n]; if(++n >= max) return n;
 
-  snprintf(l[n], sizeof(l[n]), "WWV:    %ld  %ld  %ld kHz  (%s first)",
-           (long)kWwvBands[0], (long)kWwvBands[1], (long)kWwvBands[2],
-           kBandNames[atBandOpt]);
+  {
+    // All bands in MHz, however many the table carries.
+    char b[40];
+    int off = 0;
+    for(size_t k = 0 ; k < kWwvBandCount && off < (int)sizeof(b) - 4 ; k++)
+      off += snprintf(b + off, sizeof(b) - off, "%s%ld", k ? "/" : "",
+                      (long)(kWwvBands[k] / 1000));
+    snprintf(l[n], sizeof(l[n]), "WWV:    %s MHz  (%s first)", b,
+             kBandNames[atBandOpt]);
+  }
   out[n] = l[n]; if(++n >= max) return n;
 
   // The schedule the device HOLDS, not the one the image carries — they differ
@@ -590,6 +603,178 @@ int airtimeAboutLines(const char *out[], int max)
            (unsigned long)(up % 60));
   out[n] = l[n]; ++n;
   return n;
+}
+
+// ── The HF page of About: what the WWV chain is actually hearing ────────────
+// The field debugging loop for this project is a PHOTOGRAPH OF THE SCREEN, so
+// the numbers that decide the next move have to be on one. Everything here
+// exists because its absence cost a session: the marker page distinguishes
+// "no tone" from "tone but wrong duration" from "markers rejected"; the code
+// page distinguishes "no pulses" from "pulses but no frame" from "frames that
+// never chain". The serial log carries the same story with the raw frame.
+int airtimeHfAboutLines(const char *out[], int max)
+{
+  static char l[7][64];
+  int n = 0;
+  if(atApp == nullptr || max <= 0) return 0;
+
+  const airtime::WwvMarkerDiag md = atApp->wwvMarker().diag();
+  const airtime::WwvMarkerDiag pd = atApp->wwvPulse().diag();
+  const airtime::WwvTimecodeDecoder& tc = atApp->wwvTimecode();
+  const airtime::WwvTimecodeDiag& td = atApp->wwvTimecodeDiag();
+
+  const long band = (long)atApp->directive().wwv_band_khz;
+  if(band > 0)
+    snprintf(l[n], sizeof(l[n]), "WWV:    listening on %ld kHz", band);
+  else
+    snprintf(l[n], sizeof(l[n]), "WWV:    not in a listen window");
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "Marker: flr %.0e pk %.0e mk %lu",
+           (double)md.noise_floor, (double)md.max_power,
+           (unsigned long)md.markers);
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "        starts %lu  rej %lu/%lu  run %ldms",
+           (unsigned long)md.tone_starts, (unsigned long)md.rejected_short,
+           (unsigned long)md.rejected_long, (long)(md.last_tone_us / 1000));
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "Code:   flr %.0e  pulses %lu  gaps %lu",
+           (double)pd.noise_floor, (unsigned long)td.pulses,
+           (unsigned long)td.gap_seconds);
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "        frames %lu  read %lu  paired %lu",
+           (unsigned long)tc.framesSeen(), (unsigned long)tc.framesDecoded(),
+           (unsigned long)tc.framesConfirmed());
+  out[n] = l[n]; if(++n >= max) return n;
+
+  if(tc.haveFrame())
+  {
+    const airtime::WwvTime& t = tc.time();
+    snprintf(l[n], sizeof(l[n]), "Last:   day %d %02d:%02d UTC %d  %+ldms %c",
+             t.day_of_year, t.hour, t.minute, t.year,
+             (long)(td.offset_us / 1000), td.accepted ? 'A' : 'R');
+  }
+  else
+    snprintf(l[n], sizeof(l[n]), "Last:   no confirmed code frame yet");
+  out[n] = l[n]; if(++n >= max) return n;
+
+  snprintf(l[n], sizeof(l[n]), "Set Clock (Settings) opens this gate too");
+  out[n] = l[n]; ++n;
+  return n;
+}
+
+// ── Manual time set (Settings -> Set Clock) ─────────────────────────────────
+// The always-available tier-3 source, finally reachable. The operator dials
+// UTC to the NEXT minute, waits, and presses the knob exactly when their
+// watch rolls over: ±1-2 s of truth against setManualUtc's honest ±5 s claim.
+// That does not make the clock synced — it opens the WWV gate, and the next
+// marker or code frame does the rest. Fields wrap; days respect the month,
+// leap years included, because an instrument that lets you dial Feb 30 and
+// silently means Mar 2 has already lied once.
+static int atClkField = 0;    // 0..5: Year Month Day Hour Min GO
+static int atClkY = 2026, atClkMo = 1, atClkD = 1, atClkH = 0, atClkMi = 0;
+
+static int atClkDaysInMonth(int y, int mo)
+{
+  static const uint8_t d[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  const bool leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+  return (mo == 2 && leap) ? 29 : d[mo - 1];
+}
+
+void atSetClkOpen()
+{
+  atClkField = 0;
+  if(atApp != nullptr && atApp->displayState().clock_valid)
+  {
+    // Prefill from the clock's own estimate, advanced to a comfortably-future
+    // minute so the operator confirms fields instead of typing them. Even an
+    // UNSYNCED estimate is the best starting point available — it is being
+    // corrected, not trusted.
+    const int64_t s = atApp->displayState().utc_us / 1000000 + 90;
+    const int64_t min_s = (s / 60) * 60;
+    const int64_t days = min_s / 86400;
+    int mo = 0, dy = 0, yr = 0;
+    airtime::mjdToCivil((int32_t)(days + 40587), &yr, &mo, &dy);
+    atClkY = yr; atClkMo = mo; atClkD = dy;
+    atClkH = (int)((min_s % 86400) / 3600);
+    atClkMi = (int)((min_s % 3600) / 60);
+    return;
+  }
+  // No clock at all: start from the build date. Whatever is dialed from here,
+  // the year and month are usually right already.
+  static const char m[12][4] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  const char *bd = __DATE__;             // "Aug  4 2026"
+  atClkY = (bd[7] - '0') * 1000 + (bd[8] - '0') * 100 +
+           (bd[9] - '0') * 10 + (bd[10] - '0');
+  atClkMo = 1;
+  for(int i = 0 ; i < 12 ; i++)
+    if(bd[0] == m[i][0] && bd[1] == m[i][1] && bd[2] == m[i][2]) atClkMo = i + 1;
+  atClkD = (bd[4] == ' ' ? 0 : (bd[4] - '0') * 10) + (bd[5] - '0');
+  atClkH = 0;
+  atClkMi = 0;
+}
+
+int atClkFieldCount() { return 6; }
+int atClkFieldIdx() { return atClkField; }
+
+const char *atClkFieldName(int i)
+{
+  static char buf[6][16];
+  if(i < 0 || i >= 6) return "?";
+  char *b = buf[i];
+  switch(i)
+  {
+    case 0: snprintf(b, sizeof(buf[0]), "Year  %04d", atClkY); break;
+    case 1: snprintf(b, sizeof(buf[0]), "Month %02d", atClkMo); break;
+    case 2: snprintf(b, sizeof(buf[0]), "Day   %02d", atClkD); break;
+    case 3: snprintf(b, sizeof(buf[0]), "Hour  %02d", atClkH); break;
+    case 4: snprintf(b, sizeof(buf[0]), "Min   %02d", atClkMi); break;
+    case 5: snprintf(b, sizeof(buf[0]), "GO at :00"); break;
+  }
+  return b;
+}
+
+static int atClkWrap(int v, int lo, int hi)
+{
+  if(v < lo) return hi;
+  if(v > hi) return lo;
+  return v;
+}
+
+void atClkTurn(int16_t enc)
+{
+  const int step = enc > 0 ? 1 : -1;
+  switch(atClkField)
+  {
+    case 0: atClkY = atClkWrap(atClkY + step, 2025, 2099); break;
+    case 1: atClkMo = atClkWrap(atClkMo + step, 1, 12); break;
+    case 2: atClkD = atClkWrap(atClkD + step, 1, atClkDaysInMonth(atClkY, atClkMo)); break;
+    case 3: atClkH = atClkWrap(atClkH + step, 0, 23); break;
+    case 4: atClkMi = atClkWrap(atClkMi + step, 0, 59); break;
+    default: break;   // GO row: rotation does nothing; the click is the act
+  }
+  // A month or year turn can strand the day on the 31st of a 30-day month.
+  const int dm = atClkDaysInMonth(atClkY, atClkMo);
+  if(atClkD > dm) atClkD = dm;
+}
+
+bool atClkClick()
+{
+  if(atClkField < 5) { ++atClkField; return false; }
+
+  // THE moment: the operator's watch just rolled onto HH:MM:00.
+  if(atApp != nullptr)
+  {
+    const int64_t days = airtime::civilToMjd(atClkY, atClkMo, atClkD) - 40587;
+    const int64_t utc_s = days * 86400 + (int64_t)atClkH * 3600 +
+                          (int64_t)atClkMi * 60;
+    atApp->setManualUtc(utc_s * 1000000);
+  }
+  return true;   // close the panel; the clock face now shows the consequence
 }
 
 // The encoder, on the clock face. Wraps through OFF and every mode so a full
@@ -877,6 +1062,11 @@ void airtimeSetup()
 
   airtime::AppConfig cfg;
   cfg.wwv_calibration_us = 0;  // measured on this unit in Milestone 3
+  // The century for WWV's two-digit year, from the build date — the honest
+  // source: it cannot be wrong by less than a hundred years and needs no
+  // other reference. __DATE__ is "Mmm dd yyyy"; the year is the tail.
+  cfg.century_hint_year = (__DATE__[7] - '0') * 1000 + (__DATE__[8] - '0') * 100 +
+                          (__DATE__[9] - '0') * 10 + (__DATE__[10] - '0');
 #ifdef AIRTIME_FAST_LISTEN
   // Test builds only: WWV listen windows every 10 minutes instead of hourly,
   // so marker detection can be verified without waiting out the hour. Not a
@@ -1068,18 +1258,36 @@ void airtimeScreen(AirTimeScreen *out)
   diagBuf[0] = 0;
   if(!st.synced)
   {
-    const uint32_t nf = atRds.pollsNotFm();
-    const uint32_t ns = atRds.pollsNoSync();
-    const uint32_t mt = atRds.pollsEmpty();
-    const char *stage = "not-FM";
-    uint32_t worst = nf;
-    if(ns > worst) { worst = ns; stage = "no-sync"; }
-    if(mt > worst) { worst = mt; stage = "empty";   }
-    if(worst == 0) stage = "idle";
-    snprintf(diagBuf, sizeof(diagBuf), "R%d S%d %s%lu g%lu t%lu f%lu",
-             (int)rssi, (int)snr, stage, (unsigned long)worst,
-             (unsigned long)atRds.groupsAccepted(),
-             (unsigned long)atFmTunes, (unsigned long)atRdsSyncFound);
+    if(atApp->directive().wwv_listening)
+    {
+      // During a listen window the RDS numbers describe a chip that is not on
+      // FM — the story that matters is the WWV chain, stage by stage: pulses
+      // measured, frames seen/read/paired, minute markers. A photograph of
+      // this row says exactly how far up the ladder the band got.
+      const airtime::WwvTimecodeDecoder& tc = atApp->wwvTimecode();
+      snprintf(diagBuf, sizeof(diagBuf), "R%d p%lu f%lu/%lu/%lu mk%lu",
+               (int)rssi,
+               (unsigned long)atApp->wwvTimecodeDiag().pulses,
+               (unsigned long)tc.framesSeen(),
+               (unsigned long)tc.framesDecoded(),
+               (unsigned long)tc.framesConfirmed(),
+               (unsigned long)atApp->wwvMarker().diag().markers);
+    }
+    else
+    {
+      const uint32_t nf = atRds.pollsNotFm();
+      const uint32_t ns = atRds.pollsNoSync();
+      const uint32_t mt = atRds.pollsEmpty();
+      const char *stage = "not-FM";
+      uint32_t worst = nf;
+      if(ns > worst) { worst = ns; stage = "no-sync"; }
+      if(mt > worst) { worst = mt; stage = "empty";   }
+      if(worst == 0) stage = "idle";
+      snprintf(diagBuf, sizeof(diagBuf), "R%d S%d %s%lu g%lu t%lu f%lu",
+               (int)rssi, (int)snr, stage, (unsigned long)worst,
+               (unsigned long)atRds.groupsAccepted(),
+               (unsigned long)atFmTunes, (unsigned long)atRdsSyncFound);
+    }
   }
 
   // ── The cycle instrument ──────────────────────────────────────────────────
@@ -1289,6 +1497,48 @@ void airtimeLoop()
         (long)(md.last_tone_us / 1000), (long)(md.longest_tone_us / 1000),
         (unsigned long)md.rejected_short, (unsigned long)md.rejected_long,
         (unsigned long)md.markers);
+    // The 100 Hz code chain, same shape: the subcarrier bin's health, then
+    // each stage of the ladder. blk/drop are the second queue; flr/pk the
+    // pulse detector's view of the 20 Hz bin — the numbers that will either
+    // confirm or correct the provisional thresholds in AppConfig.
+    const airtime::WwvMarkerDiag pdg = atApp->wwvPulse().diag();
+    const airtime::WwvTimecodeDecoder& tcd = atApp->wwvTimecode();
+    const airtime::WwvTimecodeDiag& tdg = atApp->wwvTimecodeDiag();
+    Serial.printf(
+        "  code[blk=%lu drop=%lu flr=%.1e pk=%.1e pulses=%lu spl=%lu gap=%lu "
+        "frames=%lu read=%lu ok=%lu]\n",
+        (unsigned long)atWwv.subBlocksProduced(),
+        (unsigned long)atWwv.subBlocksDropped(),
+        (double)pdg.noise_floor, (double)pdg.max_power,
+        (unsigned long)tdg.pulses, (unsigned long)tdg.splinters,
+        (unsigned long)tdg.gap_seconds, (unsigned long)tcd.framesSeen(),
+        (unsigned long)tcd.framesDecoded(),
+        (unsigned long)tcd.framesConfirmed());
+    // Every NEW complete frame goes out raw — sixty symbols beside whatever
+    // UTC the reader trusts. This line, photographed or logged next to a
+    // known clock, is the empirical check of the bit map that the decoder
+    // header promises: one capture and the table is confirmed or corrected
+    // without guesswork. 0/1/M/? = zero, one, position marker, unreadable.
+    static uint32_t lastFramesSeen = 0;
+    if(tcd.framesSeen() != lastFramesSeen)
+    {
+      lastFramesSeen = tcd.framesSeen();
+      char sym[61];
+      const airtime::TcSymbol *raw = tcd.rawFrame();
+      for(int i = 0 ; i < 60 ; i++)
+        sym[i] = raw[i] == airtime::TcSymbol::Zero   ? '0' :
+                 raw[i] == airtime::TcSymbol::One    ? '1' :
+                 raw[i] == airtime::TcSymbol::Marker ? 'M' : '?';
+      sym[60] = 0;
+      Serial.printf("  frame[%s]\n", sym);
+      if(tcd.haveFrame())
+      {
+        const airtime::WwvTime& wt = tcd.time();
+        Serial.printf("  frame-> doy %d %02d:%02d UTC %d dut1=%+dms%s%s\n",
+                      wt.day_of_year, wt.hour, wt.minute, wt.year, wt.dut1_ms,
+                      wt.dst_now ? " DST" : "", wt.leap_warning ? " LEAP" : "");
+      }
+    }
     // What the arbiter DID with what it was told — the half of the story the
     // source counters cannot tell. Both failures that cost a session here were
     // invisible without this: three good WWV markers that were all rejected

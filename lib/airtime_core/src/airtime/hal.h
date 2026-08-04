@@ -82,6 +82,25 @@ class IWwvSampler {
     (void)tone_hz; (void)block_us;
     return true;
   }
+
+  // The SECOND detector channel: the WWV 100 Hz timecode subcarrier, measured
+  // beside the 1000 Hz marker over the same samples. Separate stream because
+  // the two bins want different block lengths — the subcarrier needs a narrow
+  // bin (50 ms => 20 Hz, clear of 60/120 Hz hum) where the marker needs edge
+  // resolution (20 ms). tone_hz <= 0 disables the channel.
+  //
+  // Defaults describe an adapter without one: the config is accepted and
+  // ignored, and the stream never produces — so the timecode chain simply
+  // stays silent rather than obliging every adapter to grow a second ADC path.
+  // Same stopped-only contract as setDetector, for the same cross-core reason.
+  virtual bool setSubDetector(real tone_hz, int64_t block_us) {
+    (void)tone_hz; (void)block_us;
+    return true;
+  }
+  virtual bool nextSubPower(int64_t* mono_us, real* power) {
+    (void)mono_us; (void)power;
+    return false;
+  }
 };
 
 // --- Radio link -------------------------------------------------------------

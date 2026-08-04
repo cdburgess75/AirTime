@@ -46,7 +46,7 @@ Every commercial "field time server" is GPS-only, and none of them arbitrate mul
 ## ✨ Features
 
 **Time, from the air**
-- **📻 Two independent sources.** FM RDS clock-time supplies the date and coarse time; WWV's shortwave minute marker pulls the phase onto the second.
+- **📻 Two independent sources, either sufficient.** FM RDS clock-time supplies date and coarse time where FM reaches. On shortwave, WWV supplies **both jobs by itself**: the 100 Hz timecode carries minute/hour/day/year — decoded, and believed only when two whole frames agree in exact lockstep — and the 1000 Hz minute marker then pulls the phase onto the second. A big antenna and no FM dial is a working configuration now. (And if all else fails: Settings → Set Clock, dial the next minute, press at :00.)
 - **🗳 Multi-station voting.** Many FM stations send no clock-time, and some send it *wrong*. Stations vote; outliers lose.
 - **⚖️ An arbiter that never lies.** Sources steer the clock, they never step it. Corrections over 500 ms need two independent sources agreeing — the defence against a bad station and against spoofing.
 - **📉 It learns its own crystal.** Rate error is measured across syncs and stored, so an hourly listen is enough to hold discipline between them.

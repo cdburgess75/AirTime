@@ -42,11 +42,24 @@
 //
 // ── Nothing is trusted until it repeats ─────────────────────────────────────
 //
-// A frame is never reported on its own evidence. Two CONSECUTIVE frames must
-// decode and be consecutive minutes — frame N+1 must read exactly one minute
-// later than frame N. A mis-synced frame, a wrong bit weight, or noise that
-// happens to pass the width gates will not survive that, because it would have
-// to fail twice in a row in exactly the way that increments a minute.
+// A frame is never reported on its own evidence. Two frames must decode and
+// read an EXACT WHOLE NUMBER of minutes apart — epoch arithmetic, computed
+// through the calendar, not field-by-field comparison. A mis-synced frame, a
+// wrong bit weight, or noise that happens to pass the width gates will not
+// survive that, because it would have to fail twice in exactly the way that
+// advances a clock. Up to three minutes may separate the pair, because on a
+// fading HF path the frame BETWEEN two clean ones is often the casualty — and
+// a lost middle frame says nothing against the two that agree across it.
+//
+// ── Holes ───────────────────────────────────────────────────────────────────
+//
+// A frame with an unreadable second in it is discarded, never guessed at. But
+// discarding the frame is not the same as abandoning the alignment: if the
+// seven structural markers (second 0 and the six position markers) all read
+// correctly, the frame boundary is certainly right and only the data was lost
+// — so the decoder keeps its place and lets the next minute try, instead of
+// spending up to a minute re-hunting for an alignment it never lost. Only a
+// broken marker skeleton forces a re-hunt.
 
 #include <cstddef>
 #include <cstdint>
@@ -90,6 +103,19 @@ TcSymbol classifyPulse(int64_t pulse_ms, const WwvTimecodeConfig& cfg);
 // wrong by less than 100 years and it needs no other source.
 WwvTime decodeFrame(const TcSymbol* sym, std::size_t n, int century_hint_year);
 
+// The inverse: the 60 symbols WWV would transmit for a given minute. Built
+// from the SAME weight tables as decodeFrame, so it proves round-trip
+// consistency and nothing more — it is for the simulator and the fakes, and
+// it is NOT evidence that the table matches Fort Collins. (The independent
+// transcription lives in test_wwv_timecode.cpp; the air capture via
+// rawFrame() is the only verification that counts.)
+void encodeFrame(const WwvTime& t, TcSymbol out[60]);
+
+// Epoch seconds -> the WwvTime WWV would be transmitting during that minute.
+// Seconds are floored away; DUT1 and the flags are zeroed (the sim's world
+// has no DUT1). Companion to wwvTimeToEpochS below, for the same users.
+WwvTime wwvTimeFromEpochS(int64_t epoch_s);
+
 // Feed it one second's pulse length at a time; it finds the frame, decodes it,
 // and refuses to believe itself until a second frame agrees.
 class WwvTimecodeDecoder {
@@ -111,13 +137,19 @@ class WwvTimecodeDecoder {
   // Monotonic timestamp of second 0 of the confirmed frame.
   int64_t frameStartUs() const { return confirmed_start_us_; }
 
-  // The raw symbols of the most recent complete frame, for the status page.
-  // This is how a wrong bit map gets found: one photograph of 60 symbols
-  // beside a known UTC and the table can be corrected without guesswork.
-  const TcSymbol* rawFrame() const { return frame_; }
+  // The raw symbols of the most recent COMPLETE frame — a snapshot taken the
+  // moment second 59 lands, so a caller polling on its own schedule never
+  // reads a frame half-overwritten by the next minute. This is how a wrong
+  // bit map gets found: one photograph of 60 symbols beside a known UTC and
+  // the table can be corrected without guesswork.
+  const TcSymbol* rawFrame() const { return last_frame_; }
   std::size_t rawFrameLen() const { return kFrameBits; }
 
   uint32_t framesSeen() const { return frames_seen_; }
+  // Frames that decoded to a plausible time (pre-corroboration). This moving
+  // is the band-is-delivering signal: structure this specific does not come
+  // from noise, even when the time it carries is still awaiting its partner.
+  uint32_t framesDecoded() const { return frames_decoded_; }
   uint32_t framesConfirmed() const { return frames_confirmed_; }
   bool haveFrame() const { return confirmed_.valid; }
 
@@ -130,6 +162,7 @@ class WwvTimecodeDecoder {
   int century_hint_;
 
   TcSymbol frame_[kFrameBits] = {};
+  TcSymbol last_frame_[kFrameBits] = {};  // snapshot for rawFrame()
   std::size_t fill_ = 0;          // how many seconds of this frame we hold
   bool framed_ = false;           // have we found second 0 yet
   bool last_was_marker_ = false;  // for the 59/0 adjacent-marker hunt
@@ -142,6 +175,7 @@ class WwvTimecodeDecoder {
   int64_t confirmed_start_us_ = 0;
 
   uint32_t frames_seen_ = 0;
+  uint32_t frames_decoded_ = 0;
   uint32_t frames_confirmed_ = 0;
 };
 

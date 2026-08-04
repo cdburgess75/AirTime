@@ -42,6 +42,19 @@ struct SchedulerConfig {
   // the step never lands mid-measurement.
   int64_t band_dwell_us = 2LL * 60 * 1000000;
   bool exit_listen_on_fix = true;  // got what we came for; resume serving early
+
+  // ── The unseeded cadence ────────────────────────────────────────────────
+  // Before any source has fixed the clock, the listen windows ARE the
+  // acquisition: the device is serving an NTP answer flagged unusable, so
+  // there is nothing for the windows to interrupt and everything for them to
+  // find. Windows come sooner and run longer — long enough for the 100 Hz
+  // timecode to hunt the frame (up to a minute) and read two whole frames on
+  // one band, which is what the longer dwell guarantees room for. The moment
+  // any fix lands, setSeeded() flips the cadence back to the serving-first
+  // numbers above.
+  int64_t listen_interval_unseeded_us = 15LL * 60 * 1000000;
+  int64_t listen_duration_unseeded_us = 8LL * 60 * 1000000;
+  int64_t band_dwell_unseeded_us = 4LL * 60 * 1000000;
 };
 
 // What the hardware adapters should be doing right now.
@@ -104,6 +117,13 @@ class Scheduler {
   void requestListenNow();
   void requestServeNow();
 
+  // Whether a real source has fixed the clock since power-on — the app relays
+  // arbiter.hasSourceFix() every loop. Selects between the serving-first and
+  // unseeded cadences above. Defaults to seeded, so a caller that never says
+  // gets exactly the old behaviour.
+  void setSeeded(bool s) { seeded_ = s; }
+  bool seeded() const { return seeded_; }
+
   Phase phase() const { return phase_; }
   bool hasFix() const { return has_fix_; }
   int32_t currentBandKhz() const;
@@ -117,11 +137,21 @@ class Scheduler {
   void enterServing(int64_t mono_us);
   void enterListening(int64_t mono_us);
   void maybeStepBand(int64_t mono_us);
+  int64_t listenIntervalUs() const {
+    return seeded_ ? cfg_.listen_interval_us : cfg_.listen_interval_unseeded_us;
+  }
+  int64_t listenDurationUs() const {
+    return seeded_ ? cfg_.listen_duration_us : cfg_.listen_duration_unseeded_us;
+  }
+  int64_t bandDwellUs() const {
+    return seeded_ ? cfg_.band_dwell_us : cfg_.band_dwell_unseeded_us;
+  }
 
   SchedulerConfig cfg_;
   Phase phase_ = Phase::Acquiring;
   bool started_ = false;
   bool has_fix_ = false;
+  bool seeded_ = true;
 
   int64_t acquire_start_ = 0;
   int64_t listen_start_ = 0;

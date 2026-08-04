@@ -41,10 +41,12 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
 
   const int si = sourceIndex(fix.source);
 
-  // WWV carries no date (§3). It can place the clock exactly on a minute
-  // boundary but can never say WHICH minute, so it must never be the source
-  // that establishes one — not on a cold start, and not against a warm-boot
-  // memory either.
+  // A dateless WWV fix can place the clock exactly on a minute boundary but
+  // can never say WHICH minute, so it must never be the source that
+  // establishes one — not on a cold start, and not against a warm-boot memory
+  // either. The gate keys on carries_date, not on the source: the 1000 Hz
+  // marker is dateless and stops here; the 100 Hz timecode carries
+  // minute/hour/day/year and passes, which is the entire reason it exists.
   //
   // Measured on the device, and the reason this is a hard gate rather than a
   // convention: a warm boot restored a time 65 minutes stale, the tuner sat on
@@ -53,7 +55,7 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
   // clock as sourced, which re-armed the corroboration gate against the very
   // RDS fix that knew the date. The laptop then read 3899.72 s out: 65 minutes
   // minus 0.28 s. A whole number of minutes is this bug's fingerprint.
-  if (fix.source == Source::Wwv && !source_synced_) {
+  if (fix.source == Source::Wwv && !fix.carries_date && !source_synced_) {
     r.action = Action::Rejected;
     r.needs_confirmation = true;
     r.synced = isSynced(mono);

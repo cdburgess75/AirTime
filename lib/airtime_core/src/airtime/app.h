@@ -29,8 +29,29 @@
 #include "station_vote.h"
 #include "types.h"
 #include "wwv_marker.h"
+#include "wwv_timecode.h"
 
 namespace airtime {
+
+// Pulse-measurement gates for the 100 Hz timecode subcarrier — the same
+// detector CLASS as the minute marker, pointed at different physics. The
+// duration gate is not a filter here but the measurement itself: every burst
+// from the shortest zero (170 ms) to the longest marker (770 ms) must come
+// back with its width, so the gate opens to [80, 900] ms and classifyPulse
+// does the discriminating downstream. Thresholds are set for a subcarrier at
+// roughly a quarter of the modulation the tick tones get, through a 20 Hz bin
+// whose noise floor is correspondingly lower than the marker bin's measured
+// 7.7e-5 — PROVISIONAL until the first sub[] serial report from the field,
+// exactly as min_power itself was until Milestone 0 measured it.
+inline WwvMarkerConfig defaultSubcarrierPulseConfig() {
+  WwvMarkerConfig c;
+  c.on_ratio = 4.0f;
+  c.off_ratio = 2.0f;
+  c.min_power = 5.0e-5f;
+  c.gate_min_us = 80000;
+  c.gate_max_us = 900000;
+  return c;
+}
 
 struct AppConfig {
   ArbiterConfig arbiter;
@@ -126,6 +147,28 @@ struct AppConfig {
   int64_t wwv_block_us = 20000;
   real cw_tone_hz = 700.0f;
   int64_t cw_block_us = 5000;
+
+  // ── The 100 Hz timecode channel (date from HF alone) ──────────────────────
+  // The subcarrier bin runs beside the marker bin during every listen window.
+  // 50 ms blocks make a 20 Hz bin: narrow enough that 60 Hz mains hum and its
+  // 120 Hz harmonic — the two neighbours that could actually reach a 100 Hz
+  // detector — each sit a full bin away, while a 170 ms zero still spans three
+  // blocks of measurement. sub_hz <= 0 disables the whole chain.
+  real wwv_sub_hz = 100.0f;
+  int64_t wwv_sub_block_us = 50000;
+  WwvMarkerConfig subcarrier_pulse = defaultSubcarrierPulseConfig();
+  WwvTimecodeConfig timecode;
+  // Resolves the code's two-digit year. The firmware passes its build year;
+  // wrong only if the device outlives its last flash by fifty years.
+  int century_hint_year = 2026;
+  // What a confirmed frame is worth. The frame-start edge is measured through
+  // 50 ms blocks and a threshold crossing, and the code pulse itself begins
+  // 30 ms after its second (NIST's published offset — researched, not yet
+  // measured off the air, like the bit map). ±250 ms swallows all of that
+  // with margin. Identity is this fix's job; the 1000 Hz marker that follows
+  // it in the same window takes phase from there to ±30 ms.
+  int64_t wwv_timecode_uncertainty_us = 250000;
+  int64_t wwv_timecode_lead_us = 30000;
 };
 
 // Who owns the radio right now. See AirTimeApp::setMode for what each means.
@@ -150,6 +193,22 @@ struct RdsFixDiag {
   bool have = false;
   int64_t offset_us = 0;   // consensus clock error the voter reported
   int stations = 0;        // agreeing stations behind it (= independent support)
+  bool accepted = false;
+};
+
+// The timecode chain's own story, stage by stage, because each boundary is a
+// different failure with a different fix: pulses but no frames means the
+// hunt never locks (edge timing, splinters); frames seen but none decoded
+// means structure damage (fading, a wrong bit map); decoded but never
+// confirmed means the minutes do not chain (alignment slipping between
+// frames). The counters mirror the decoder's own; the fix fields tell what
+// the arbiter made of the result.
+struct WwvTimecodeDiag {
+  uint32_t pulses = 0;       // completed bursts handed to the decoder
+  uint32_t splinters = 0;    // bursts <700 ms after the previous — dropped
+  uint32_t gap_seconds = 0;  // wholly-missed seconds fed as unreadable
+  bool have = false;         // a confirmed frame reached the arbiter
+  int64_t offset_us = 0;     // implied correction of the last submitted fix
   bool accepted = false;
 };
 
@@ -274,8 +333,11 @@ class AirTimeApp {
   const Scheduler& scheduler() const { return sched_; }
   const Directive& directive() const { return directive_; }
   const WwvMarkerDetector& wwvMarker() const { return marker_; }
+  const WwvMarkerDetector& wwvPulse() const { return pulse_; }
+  const WwvTimecodeDecoder& wwvTimecode() const { return timecode_; }
   const WwvFixDiag& wwvFixDiag() const { return wwv_diag_; }
   const RdsFixDiag& rdsFixDiag() const { return rds_diag_; }
+  const WwvTimecodeDiag& wwvTimecodeDiag() const { return tc_diag_; }
   // What WWV has taught us about each station (§4: sources correct each other).
   const StationBiasTable& stationBias() const { return bias_; }
 
@@ -293,6 +355,8 @@ class AirTimeApp {
   void pollSurvey(int64_t now);
   void adoptSurveyResult();
   void pollWwv(int64_t now);
+  void pollWwvTimecode(int64_t now);
+  void resetTimecodeChain();
   void pollCw(int64_t now);
   // EVERY retune of the FM side goes through here, because the radio has ONE
   // tuner and `tuned_wwv_khz_` is a claim about it: any move of the dial that
@@ -315,6 +379,8 @@ class AirTimeApp {
   StationBiasTable bias_;
   FmSurvey survey_;
   WwvMarkerDetector marker_;
+  WwvMarkerDetector pulse_;      // 100 Hz burst widths (the timecode symbols)
+  WwvTimecodeDecoder timecode_;
   ClientCounter clients_;
 
   Directive directive_;
@@ -338,6 +404,11 @@ class AirTimeApp {
   int64_t last_wwv_accept_mono_ = 0;
   WwvFixDiag wwv_diag_;
   RdsFixDiag rds_diag_;
+  WwvTimecodeDiag tc_diag_;
+  // Leading edge of the last second's pulse — the cadence reference that
+  // finds splinters (too soon) and holes (too late) in the symbol stream.
+  int64_t tc_last_edge_us_ = 0;
+  uint32_t tc_frames_decoded_seen_ = 0;  // for the band-productivity signal
   // Set when the bias table or band stats move; persist() writes only then.
   bool learned_dirty_ = false;
   bool have_new_ct_ = false;

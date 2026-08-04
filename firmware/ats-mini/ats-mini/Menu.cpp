@@ -293,6 +293,7 @@ static const MenuItem atSettingsMenu[] =
   {"Time Zone",   CMD_AT_ZONE},
   {"WWV Band",    CMD_AT_BAND},
   {"HF Listen",   CMD_AT_HF},
+  {"Set Clock",   CMD_AT_SETCLK},
   {"Reset Learn", CMD_AT_RESET},
   {"About",       CMD_ABOUT},
 };
@@ -865,9 +866,10 @@ uint8_t doAbout(int16_t enc)
 {
   static uint8_t aboutScreen = 0;
 #ifdef AIRTIME
-  // Four pages under AIRTIME: the AirTime page is page 0, because it is the
-  // one an operator of THIS build actually wants.
-  aboutScreen = clamp_range(aboutScreen, enc, 0, 3);
+  // Five pages under AIRTIME: the AirTime page is page 0, because it is the
+  // one an operator of THIS build actually wants, and the WWV chain's own
+  // diagnostics are one detent further.
+  aboutScreen = clamp_range(aboutScreen, enc, 0, 4);
 #else
   aboutScreen = clamp_range(aboutScreen, enc, 0, 2);
 #endif
@@ -1115,6 +1117,11 @@ static void atActivate(uint16_t cmd)
       currentCmd = CMD_AT_HF;
       break;
 
+    case CMD_AT_SETCLK:
+      atSetClkOpen();            // prefill from the clock, or the build date
+      currentCmd = CMD_AT_SETCLK;
+      break;
+
     case CMD_AT_RESET:
       // Wipes every learned/persisted AirTime byte and reboots — the recovery
       // hammer for a radio whose persisted brain is suspect. Everything it
@@ -1285,6 +1292,9 @@ bool doSideBar(uint16_t cmd, int16_t enc, int16_t enca)
     case CMD_AT_HF:      doAtHf(scrollDirection * enc);break;
     case CMD_AT_MODE:    doAtMode(scrollDirection * enc);break;
     case CMD_AT_NETS:    doAtNets(scrollDirection * enc);break;
+    // A value knob, not a list scroll: rotation edits the highlighted field
+    // (year, month, ... minute), so scrollDirection does not apply.
+    case CMD_AT_SETCLK:  atClkTurn(enc);break;
 #endif
     case CMD_SQUELCH:    doSquelch(enca);break;
     case CMD_ABOUT:      doAbout(enc);break;
@@ -1305,6 +1315,9 @@ bool clickHandler(uint16_t cmd, bool shortPress)
     case CMD_AT_NETS:  clickAtNets(atNetIdx(), shortPress);break;
     case CMD_AT_MODE:  atModeCommit(); currentCmd = CMD_NONE; break;
     case CMD_AT_HF:    atHfCommit();   currentCmd = CMD_NONE; break;
+    // Advances the field cursor; the click on GO is the time-set act itself
+    // (the operator pressing at :00), after which the panel closes.
+    case CMD_AT_SETCLK: if(atClkClick()) currentCmd = CMD_NONE; break;
 #endif
     case CMD_MEMORY:   clickMemory(memoryIdx, shortPress);break;
     case CMD_BLEMODE:  clickBleMode(bleModeIdx, shortPress);break;
@@ -2056,6 +2069,9 @@ void drawSideBar(uint16_t cmd, int x, int y, int sx)
     case CMD_AT_HF:   drawAtList(atLabelFor(cmd), atHfCount(),   atHfSelIdx(),   atHfName,   x, y, sx); break;
     case CMD_AT_MODE: drawAtList(atLabelFor(cmd), atModeCount(), atModeSelIdx(), atModeName, x, y, sx); break;
     case CMD_AT_NETS: drawAtList(atLabelFor(cmd), atNetCount(),  atNetIdx(),  atNetName,  x, y, sx); break;
+    // The same list renderer; the highlighted row is the field being edited,
+    // and its text carries the live value ("Hour  13"). Six rows fit whole.
+    case CMD_AT_SETCLK: drawAtList(atLabelFor(cmd), atClkFieldCount(), atClkFieldIdx(), atClkFieldName, x, y, sx); break;
 #endif
     case CMD_MENU:       drawMenu(x, y, sx);       break;
     case CMD_SETTINGS:   drawSettings(x, y, sx);   break;

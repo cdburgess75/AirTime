@@ -9,7 +9,9 @@ AirTimeApp::AirTimeApp(const AppDeps& deps, const AppConfig& cfg)
       sched_(cfg.scheduler),
       bias_(cfg.station_bias),
       survey_(cfg.survey_cfg),
-      marker_(cfg.marker) {}
+      marker_(cfg.marker),
+      pulse_(cfg.subcarrier_pulse),
+      timecode_(cfg.timecode, cfg.century_hint_year) {}
 
 void AirTimeApp::setFmStations(const int32_t* khz, std::size_t n) {
   if (khz == nullptr) return;
@@ -55,6 +57,13 @@ void AirTimeApp::begin() {
       if (n > 0) setFmStations(khz, n);
     }
   }
+
+  // Point both detector channels at their duty before anything can start the
+  // sampler: the marker bin and the timecode subcarrier bin. The sampler's own
+  // defaults happen to agree today, but the app should not depend on an
+  // adapter's initializers matching its config.
+  deps_.wwv->setDetector(cfg_.wwv_tone_hz, cfg_.wwv_block_us);
+  deps_.wwv->setSubDetector(cfg_.wwv_sub_hz, cfg_.wwv_sub_block_us);
 
   sched_.start(now);
   fm_dwell_start_ = now;
@@ -127,6 +136,7 @@ void AirTimeApp::setManualUtc(int64_t utc_us) {
   // to WWV as fast as possible.
   f.uncertainty_us = 5000000;
   f.independent_support = 2;   // the operator's own confirmation, see header
+  f.carries_date = true;
   arbiter_.update(f);
   ever_synced_ = ever_synced_ || arbiter_.isSynced(now);
   learned_dirty_ = true;
@@ -167,15 +177,19 @@ void AirTimeApp::setMode(OpMode m) {
     if (cw_.flush(&c)) cw_text_.push(c);
     if (deps_.wwv->isRunning()) deps_.wwv->stop();
     deps_.wwv->setDetector(cfg_.wwv_tone_hz, cfg_.wwv_block_us);
+    deps_.wwv->setSubDetector(cfg_.wwv_sub_hz, cfg_.wwv_sub_block_us);
   }
 
   if (m == OpMode::Cw) {
     // Entering CW: take the tap. A listen window may own the sampler at this
     // instant — stop it first, same reason as above. Decoder and noise floor
     // start from silence: both are about the band the operator is about to
-    // tune, not the one the radio just left.
+    // tune, not the one the radio just left. The subcarrier channel goes
+    // quiet too: its blocks would be 50 ms of somebody's sidetone, and an
+    // unread queue is drops in the diagnostic that WWV listening relies on.
     if (deps_.wwv->isRunning()) deps_.wwv->stop();
     deps_.wwv->setDetector(cfg_.cw_tone_hz, cfg_.cw_block_us);
+    deps_.wwv->setSubDetector(0.0f, 0);
     cw_.reset();
     cw_text_.clear();
     cw_level_ = 0.0f;
@@ -252,19 +266,22 @@ Directive AirTimeApp::effectiveDirective(Directive d) const {
     return d;
   }
 
-  // See the declaration for the reasoning: unseeded, WWV can neither help
-  // (markers are ±30 s ambiguous; pollWwv discards them) nor be afforded —
-  // on the single-tuner radio it would starve the RDS path that CAN seed.
+  // Unseeded WWV listening was once suppressed everywhere: a ±30 s marker
+  // cannot start a clock, and on the single-tuner radio a pre-seed listen
+  // window starves the RDS path that could. The 100 Hz timecode changed half
+  // of that — it carries the date, so a listen window CAN now start the clock
+  // from HF alone — but the tuner arithmetic still stands during the boot
+  // hunt, where RDS seeds in ~a minute when it works at all and deserves the
+  // first uninterrupted claim on the dial. So the suppression now applies to
+  // the ACQUIRING phase only. Once acquisition times out into Serving, the
+  // scheduler's unseeded cadence opens real windows and the timecode chain
+  // hunts; the marker path stays gated inside pollWwv regardless, because a
+  // dateless marker unseeded is exactly as meaningless as it ever was.
   //
   // The test is "has a real source spoken yet", NOT "is the clock set". A warm
   // boot sets the clock from NVS, and that memory is only as good as the
-  // power-down was short — measured on the device: an hour stale. Trusting it
-  // cost twice over. The tuner sat on AM for the whole 5-minute acquisition
-  // (RDS cannot be read in AM mode, so nothing could end it early), which is
-  // where "no WiFi for five minutes after boot" came from; and WWV was invited
-  // to phase-lock a clock whose MINUTE was wrong, which a ±30 s marker cannot
-  // detect and would have silently locked in.
-  if (!arbiter_.hasSourceFix() && d.wwv_listening) {
+  // power-down was short — measured on the device: an hour stale.
+  if (!arbiter_.hasSourceFix() && d.wwv_listening && d.phase == Phase::Acquiring) {
     d.wwv_listening = false;
     d.wwv_band_khz = 0;
   }
@@ -280,6 +297,12 @@ void AirTimeApp::applyDirective(const Directive& d) {
 
   if (!want_audio && deps_.wwv->isRunning()) {
     deps_.wwv->stop();
+    // The window is over and the symbol cadence with it. A partial frame held
+    // across an hour of serving would be continued with next window's seconds
+    // — sixty stale symbols would have to fail their structure checks before
+    // the hunt could even begin, a minute of the new window spent disproving
+    // the old one. Continuity is broken; say so.
+    resetTimecodeChain();
     // ONE tuner (PLAN.md §2's quieter sibling): the listen window leaves the
     // chip parked on an AM band, and nothing else puts it back. The FM dwell
     // rotation cannot — it requires station_count_ > 1, so a single-station
@@ -311,14 +334,24 @@ void AirTimeApp::applyDirective(const Directive& d) {
       deps_.wwv->tuneKhz(d.wwv_band_khz);
       tuned_wwv_khz_ = d.wwv_band_khz;
       marker_.reset();  // new band, new noise floor
+      resetTimecodeChain();  // and a new station's frame alignment
     }
     if (!deps_.wwv->isRunning()) deps_.wwv->start();
   }
 }
 
+void AirTimeApp::resetTimecodeChain() {
+  pulse_.reset();
+  timecode_.reset();
+  tc_last_edge_us_ = 0;
+}
+
 void AirTimeApp::loop() {
   const int64_t now = deps_.clock->nowUs();
 
+  // The scheduler paces itself by whether anything has fixed the clock yet:
+  // unseeded, the listen windows are the acquisition and come accordingly.
+  sched_.setSeeded(arbiter_.hasSourceFix());
   directive_ = effectiveDirective(sched_.tick(now));
   applyDirective(directive_);
 
@@ -422,6 +455,7 @@ void AirTimeApp::submitRdsVote(int64_t now) {
   f.utc_us = (arbiter_.isSet() ? arbiter_.utcAt(now) : now) + vr.offset_us;
   f.uncertainty_us = cfg_.rds_uncertainty_us;
   f.independent_support = vr.agreeing_stations;
+  f.carries_date = true;   // CT groups carry the full civil date
 
   const ArbiterUpdate u = arbiter_.update(f);
 
@@ -463,6 +497,7 @@ void AirTimeApp::pollWwv(int64_t now) {
     f.utc_us = clock_utc + off;
     f.uncertainty_us = cfg_.wwv_uncertainty_us;
     f.independent_support = 1;
+    f.carries_date = false;  // a marker asserts a boundary, never a minute
 
     // Self-corroboration (§4 rule 3). On the single-tuner radio no other
     // source can second a big WWV correction inside the listen window — but
@@ -499,6 +534,98 @@ void AirTimeApp::pollWwv(int64_t now) {
       prev_wwv_offset_us_ = off;
     }
   }
+
+  pollWwvTimecode(now);
+}
+
+// The 100 Hz subcarrier stream: burst widths become symbols, symbols become
+// frames, and a confirmed frame is the one WWV product that carries the DATE
+// — the fix that can start this clock from HF alone (PLAN.md §3 called that
+// out of scope for v1, and the QTH's marginal FM dial is why it no longer is).
+void AirTimeApp::pollWwvTimecode(int64_t now) {
+  int64_t t = 0;
+  real p = 0;
+  WwvMarker pm;
+  while (deps_.wwv->nextSubPower(&t, &p)) {
+    if (!pulse_.process(t, p, &pm)) continue;
+
+    if (tc_last_edge_us_ != 0) {
+      const int64_t dt = pm.leading_edge_us - tc_last_edge_us_;
+      if (dt < 700000) {
+        // A second burst inside the same second. The code sends exactly one
+        // pulse per second and the longest legal pulse ends 860 ms in, so
+        // this is voice or noise split by the hysteresis — drop the splinter,
+        // keep the cadence anchored on the real edge.
+        ++tc_diag_.splinters;
+        continue;
+      }
+      if (dt > 90000000) {
+        // The band went quiet for a minute and a half. Whatever alignment we
+        // held describes a signal that is gone; hunt fresh rather than feed
+        // ninety synthetic holes.
+        timecode_.reset();
+        tc_last_edge_us_ = 0;
+      } else {
+        // Seconds whose pulse never crossed the threshold. Feed each as an
+        // explicitly unreadable symbol so the frame keeps its shape: a holed
+        // frame is discarded either way, but an intact marker skeleton keeps
+        // the ALIGNMENT, and that is a minute of re-hunting saved (decoder
+        // header, "Holes").
+        const int64_t missed = (dt - 500000) / 1000000;
+        for (int64_t k = 1; k <= missed; ++k) {
+          ++tc_diag_.gap_seconds;
+          timecode_.onSecond(-1, tc_last_edge_us_ + k * 1000000);
+        }
+      }
+    }
+    tc_last_edge_us_ = pm.leading_edge_us;
+    ++tc_diag_.pulses;
+
+    const bool confirmed =
+        timecode_.onSecond(pm.duration_us / 1000, pm.leading_edge_us);
+
+    // A frame that DECODES is propagation evidence as strong as a marker —
+    // noise does not produce sixty structurally-correct symbols — so it pins
+    // the band rotation and credits the band table even before its partner
+    // frame confirms the time.
+    if (timecode_.framesDecoded() != tc_frames_decoded_seen_) {
+      tc_frames_decoded_seen_ = timecode_.framesDecoded();
+      sched_.onWwvMarker(pm.peak_power);
+      learned_dirty_ = true;
+    }
+
+    if (!confirmed) continue;
+
+    // Two frames in exact whole-minute lockstep. utc at the frame's second-0
+    // boundary, corrected for where the measured edge actually sits: the code
+    // pulse opens wwv_timecode_lead_us after its second, and the receive
+    // chain delays it wwv_calibration_us more.
+    TimeFix f;
+    f.source = Source::Wwv;
+    f.mono_us = timecode_.frameStartUs();
+    f.utc_us = wwvTimeToEpochS(timecode_.time()) * 1000000 +
+               cfg_.wwv_timecode_lead_us + cfg_.wwv_calibration_us;
+    f.uncertainty_us = cfg_.wwv_timecode_uncertainty_us;
+    // The same §4 rule-3 argument as the marker pair (AppConfig::wwv_pair_*):
+    // two independent transmissions, a minute or more apart, agreeing through
+    // sixty structural checks each AND exact epoch arithmetic. Random audio
+    // does not do that twice running.
+    f.independent_support = 2;
+    f.carries_date = true;   // the entire point of this chain
+
+    const ArbiterUpdate u = arbiter_.update(f);
+    tc_diag_.have = true;
+    tc_diag_.offset_us = u.offset_us;
+    tc_diag_.accepted = u.action != Action::Rejected;
+
+    if (u.action != Action::Rejected) {
+      have_prev_wwv_ = false;   // the clock moved; the held marker is stale
+      have_wwv_accept_ = true;
+      last_wwv_accept_mono_ = f.mono_us;
+      noteAccepted(Source::Wwv, now);
+      sched_.onWwvFix(now);
+    }
+  }
 }
 
 void AirTimeApp::noteAccepted(Source s, int64_t now) {
@@ -523,6 +650,7 @@ void AirTimeApp::operatorSetTime(int64_t utc_us) {
   f.utc_us = utc_us;
   f.uncertainty_us = 500000;  // human reaction time, generously
   f.independent_support = 1;
+  f.carries_date = true;
   const ArbiterUpdate u = arbiter_.update(f);
   if (u.action != Action::Rejected) noteAccepted(Source::Manual, now);
 }

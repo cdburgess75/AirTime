@@ -3,7 +3,21 @@
 Live checklist for the build. Milestone contents come from [`PLAN.md §7`](PLAN.md#7-milestones).
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked/gate
 
-Last updated 2026-07-27. **161 tests / 6194 checks** via `make test`.
+Last updated 2026-08-04. **198 tests / 6586 checks** via `make test`.
+
+> **2026-08-04 — WWV can now start the clock (v2026.08.04.001).** PLAN §3's
+> "phase only" decision is reversed (see the dated note there): a second
+> Goertzel bin (100 Hz, 50 ms blocks) runs beside the marker bin, burst widths
+> become IRIG-H symbols, and two frames in exact whole-minute lockstep become a
+> `carries_date` WWV fix that may seed an unset clock. Unseeded, the scheduler
+> now opens listen windows every 15 min for 8 min (4 min/band) — before, an
+> FM-dead QTH meant the device never listened at all. The simulated device
+> cold-starts from HF alone with no FM stations configured
+> (`app_timecode_cold_starts_from_hf_alone`). Also new: Settings → Set Clock
+> (manual UTC entry, the tier-3 source PLAN promised), 20 MHz in the band
+> rotation, an HF-chain page in About, and a `frame[…]` serial capture of the
+> raw 60 symbols for verifying the bit map against Fort Collins — which, like
+> the 100-Hz-through-the-audio-path question, only air can settle.
 
 **The clock works.** Milestones 0-4 are done and Milestones 2 and 3 are verified
 over the air: `sntp 192.168.4.1` → **−0.005106 ± 0.070630**, no internet, no GPS.

@@ -36,6 +36,13 @@ struct TimeFix {
   int64_t utc_us = 0;           // asserted UTC (µs since 1970)
   int64_t uncertainty_us = 0;   // source's own ± (e.g. RDS ~200 ms, WWV ~20 ms)
   int independent_support = 1;  // independent sources backing it (RDS voting => agreeing stations)
+  // Whether this fix knows the DATE, or only refines phase. A WWV minute
+  // marker asserts "a minute boundary is here" against whatever the clock
+  // already believes — it must never establish which minute (see the cold gate
+  // in update()). The WWV 100 Hz timecode carries minute/hour/day/year and
+  // may. RDS and Manual always do; the field exists so the one source with
+  // two kinds of evidence can say which kind this is.
+  bool carries_date = false;
 };
 
 struct ArbiterConfig {

@@ -46,7 +46,7 @@ void Scheduler::start(int64_t mono_us) {
 // dwell now bounds patience with a DEAD band, which is what §4 meant by it.
 void Scheduler::maybeStepBand(int64_t mono_us) {
   if (band_count_ == 0 || band_productive_) return;
-  if ((mono_us - band_start_) < cfg_.band_dwell_us) return;
+  if ((mono_us - band_start_) < bandDwellUs()) return;
   band_idx_ = (band_idx_ + 1) % band_count_;
   band_start_ = mono_us;
   band_productive_ = false;
@@ -146,7 +146,7 @@ Directive Scheduler::tick(int64_t mono_us) {
 
     case Phase::Serving: {
       if (want_listen_ ||
-          (mono_us - last_listen_end_) >= cfg_.listen_interval_us) {
+          (mono_us - last_listen_end_) >= listenIntervalUs()) {
         enterListening(mono_us);
       }
       break;
@@ -154,7 +154,7 @@ Directive Scheduler::tick(int64_t mono_us) {
 
     case Phase::Listening: {
       if (want_serve_ ||
-          (mono_us - listen_start_) >= cfg_.listen_duration_us) {
+          (mono_us - listen_start_) >= listenDurationUs()) {
         enterServing(mono_us);
         break;
       }

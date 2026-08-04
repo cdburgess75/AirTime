@@ -164,6 +164,20 @@ static void drawAboutAirTime(uint8_t arrow)
 
   spr.pushSprite(0, 0);
 }
+
+// The WWV chain, stage by stage — the screen twin of the serial mkr[]/code[]
+// lines, because what actually comes back from the field is a photograph.
+static void drawAboutAirTimeHf(uint8_t arrow)
+{
+  drawAboutCommon(arrow);
+
+  const char *lines[8];
+  const int n = airtimeHfAboutLines(lines, 8);
+  for(int i = 0 ; i < n ; i++)
+    spr.drawString(lines[i], 2, 70 + 16 * (i - 1), 2);
+
+  spr.pushSprite(0, 0);
+}
 #endif
 
 //
@@ -174,11 +188,13 @@ void drawAbout()
   switch(doAbout(0))
   {
 #ifdef AIRTIME
-    // AirTime first; the stock pages keep their order behind it.
+    // AirTime first, its HF chain page beside it; the stock pages keep their
+    // order behind them.
     case 0: drawAboutAirTime(1); break;
-    case 1: drawAboutHelp(3); break;
-    case 2: drawAboutAuthors(3); break;
-    case 3: drawAboutSystem(2); break;
+    case 1: drawAboutAirTimeHf(3); break;
+    case 2: drawAboutHelp(3); break;
+    case 3: drawAboutAuthors(3); break;
+    case 4: drawAboutSystem(2); break;
 #else
     case 0: drawAboutHelp(1); break;
     case 1: drawAboutAuthors(3); break;

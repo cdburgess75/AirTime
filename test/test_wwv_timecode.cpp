@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "airtime/rds_ct.h"   // civilToMjd — epochs correct by construction
 #include "airtime/wwv_timecode.h"
 #include "test_framework.h"
 
@@ -263,4 +264,142 @@ AT_TEST(wwvtc_reports_dut1_and_flags) {
 
   e.sym[38] = TcSymbol::Zero;   // sign negative
   AT_CHECK_EQ(decodeFrame(e.sym, 60, 2026).dut1_ms, -300);
+}
+
+// ── The hole policy ─────────────────────────────────────────────────────────
+// One unreadable DATA second ruins its frame but must not cost the alignment:
+// the marker skeleton is intact, so the decoder holds its place and the next
+// clean pair confirms across the hole — 120 s apart, exact to the second.
+AT_TEST(wwvtc_keeps_alignment_through_a_holed_frame) {
+  WwvTimecodeDecoder d(kCfg, 2026);
+  int64_t t = 0;
+
+  // Minute 10 is spent hunting (the 59/0 pair frames the decoder at the top
+  // of minute 11). Minute 11 pends clean, minute 12 is holed at a data
+  // second, minute 13 is clean again.
+  Encoder e;
+  int confirmed = 0;
+  for (int m = 0; m < 4; ++m) {
+    e.build(10 + m, 8, 100, 26);
+    for (int s = 0; s < 60; ++s) {
+      const int64_t ms = (m == 2 && s == 25) ? -1 : e.ms(s);  // the hole
+      if (d.onSecond(ms, t)) ++confirmed;
+      t += 1000000;
+    }
+  }
+  // Frame 11 pended, frame 12 discarded (hole, skeleton intact), frame 13
+  // confirmed against frame 11 across two minutes. Re-hunting at the hole
+  // would have eaten frame 13 as its alignment sacrifice and confirmed
+  // nothing.
+  AT_CHECK_EQ(confirmed, 1);
+  AT_CHECK(d.haveFrame());
+  AT_CHECK_EQ(d.time().minute, 13);
+  AT_CHECK_EQ(d.framesSeen(), 3u);
+  AT_CHECK_EQ(d.framesDecoded(), 2u);
+}
+
+// A broken marker skeleton is a different animal: the alignment itself is
+// suspect, so the decoder must re-hunt rather than trust its place.
+AT_TEST(wwvtc_rehunts_when_the_skeleton_breaks) {
+  WwvTimecodeDecoder d(kCfg, 2026);
+  int64_t t = 0;
+  Encoder e;
+
+  e.build(5, 3, 50, 26);
+  for (int s = 0; s < 60; ++s) { d.onSecond(e.ms(s), t); t += 1000000; }
+
+  // Second frame loses a POSITION MARKER (second 19 reads as a one).
+  e.build(6, 3, 50, 26);
+  e.sym[19] = TcSymbol::One;
+  for (int s = 0; s < 60; ++s) { d.onSecond(e.ms(s), t); t += 1000000; }
+
+  // The decoder is hunting again: a clean pair from scratch is needed, and the
+  // first of them re-frames off the 59/0 marker pair as at cold start.
+  const int confirmed = runMinutes(d, 7, 3, 50, 26, 3, t);
+  AT_CHECK(confirmed >= 1);
+  AT_CHECK_EQ(d.time().hour, 3);
+}
+
+// rawFrame() must hold the last COMPLETE frame even while the next minute is
+// filling — the status page photographs it on its own schedule.
+AT_TEST(wwvtc_raw_frame_is_a_stable_snapshot) {
+  WwvTimecodeDecoder d(kCfg, 2026);
+  int64_t t = 0;
+
+  // Minute 42 is the hunt; minute 43 is the first COMPLETE frame.
+  Encoder e;
+  e.build(42, 17, 200, 26);
+  for (int s = 0; s < 60; ++s) { d.onSecond(e.ms(s), t); t += 1000000; }
+  Encoder e43;
+  e43.build(43, 17, 200, 26);
+  for (int s = 0; s < 60; ++s) { d.onSecond(e43.ms(s), t); t += 1000000; }
+  AT_CHECK_EQ(d.framesSeen(), 1u);
+
+  // Half of the NEXT minute arrives...
+  Encoder e44;
+  e44.build(44, 17, 200, 26);
+  for (int s = 0; s < 30; ++s) { d.onSecond(e44.ms(s), t); t += 1000000; }
+
+  // ...and the snapshot still reads minute 43, symbol for symbol.
+  const TcSymbol* raw = d.rawFrame();
+  for (int s = 0; s < 60; ++s) AT_CHECK(raw[s] == e43.sym[s]);
+}
+
+// encodeFrame is the library's own inverse (for the simulator): it must
+// round-trip through decodeFrame exactly, flags and DUT1 included. This
+// proves consistency with the shared table — the INDEPENDENT transcription
+// is the Encoder at the top of this file, and air is the only real proof.
+AT_TEST(wwvtc_encode_frame_round_trips) {
+  WwvTime in;
+  in.minute = 37; in.hour = 19; in.day_of_year = 316; in.year = 2027;
+  in.dut1_ms = -400; in.dst_now = true; in.leap_warning = true;
+  in.valid = true;
+
+  TcSymbol sym[60];
+  encodeFrame(in, sym);
+  const WwvTime out = decodeFrame(sym, 60, 2026);
+  AT_CHECK(out.valid);
+  AT_CHECK_EQ(out.minute, 37);
+  AT_CHECK_EQ(out.hour, 19);
+  AT_CHECK_EQ(out.day_of_year, 316);
+  AT_CHECK_EQ(out.year, 2027);
+  AT_CHECK_EQ(out.dut1_ms, -400);
+  AT_CHECK(out.dst_now);
+  AT_CHECK(!out.dst_soon);
+  AT_CHECK(out.leap_warning);
+
+  // And against the independent transcription, bit for bit.
+  Encoder e;
+  e.build(37, 19, 316, 27);
+  e.sym[40] = e.sym[41] = TcSymbol::Zero;         // clear DUT1 zeros (already)
+  e.sym[42] = TcSymbol::One;                       // 400 ms
+  e.sym[38] = TcSymbol::Zero;                      // negative sign
+  e.sym[58] = TcSymbol::One;                       // DST now
+  e.sym[55] = TcSymbol::One;                       // leap warning
+  for (int s = 0; s < 60; ++s) AT_CHECK(sym[s] == e.sym[s]);
+}
+
+// wwvTimeFromEpochS must invert wwvTimeToEpochS across year and leap
+// boundaries — the sim transmits from an epoch and the decoder returns one.
+// Epochs are built through the same civil calendar (rds_ct.h) rather than
+// hand-typed, so the cases are correct by construction.
+AT_TEST(wwvtc_epoch_inverse_round_trips) {
+  const auto dayS = [](int y, int mo, int dy) {
+    return (int64_t)(civilToMjd(y, mo, dy) - 40587) * 86400;
+  };
+  const int64_t cases[] = {
+      dayS(2026, 1, 1),                          // year opening minute
+      dayS(2026, 7, 1) + 12 * 3600 + 30 * 60,    // mid-year, mid-day
+      dayS(2027, 12, 31) + 23 * 3600 + 59 * 60,  // last minute of a year
+      dayS(2028, 2, 29),                         // leap day
+  };
+  for (int64_t epoch : cases) {
+    const WwvTime t = wwvTimeFromEpochS(epoch);
+    AT_CHECK(t.valid);
+    AT_CHECK_EQ(wwvTimeToEpochS(t), epoch);
+  }
+  // Spot-check the leap-day fields themselves.
+  const WwvTime leap = wwvTimeFromEpochS(dayS(2028, 2, 29));
+  AT_CHECK_EQ(leap.year, 2028);
+  AT_CHECK_EQ(leap.day_of_year, 60);   // Feb 29 in a leap year
 }

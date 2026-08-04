@@ -49,10 +49,17 @@ struct WwvSamplerConfig {
   int adc_gpio = 11;              // ADC2_CH0 — the factory audio tap
   airtime::real tone_hz = 1000.0f;
   int64_t block_us = 20000;       // ~20 ms blocks => ~20 ms edge quantisation
+  // The second bin: the WWV 100 Hz timecode subcarrier, run over the same
+  // samples. Longer blocks on purpose — 50 ms makes a 20 Hz bin, which parks
+  // 60 Hz hum and its 120 Hz harmonic each a full bin away while still giving
+  // a 170 ms zero three blocks of measurement. <= 0 disables the channel.
+  airtime::real sub_tone_hz = 100.0f;
+  int64_t sub_block_us = 50000;
   int core = 0;                   // main loop owns core 1; take the other one
   int task_priority = 2;
   std::size_t queue_len = 256;    // ~5 s of blocks: rides out main-loop stalls
                                   // (flash writes, UI work) without dropping
+  std::size_t sub_queue_len = 128;  // 50 ms blocks: ~6 s of the same insurance
   // Samples are scaled by 1/adc_full_scale so a full-swing tone reads ~1.0,
   // matching the normalisation airtime::Goertzel and WwvMarkerConfig expect.
   airtime::real adc_full_scale = 2048.0f;
@@ -90,6 +97,12 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   bool setDetector(airtime::real tone_hz, int64_t block_us) override;
   airtime::real toneHz() const { return cfg_.tone_hz; }
 
+  // The subcarrier channel, same contract. tone_hz <= 0 disables it (CW copy
+  // does: nobody reads the stream there, and unread blocks would only pollute
+  // the dropped-blocks diagnostic).
+  bool setSubDetector(airtime::real tone_hz, int64_t block_us) override;
+  bool nextSubPower(int64_t* mono_us, airtime::real* power) override;
+
   // ── Spectrum duty (the waterfall) ─────────────────────────────────────────
   // A bank of Goertzel bins run side by side over the same sample stream, one
   // frame of bin powers per block. While enabled, the single-detector path is
@@ -115,6 +128,8 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   airtime::real dcLevel() const { return dc_; }
   uint32_t blocksProduced() const { return blocks_; }
   uint32_t blocksDropped() const { return dropped_; }
+  uint32_t subBlocksProduced() const { return sub_blocks_; }
+  uint32_t subBlocksDropped() const { return sub_dropped_; }
 
  private:
   struct Sample {
@@ -131,6 +146,7 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   void* tune_ctx_ = nullptr;
 
   QueueHandle_t queue_ = nullptr;
+  QueueHandle_t sub_queue_ = nullptr;
   TaskHandle_t task_ = nullptr;
   // Control flags genuinely shared between the main loop and the sampler task.
   std::atomic<bool> running_{false};
@@ -155,6 +171,8 @@ class Esp32WwvSampler : public airtime::IWwvSampler {
   airtime::real dc_ = 0.0f;
   uint32_t blocks_ = 0;
   uint32_t dropped_ = 0;
+  uint32_t sub_blocks_ = 0;
+  uint32_t sub_dropped_ = 0;
 };
 
 }  // namespace airtime_esp32

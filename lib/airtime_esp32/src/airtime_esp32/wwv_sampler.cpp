@@ -19,6 +19,13 @@ bool Esp32WwvSampler::begin(const WwvSamplerConfig& cfg, TuneFn tune, void* ctx)
 
   queue_ = xQueueCreate(cfg_.queue_len, sizeof(Sample));
   if(queue_ == nullptr) return false;
+  sub_queue_ = xQueueCreate(cfg_.sub_queue_len, sizeof(Sample));
+  if(sub_queue_ == nullptr)
+  {
+    vQueueDelete(queue_);
+    queue_ = nullptr;
+    return false;
+  }
 
   analogReadResolution(12);
   // Full 0-3.3 V span. The tap rides on a DC bias near mid-rail, so we want
@@ -50,6 +57,7 @@ void Esp32WwvSampler::end()
   if(!finished_ && task_ != nullptr) vTaskDelete(task_);
   task_ = nullptr;
   if(queue_ != nullptr) { vQueueDelete(queue_); queue_ = nullptr; }
+  if(sub_queue_ != nullptr) { vQueueDelete(sub_queue_); sub_queue_ = nullptr; }
   begun_ = false;
 }
 
@@ -59,6 +67,15 @@ bool Esp32WwvSampler::setDetector(real tone_hz, int64_t block_us)
   if(tone_hz <= 0.0f || block_us <= 0) return false;
   cfg_.tone_hz = tone_hz;
   cfg_.block_us = block_us;
+  return true;
+}
+
+bool Esp32WwvSampler::setSubDetector(real tone_hz, int64_t block_us)
+{
+  if(running_) return false;
+  // Unlike the main detector, <= 0 is a legal request here: it means OFF.
+  cfg_.sub_tone_hz = tone_hz;
+  if(block_us > 0) cfg_.sub_block_us = block_us;
   return true;
 }
 
@@ -96,6 +113,7 @@ void Esp32WwvSampler::start()
 {
   if(!begun_) return;
   if(queue_ != nullptr) xQueueReset(queue_);
+  if(sub_queue_ != nullptr) xQueueReset(sub_queue_);
   running_ = true;
 }
 
@@ -117,6 +135,16 @@ bool Esp32WwvSampler::nextPower(int64_t* mono_us, real* power)
   if(queue_ == nullptr) return false;
   Sample s;
   if(xQueueReceive(queue_, &s, 0) != pdTRUE) return false;
+  if(mono_us != nullptr) *mono_us = s.mono_us;
+  if(power != nullptr) *power = s.power;
+  return true;
+}
+
+bool Esp32WwvSampler::nextSubPower(int64_t* mono_us, real* power)
+{
+  if(sub_queue_ == nullptr) return false;
+  Sample s;
+  if(xQueueReceive(sub_queue_, &s, 0) != pdTRUE) return false;
   if(mono_us != nullptr) *mono_us = s.mono_us;
   if(power != nullptr) *power = s.power;
   return true;
@@ -145,11 +173,16 @@ void Esp32WwvSampler::run()
 {
   bool armed = false;
   Goertzel goertzel(1.0f, 1.0f, 1);   // replaced once the rate is known
+  Goertzel sub(1.0f, 1.0f, 1);        // the 100 Hz timecode bin
+  bool sub_on = false;
   real dc = 0.0f;                     // local: avoids volatile compound-assign
   uint32_t blocks = 0, dropped = 0;
+  uint32_t sub_blocks = 0, sub_dropped = 0;
   std::size_t block_n = 0;
   int64_t block_start_us = 0;
   std::size_t in_block = 0;
+  int64_t sub_block_start_us = 0;
+  std::size_t in_sub_block = 0;
   // Blocks per yield, recomputed on re-arm from whatever block length is in
   // force. See the vTaskDelay below for why this is a cadence and not a count.
   int yield_every = 1, since_yield = 0;
@@ -180,6 +213,18 @@ void Esp32WwvSampler::run()
       block_n = (std::size_t)((double)cfg_.block_us * (double)fs / 1e6);
       if(block_n < 16) block_n = 16;
       goertzel = Goertzel(fs, cfg_.tone_hz, block_n);
+      // The subcarrier bin arms beside the main one, off the same measured
+      // rate. Its 100 Hz target is far under any rate that passes the gate
+      // above, so no second rate check is needed.
+      sub_on = cfg_.sub_tone_hz > 0.0f;
+      if(sub_on)
+      {
+        std::size_t sub_n =
+            (std::size_t)((double)cfg_.sub_block_us * (double)fs / 1e6);
+        if(sub_n < 16) sub_n = 16;
+        sub = Goertzel(fs, cfg_.sub_tone_hz, sub_n);
+      }
+      in_sub_block = 0;
       if(spectrum_on_)
       {
         // All bins share block_n, so every bin completes on the same sample
@@ -200,6 +245,8 @@ void Esp32WwvSampler::run()
     }
 
     if(in_block == 0) block_start_us = esp_timer_get_time();
+    if(sub_on && !spectrum_on_ && in_sub_block == 0)
+      sub_block_start_us = esp_timer_get_time();
 
     const int raw = analogRead(cfg_.adc_gpio);
 
@@ -237,6 +284,26 @@ void Esp32WwvSampler::run()
         }
       }
       continue;
+    }
+
+    // The subcarrier bin eats the same sample. Its queue send is non-blocking
+    // like the main one: an unread stream degrades to a drop counter, never to
+    // a stalled sampler task.
+    if(sub_on)
+    {
+      real sub_power = 0.0f;
+      ++in_sub_block;
+      if(sub.process(x, &sub_power))
+      {
+        Sample s;
+        s.mono_us = sub_block_start_us;   // leading edge, as with the main bin
+        s.power = sub_power;
+        if(xQueueSend(sub_queue_, &s, 0) != pdTRUE) ++sub_dropped;
+        else ++sub_blocks;
+        in_sub_block = 0;
+        sub_blocks_ = sub_blocks;
+        sub_dropped_ = sub_dropped;
+      }
     }
 
     real power = 0.0f;

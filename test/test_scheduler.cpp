@@ -254,3 +254,49 @@ AT_TEST(sched_custom_bands) {
   AT_CHECK_EQ(s.tick(0).wwv_band_khz, 2500);
   AT_CHECK_EQ(s.tick(2 * kMin).wwv_band_khz, 5000);
 }
+
+// ── The unseeded cadence ────────────────────────────────────────────────────
+// Before any source has fixed the clock, the listen windows ARE the
+// acquisition: sooner (15 min, not 60), longer (8 min, not 3), and with a
+// band dwell long enough for the timecode to hunt a frame and read two whole
+// ones on a single band. The moment setSeeded(true) arrives, the cadence
+// reverts to serving-first — mid-flight, not at the next phase change.
+AT_TEST(sched_unseeded_windows_come_sooner_and_run_longer) {
+  Scheduler s;
+  s.setSeeded(false);
+  s.start(0);
+  s.tick(6 * kMin);                        // acquire times out unseeded
+  AT_CHECK(s.phase() == Phase::Serving);   // last window "ended" at t=6 min
+
+  AT_CHECK(s.tick(19 * kMin).phase == Phase::Serving);     // 13 min: not yet
+  AT_CHECK(s.tick(22 * kMin).phase == Phase::Listening);   // 16 min: due (15)
+
+  // The window runs 8 minutes, with the longer dwell: still on the opening
+  // band at 3.5 minutes in, where the seeded dwell would have stepped at 2.
+  const int32_t opening = s.currentBandKhz();
+  AT_CHECK_EQ(s.tick(22 * kMin + 210 * kS).wwv_band_khz, opening);
+  AT_CHECK(s.tick(29 * kMin).phase == Phase::Listening);   // 7 min in
+  AT_CHECK(s.tick(30 * kMin + 30 * kS).phase == Phase::Serving);  // 8.5: over
+
+  // Seeding mid-cycle restores the hourly rhythm: the next window is due an
+  // hour after the last one ended (t=30.5 min), not fifteen minutes.
+  s.setSeeded(true);
+  AT_CHECK(s.tick(80 * kMin).phase == Phase::Serving);
+  AT_CHECK(s.tick(91 * kMin).phase == Phase::Listening);
+}
+
+// The unseeded dwell holds one band long enough for hunt + two frames
+// (a shade over three minutes), where the seeded dwell would have stepped
+// away at two.
+AT_TEST(sched_unseeded_dwell_fits_two_frames) {
+  Scheduler s;
+  s.setSeeded(false);
+  s.start(0);
+  s.tick(6 * kMin);
+  s.tick(21 * kMin);                       // a window is open
+  AT_CHECK(s.phase() == Phase::Listening);
+  const int32_t opening = s.currentBandKhz();
+  AT_CHECK_EQ(s.tick(21 * kMin + 210 * kS).wwv_band_khz, opening);  // 3.5 min in
+  // And a silent band IS eventually abandoned within the same window.
+  AT_CHECK(s.tick(21 * kMin + 5 * kMin).wwv_band_khz != opening);
+}

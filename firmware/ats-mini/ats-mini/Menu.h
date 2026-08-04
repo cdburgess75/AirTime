@@ -51,6 +51,7 @@
 #define CMD_AT_MODE    0x3250 // | AirTime: clock or receiver
 #define CMD_AT_NETS    0x3280 // | AirTime: scheduled nets
 #define CMD_AT_RESET   0x32C0 // | AirTime: wipe learned state and reboot
+#define CMD_AT_SETCLK  0x32E0 // | AirTime: manual UTC entry (tier-3 source)
 #endif
 #define CMD_ABOUT      0x3300 //-+
 
@@ -211,6 +212,21 @@ bool airtimeOwnsDial();
 // there is exactly one place that decides what the device says about itself.
 // Returns how many of `out` were filled.
 int airtimeAboutLines(const char *out[], int max);
+// Page two: the WWV chain, stage by stage — marker detector, 100 Hz code
+// pulses, frames seen/read/paired, last confirmed frame. The screen version
+// of the serial mkr[]/code[] lines, because what comes back from the field
+// is a photograph.
+int airtimeHfAboutLines(const char *out[], int max);
+// Manual UTC entry (Settings -> Set Clock). A field-editor list: rotating
+// adjusts the highlighted field, clicking advances, and the click on GO
+// applies the dialed HH:MM:00 as "now" — the operator presses it as their
+// watch rolls over. atClkClick() returns true when the panel should close.
+void atSetClkOpen();
+int atClkFieldCount();
+int atClkFieldIdx();
+const char *atClkFieldName(int i);
+void atClkTurn(int16_t enc);
+bool atClkClick();
 // The encoder, on the clock face: steps the digital-mode cycle instrument
 // through OFF and every mode. True if anything changed and the panel should
 // redraw. Never touches the tuner — see the note on atCycleOpt for what this
