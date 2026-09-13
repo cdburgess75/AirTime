@@ -1,0 +1,473 @@
+//
+// The AirTime screen — PLAN.md §5.
+//
+// This build is a clock appliance, not a receiver UI, and the screen should say
+// so. The stock layouts lead with the frequency readout, which in this build is
+// actively false: AirTime retunes the chip continuously and `currentFrequency`
+// never hears about it, so the dial shows whatever was there last. That is not
+// a cosmetic problem — a leftover "9999" from a probe build once sent the owner
+// hunting a jamming theory that did not exist, and the same reading later hid
+// the fact that the radio was quietly parked on an FM music station.
+//
+// So: the time is the headline, in the 48-pixel seven-segment font (TFT_eSPI
+// font 7, whose entire character set is "1234567890:-." — it exists to draw
+// clocks). Underneath it, the two things a time appliance must never hide:
+// how much it can be trusted, and what the radio is actually doing right now.
+//
+// ── ASCII only ──────────────────────────────────────────────────────────────
+// The core's display module formats for a terminal and uses "±" and "·". The
+// TFT fonts are ASCII, so those render as gaps — visible in the first photo
+// from the device as "250 ms  RDS  sync 26s ago". The strings here are built
+// separately, in ASCII, rather than reusing the serial ones.
+
+#ifdef AIRTIME
+
+#include "Common.h"
+#include "Themes.h"
+#include "Draw.h"
+#include "Menu.h"
+#include "Utils.h"
+
+// AirTimeScreen and airtimeScreen() live in Menu.h — the web status page
+// renders from the same struct, so the panel and the phone cannot disagree.
+
+// ── CW copy ─────────────────────────────────────────────────────────────────
+//
+// A different screen for a different job. The clock face answers "what time is
+// it"; this one answers "what is he sending", and the two share almost nothing
+// — so rather than bend the clock layout around a text pane, CW gets the panel.
+//
+// Three things, in the order they matter:
+//
+//   the text        as much as fits, newest at the bottom right, because the
+//                   operator is reading the end of it
+//   the tuning bar  the reason this is on screen at all. CW is tuned BY EAR to
+//                   a note, and the decoder only hears one 200 Hz-wide bin —
+//                   so "am I in the bin" is the question the panel must answer
+//                   while the operator's hand is on the knob.
+//   speed           measured, not set. Confirms it has locked onto the sender.
+//
+// The clock keeps running underneath and is shown small: it is still a clock,
+// it has simply stopped SERVING (WiFi is down — the audio tap and the WiFi
+// radio cannot both be live, PLAN.md §2). That trade is stated on screen
+// rather than left for the operator to discover from a laptop that stopped
+// syncing.
+static void drawLayoutAirTimeCw(void)
+{
+  AirTimeScreen s;
+  airtimeScreen(&s);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString("CW COPY", 8, 3, 2);
+
+  // The clock, small and out of the way, still honest about sync.
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(s.synced ? TH.text_muted : TH.text_warn);
+  spr.drawString(s.valid ? s.local : "--:--:--", 312, 3, 2);
+
+  // ── Tuning ────────────────────────────────────────────────────────────────
+  // A bar rather than a number: tuning is a peak-seeking action and a moving
+  // bar is read with peripheral vision while the eyes are on the dial.
+  const int pct = atCwLevelPct();
+  const int w = 180;
+  const int bx = 8, by = 22;
+  spr.drawRect(bx, by, w, 10, TH.menu_border);
+  if(pct > 0)
+    spr.fillRect(bx + 1, by + 1, (w - 2) * pct / 100, 8,
+                 atCwKeyDown() ? TH.smeter_bar : TH.text_muted);
+  // The threshold the decoder actually uses: 4x noise out of a 12x scale. Left
+  // of this mark nothing will be copied, however steady the bar looks.
+  spr.drawFastVLine(bx + (w - 2) / 3, by - 2, 14, TH.text_warn);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString("TUNE FOR PEAK", bx + w + 8, by - 2, 2);
+
+  const int wpm = atCwWpm();
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(TH.text);
+  if(wpm > 0)
+  {
+    char b[16];
+    snprintf(b, sizeof(b), "%d WPM", wpm);
+    spr.drawString(b, 312, by + 14, 2);
+  }
+  else
+  {
+    spr.setTextColor(TH.text_muted);
+    spr.drawString("listening", 312, by + 14, 2);
+  }
+
+  // ── The copy ──────────────────────────────────────────────────────────────
+  // Font 4 (26 px) is big enough to read at arm's length on a bench and fits
+  // about 17 characters across 320 px. Three lines of the tail, oldest at the
+  // top, so the newest text is always in the same place on the screen.
+  const char *text = atCwText();
+  const size_t len = strlen(text);
+  const size_t kCols = 17, kRows = 3;
+  const size_t shown = len > kCols * kRows ? kCols * kRows : len;
+  const char *from = text + (len - shown);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text);
+  char line[kCols + 1];
+  for(size_t r = 0 ; r < kRows ; r++)
+  {
+    const size_t off = r * kCols;
+    if(off >= shown) break;
+    size_t n = shown - off;
+    if(n > kCols) n = kCols;
+    memcpy(line, from + off, n);
+    line[n] = 0;
+    spr.drawString(line, 8, 52 + (int)r * 28, 4);
+  }
+
+  if(shown == 0)
+  {
+    spr.setTextColor(TH.text_muted);
+    spr.drawString("Tune a CW signal for the peak above.", 8, 52, 2);
+    spr.drawString("Copy appears here.", 8, 70, 2);
+  }
+
+  // The cost of being here, stated plainly. NTP is not answering.
+  spr.setTextDatum(BL_DATUM);
+  spr.setTextColor(TH.text_warn);
+  spr.drawString("NTP OFF - the tap and WiFi cannot share the chip", 8, 168, 2);
+
+  if(currentCmd != CMD_NONE)
+    drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+}
+
+// ── Waterfall ───────────────────────────────────────────────────────────────
+//
+// The audio passband, drawn: a spectrum line across 150–3300 Hz in 50 Hz bins,
+// and beneath it the last ~80 frames as history. This is the SSB passband, so
+// on 40 m every carrier, warble and voice in the channel is a stripe the
+// operator can steer onto by ear and eye together.
+//
+// Auto-gain, log scale: the tap's level depends on the DSP volume (Milestone
+// 0), so absolute power is meaningless here. A slow-rising floor and a
+// fast-rising peak track the scene, and each cell maps log-power between them
+// onto a 16-step palette. The palette runs black→blue→cyan→yellow→white in
+// RGB565, computed once — deliberately NOT theme colours: a waterfall's
+// grammar is its own, and the operator has seen a hundred of them.
+static void drawLayoutAirTimeWaterfall(void)
+{
+  static const int kBins = AT_SPECTRUM_BINS;
+  static const int kRows = 78;
+  static const int kCell = 4;              // 64 bins x 4 px = 256 px wide
+  static const int kX0 = (320 - kBins * kCell) / 2;
+
+  static uint8_t hist[kRows][kBins];       // palette indices, ring buffer
+  static int head = 0;                     // newest row
+  static uint32_t last_frame = 0;
+  static float log_floor = 0.0f, log_peak = 1.0f;
+  static bool seeded = false;
+
+  static uint16_t palette[16];
+  static bool palette_built = false;
+  if(!palette_built)
+  {
+    for(int i = 0 ; i < 16 ; i++)
+    {
+      // 0..5 black->blue, 6..10 blue->cyan, 11..13 cyan->yellow, 14..15 ->white
+      uint8_t r, g, b;
+      if(i <= 5)       { r = 0;            g = 0;            b = 51 * i;      }
+      else if(i <= 10) { r = 0;            g = 51 * (i - 5); b = 255;         }
+      else if(i <= 13) { r = 85 * (i - 10); g = 255;         b = 255 - 85 * (i - 10); }
+      else             { r = 255;          g = 255;          b = 170 * (i - 13); }
+      palette[i] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    }
+    palette_built = true;
+  }
+
+  // Pull the newest frame; only a NEW frame scrolls the history.
+  float frame[AT_SPECTRUM_BINS];
+  const uint32_t n = atSpectrumCopy(frame);
+  if(n != 0 && n != last_frame)
+  {
+    last_frame = n;
+
+    float lg[AT_SPECTRUM_BINS];
+    float fmin = 1e9f, fmax = -1e9f;
+    for(int i = 0 ; i < kBins ; i++)
+    {
+      const float pwr = frame[i] > 1e-12f ? frame[i] : 1e-12f;
+      lg[i] = log10f(pwr);
+      if(lg[i] < fmin) fmin = lg[i];
+      if(lg[i] > fmax) fmax = lg[i];
+    }
+    if(!seeded) { log_floor = fmin; log_peak = fmax; seeded = true; }
+    // Floor follows the band mood slowly; the peak grabs fast and lets go
+    // slowly, so a passing strong signal sets the scale rather than blinding
+    // the map for everything after it.
+    log_floor += 0.02f * (fmin - log_floor);
+    if(fmax > log_peak) log_peak += 0.5f  * (fmax - log_peak);
+    else                log_peak += 0.01f * (fmax - log_peak);
+    if(log_peak - log_floor < 0.5f) log_peak = log_floor + 0.5f;
+
+    head = (head + 1) % kRows;
+    for(int i = 0 ; i < kBins ; i++)
+    {
+      float v = (lg[i] - log_floor) / (log_peak - log_floor);
+      if(v < 0.0f) v = 0.0f;
+      if(v > 1.0f) v = 1.0f;
+      hist[head][i] = (uint8_t)(v * 15.0f + 0.5f);
+    }
+  }
+
+  AirTimeScreen sc;
+  airtimeScreen(&sc);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString("WATERFALL", 8, 3, 2);
+
+  // The one stock reading that matters while steering: where the dial is.
+  char fbuf[24];
+  if(currentMode == FM)
+    snprintf(fbuf, sizeof(fbuf), "%.1f MHz", currentFrequency / 100.0);
+  else
+    snprintf(fbuf, sizeof(fbuf), "%u kHz", currentFrequency);
+  spr.setTextDatum(TC_DATUM);
+  spr.setTextColor(TH.text);
+  spr.drawString(fbuf, 160, 3, 2);
+
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(sc.synced ? TH.text_muted : TH.text_warn);
+  spr.drawString(sc.valid ? sc.local : "--:--:--", 312, 3, 2);
+
+  // Spectrum: the newest frame as bars, 30 px tall.
+  const int spec_y = 22, spec_h = 30;
+  for(int i = 0 ; i < kBins ; i++)
+  {
+    const int level = hist[head][i];
+    const int h = 1 + (level * (spec_h - 1)) / 15;
+    const int x = kX0 + i * kCell;
+    spr.fillRect(x, spec_y + spec_h - h, kCell - 1, h, palette[level]);
+  }
+
+  // Frequency ruler between spectrum and history: 1, 2, 3 kHz above the bin
+  // that carries that audio frequency ((f - 150) / 50).
+  spr.setTextDatum(TC_DATUM);
+  spr.setTextColor(TH.text_muted);
+  for(int khz = 1 ; khz <= 3 ; khz++)
+  {
+    const int bin = (khz * 1000 - 150) / 50;
+    if(bin >= 0 && bin < kBins)
+    {
+      const int x = kX0 + bin * kCell + kCell / 2;
+      spr.drawFastVLine(x, spec_y + spec_h + 1, 3, TH.text_muted);
+      spr.drawNumber(khz, x, spec_y + spec_h + 5, 1);
+    }
+  }
+
+  // History, newest row directly under the ruler.
+  const int wf_y = spec_y + spec_h + 15;
+  for(int r = 0 ; r < kRows ; r++)
+  {
+    const uint8_t *row = hist[(head - r + kRows * 2) % kRows];
+    const int y = wf_y + r;
+    for(int i = 0 ; i < kBins ; i++)
+      spr.drawFastHLine(kX0 + i * kCell, y, kCell - 1, palette[row[i]]);
+  }
+
+  if(n == 0)
+  {
+    spr.setTextDatum(MC_DATUM);
+    spr.setTextColor(TH.text_muted);
+    spr.drawString("waiting for the tap...", 160, wf_y + kRows / 2, 2);
+  }
+
+  // The cost of being here, stated plainly — same honesty as CW copy.
+  spr.setTextDatum(BL_DATUM);
+  spr.setTextColor(TH.text_warn);
+  spr.drawString("NTP OFF while the waterfall is up", 8, 170, 1);
+
+  if(currentCmd != CMD_NONE)
+    drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+}
+
+void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
+{
+  if(airtimeSpectrumMode()) { drawLayoutAirTimeWaterfall(); return; }
+  if(airtimeCwMode()) { drawLayoutAirTimeCw(); return; }
+
+  // statusLine1/2 are the caller's override (menus, BLE, EiBi). When present
+  // they win: a transient message the operator asked for should not be buried
+  // under the clock.
+  const bool override_status = statusLine1 || statusLine2;
+
+  // A menu needs the left half of the panel, and the 48 px clock starts at
+  // x=32 — they were drawing straight through each other, sidebar over digits.
+  // While a menu is open the time steps aside: smaller, top right, still
+  // readable, out of the way. (Seen on the device: the Nets box landed on top
+  // of "5:47:14" and the zoom overlay ran off the right edge.)
+  const bool menu_open = (currentCmd != CMD_NONE);
+
+  AirTimeScreen s;
+  airtimeScreen(&s);
+
+  drawSaveIndicator(SAVE_OFFSET_X, SAVE_OFFSET_Y);
+  drawBleIndicator(BLE_OFFSET_X, BLE_OFFSET_Y);
+  const bool has_voltage = drawBattery(BATT_OFFSET_X, BATT_OFFSET_Y);
+  drawWiFiIndicator(has_voltage ? WIFI_OFFSET_X : BATT_OFFSET_X - 13, WIFI_OFFSET_Y);
+
+  // Wordmark. Sits in the gap between the S-meter (drawn from x=0) and the
+  // WiFi icon at x=237, which is where the stock layout puts the band name.
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString("AirTime", 150, 3, 2);
+
+  // ── The two clocks ────────────────────────────────────────────────────────
+  // LOCAL time is the headline, in font 7 — a 48-pixel seven-segment face whose
+  // whole character set is "1234567890:-.", i.e. a clock font. UTC sits under
+  // it in font 4 (26 px) and a different colour.
+  //
+  // The radio keeps and serves UTC and always will; this is purely about who
+  // is reading the screen. Someone glancing at a clock on the bench wants the
+  // time on their wrist. UTC still has to be present and unambiguous — it is
+  // what NTP carries and what a log entry needs — but it does not have to
+  // shout, and the "Z" makes it unmistakable at a glance.
+  //
+  // Both are right-aligned to the same edge so the two labels stack in a tidy
+  // column. Amber instead of white while unsynchronised — §5 wants the device
+  // to LOOK wrong when it is coasting, not to explain itself in small print.
+  // Yellow while the time rests on one source nothing has confirmed — the
+  // owner's rule, and the radio once sat on a station five minutes slow.
+  const uint16_t clock_colour = !s.synced ? TH.text_warn
+                             : s.confirmed ? TH.text : TFT_YELLOW;
+
+  if(menu_open)
+  {
+    // Compact: time and zone on the right, clear of the side bar entirely.
+    spr.setTextDatum(TR_DATUM);
+    spr.setTextColor(clock_colour);
+    spr.drawString(s.valid ? s.local : s.clock, 312, 22, 4);
+    spr.setTextColor(TH.text_muted);
+    spr.drawString(s.valid ? s.zone : "UTC", 312, 48, 2);
+    spr.setTextColor(TH.smeter_bar);
+    spr.drawString(s.clock, 312, 66, 2);
+
+    // Whatever the open menu wants to say in full, in the space the side bar
+    // leaves free. The nets list shows names only; this is where the selected
+    // one gets its frequency and its timing.
+    if(currentCmd == CMD_AT_NETS)
+    {
+      spr.setTextDatum(BR_DATUM);
+      spr.setTextColor(TH.text);
+      spr.drawString(atNetDetail(), 312, 160, 2);
+    }
+    drawSMeter(getStrength(rssi), METER_OFFSET_X, METER_OFFSET_Y);
+    drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+    return;
+  }
+
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(clock_colour);
+  spr.drawString(s.valid ? s.local : s.clock, 248, 20, 7);
+
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString(s.valid ? s.zone : "UTC", 254, 50, 2);
+
+  if(s.valid)
+  {
+    // The theme's meter green: every theme keeps it a legible accent, and it
+    // reads as clearly "the other number" at a glance.
+    spr.setTextDatum(TR_DATUM);
+    spr.setTextColor(TH.smeter_bar);
+    spr.drawString(s.clock, 248, 74, 4);
+
+    spr.setTextDatum(TL_DATUM);
+    spr.drawString("UTC", 254, 80, 2);
+  }
+
+  // ── What it can be trusted to, and what the radio is doing ────────────────
+  if(override_status)
+  {
+    spr.setTextDatum(TC_DATUM);
+    spr.setTextColor(TH.rds_text);
+    if(statusLine1) spr.drawString(statusLine1, 160, 108, 2);
+    if(statusLine2) spr.drawString(statusLine2, 160, 125, 2);
+  }
+  else
+  {
+    spr.setTextDatum(TC_DATUM);
+    spr.setTextColor(!(s.valid && s.synced) ? TH.text_warn
+                     : s.confirmed ? TH.text_muted : TFT_YELLOW);
+    spr.drawString(s.status, 160, 108, 2);
+
+    // The honest dial. Without this line the screen cannot explain why the
+    // radio is playing music (it is on an FM station, harvesting RDS clock
+    // time — 95% of every hour) or why the audio just became a beep.
+    spr.setTextDatum(TL_DATUM);
+    spr.setTextColor(TH.text_muted);
+    spr.drawString(s.tuned, 8, 132, 2);
+
+    spr.setTextDatum(TR_DATUM);
+    spr.drawString(s.clients, 312, 132, 2);
+
+    // What is on the air right now — the line only an accurate clock can
+    // write. Shown in the accent colour so it reads as news, not status.
+    // The cycle instrument owns this row when it is on. The panel is 170 px
+    // and there is no eighteenth row to be had; an operator who turned this on
+    // has said which one they want, and one spin back to OFF returns the other.
+    if(s.cycle && s.cycle[0])
+    {
+      // Bar first, text over it. Unfilled ground so the slot's full width is
+      // legible even at zero, then the elapsed portion in the parity colour:
+      // FT8 alternates transmit and receive on that parity, so the colour
+      // flipping every slot IS the information, not decoration.
+      //
+      // Amber whenever the clock is not synchronised. The boundary is only as
+      // good as the time behind it, and an instrument that looks equally
+      // confident when it is guessing is worse than no instrument.
+      const int y = 150, h = 18;
+      int w = (int)(s.cycle_fraction * 320.0f + 0.5f);
+      if(w < 0) w = 0; else if(w > 320) w = 320;
+
+      spr.fillRect(0, y, 320, h, TH.menu_bg);
+      spr.fillRect(0, y, w, h, !s.synced      ? TH.text_warn
+                             : s.cycle_odd    ? TH.rds_text
+                                              : TH.smeter_bar);
+
+      spr.setTextColor(TH.text);
+      spr.setTextDatum(TL_DATUM);
+      spr.drawString(s.cycle, 4, y + 1, 2);
+      spr.setTextDatum(TR_DATUM);
+      spr.drawString(s.cycle_t, 316, y + 1, 2);
+    }
+    else if(s.net[0])
+    {
+      spr.setTextDatum(TC_DATUM);
+      spr.setTextColor(TH.smeter_bar);
+      spr.drawString(s.net, 160, 150, 2);
+    }
+    else if(s.diag && s.diag[0])
+    {
+      spr.setTextDatum(TC_DATUM);
+      spr.setTextColor(TH.text_warn);
+      spr.drawString(s.diag, 160, 150, 2);
+    }
+  }
+
+  // Signal strength stays: it is the one stock reading still true here, and it
+  // tells you at a glance whether the station being harvested is receivable.
+  drawSMeter(getStrength(rssi), METER_OFFSET_X, METER_OFFSET_Y);
+
+  // The stock menu, drawn LAST so it sits over the clock.
+  //
+  // Every ats-mini control still works in this build — press the encoder and
+  // turn for volume, bandwidth, AGC, theme, UTC offset. Dropping the side bar
+  // when this layout replaced the stock one left those controls functional but
+  // invisible, which is worse than removing them: the owner asked how to
+  // change the volume while it was in fact already changing under his hand.
+  // The bar appears only while a command is active, so the clock has the
+  // screen to itself the rest of the time.
+  if(currentCmd != CMD_NONE)
+    drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+}
+
+#endif  // AIRTIME

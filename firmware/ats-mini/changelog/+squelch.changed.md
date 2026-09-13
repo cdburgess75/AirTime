@@ -1,0 +1,1 @@
+Make possible using either RSSI or SNR for Squelch. The setting is saved separately for each mode (FM, LSB, USB, AM).

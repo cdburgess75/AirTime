@@ -1,0 +1,480 @@
+#pragma once
+//
+// AirTimeApp — the wiring that turns the core modules into a device.
+//
+// It owns the arbiter, scheduler, RDS voter and WWV marker detector, and drives
+// them from a single polled loop against the hardware seam (hal.h). Because the
+// seam is injected, the entire device runs on the host against fakes — see
+// test/fakes.h and test/test_app.cpp, where a simulated radio with a drifting
+// crystal disciplines itself and answers NTP correctly.
+//
+// The firmware's main loop is expected to be roughly:
+//
+//     app.begin();
+//     for (;;) { app.loop(); /* plus: render display, service UDP */ }
+
+#include <cstddef>
+#include <cstdint>
+
+#include "arbiter.h"
+#include "display.h"
+#include "fm_survey.h"
+#include "hal.h"
+#include "rds_ct.h"
+#include "scheduler.h"
+#include "sntp.h"
+#include "source_table.h"
+#include "learned_state.h"
+#include "morse.h"
+#include "station_bias.h"
+#include "station_vote.h"
+#include "types.h"
+#include "wwv_marker.h"
+#include "wwv_timecode.h"
+
+namespace airtime {
+
+// Pulse-measurement gates for the 100 Hz timecode subcarrier — the same
+// detector CLASS as the minute marker, pointed at different physics. The
+// duration gate is not a filter here but the measurement itself: every burst
+// from the shortest zero (170 ms) to the longest marker (770 ms) must come
+// back with its width, so the gate opens to [80, 900] ms and classifyPulse
+// does the discriminating downstream. Thresholds are set for a subcarrier at
+// roughly a quarter of the modulation the tick tones get, through a 20 Hz bin
+// whose noise floor is correspondingly lower than the marker bin's measured
+// 7.7e-5 — PROVISIONAL until the first sub[] serial report from the field,
+// exactly as min_power itself was until Milestone 0 measured it.
+inline WwvMarkerConfig defaultSubcarrierPulseConfig() {
+  WwvMarkerConfig c;
+  c.on_ratio = 4.0f;
+  c.off_ratio = 2.0f;
+  c.min_power = 5.0e-5f;
+  c.gate_min_us = 80000;
+  c.gate_max_us = 900000;
+  return c;
+}
+
+struct AppConfig {
+  ArbiterConfig arbiter;
+  SchedulerConfig scheduler;
+  WwvMarkerConfig marker;
+
+  // Fixed latency of the receive chain (SI4732 DSP group delay + amp + ADC).
+  // PLAN.md §4: measured once on hardware; the one number host tests cannot know.
+  int64_t wwv_calibration_us = 0;
+
+  int64_t wwv_uncertainty_us = 30000;    // ±30 ms — marker edge detection
+  int64_t rds_uncertainty_us = 250000;   // ±250 ms — RDS CT is coarse
+  int64_t rds_vote_tolerance_us = 400000;
+  // A station's report must outlive a full scan cycle, or stations drop out of
+  // the voter before the rotation returns to them and voting degrades to one
+  // source. Keep this > station_count * fm_dwell_us.
+  int64_t rds_report_ttl_us = 15LL * 60 * 1000000;
+  // How often RDS may steer the clock. Weighting alone does not settle the
+  // contest between sources, because influence is gain x RATE: RDS at ~48
+  // fixes/hour still out-pulls WWV at 1/hour even when each RDS fix is scaled to
+  // a few percent. And RDS error is systematic (a given station is consistently
+  // early or late), so repeated samples do not average it away the way the
+  // Kalman blend assumes.
+  //
+  // So once the clock is already better than RDS's own accuracy, RDS is
+  // throttled hard. Its §4 job is date and coarse time, not phase — beyond that
+  // point more RDS contributes only its bias.
+  int64_t rds_submit_interval_us = 30LL * 1000000;
+  int64_t rds_submit_interval_disciplined_us = 10LL * 60 * 1000000;
+  int64_t rds_disciplined_below_us = 150000;  // "better than RDS can tell us"
+
+  // Per-station scan dwell. MUST exceed the RDS clock-time repeat interval —
+  // group 4A is transmitted about once a MINUTE, so a shorter dwell only
+  // sometimes catches one. Worse, a dwell that divides evenly into 60 s tunes
+  // the *same* station at every minute boundary, so only one station is ever
+  // heard and the multi-station voting §4 calls mandatory silently never
+  // happens. (Observed with a 20 s dwell: the voter held exactly one report
+  // forever, and the clock locked onto a station that was 7 s wrong while
+  // reporting itself synced.) 75 s clears the minute with margin and is not a
+  // divisor of it.
+  int64_t fm_dwell_us = 75LL * 1000000;
+  // A Red station is passed over in the rotation, but tried again this often:
+  // transmitters get fixed and propagation changes.
+  int64_t red_recheck_us = 6LL * 60 * 60 * 1000000;
+  // A hand-set clock is good to seconds: a station further out than this from
+  // it is wrong, even though the hand-set clock cannot confirm anything.
+  int64_t manual_wrong_us = 30LL * 1000000;
+
+  // Survey the dial automatically when there is nothing else to go on. A
+  // radio with no stations is not keeping time and has nothing to protect.
+  bool auto_survey = true;
+  // ...and when the list it has goes quiet. A list is a guess until it
+  // delivers: if no station on it has sent clock time for this long, survey
+  // the dial for ones that do. At most once per retry interval — a survey owns
+  // the dial for ~15 min, and a quiet night is not a reason to hunt hourly.
+  int64_t silent_list_survey_after_us = 10LL * 60 * 1000000;
+  int64_t survey_retry_us = 6LL * 60 * 60 * 1000000;
+  FmSurveyConfig survey_cfg;
+
+  // WWV self-corroboration. A lone marker implying a ≥500 ms correction is
+  // rightly rejected (§4 rule 3: one source cannot step the clock) — but WWV
+  // transmits an INDEPENDENT marker every minute. Two markers about a minute
+  // apart implying the SAME correction are two independent measurements:
+  // random audio that survives the 700–900 ms duration gate lands anywhere in
+  // the ±30 s phase window, so agreeing twice within ±120 ms is a ~0.4%
+  // coincidence. Such a pair is submitted with independent_support = 2, which
+  // the arbiter's rule-3 gate already accepts — no arbiter change. dt spans
+  // one to three minutes so a missed marker (band step mid-window, hour tone
+  // at 1500 Hz) doesn't break the pair; it does NOT reach across listen
+  // windows, where RDS may have moved the clock in between.
+  int64_t wwv_pair_min_dt_us = 50LL * 1000000;
+  int64_t wwv_pair_max_dt_us = 190LL * 1000000;
+  int64_t wwv_pair_agree_us = 120000;
+
+  // Learn each station's constant lateness only while the clock is better than
+  // RDS itself could have made it — in practice, only just after WWV has
+  // spoken. Learning from an RDS-disciplined clock would measure a station
+  // against its own bias and pronounce it perfect.
+  //
+  // BOTH gates are needed, and the window is the load-bearing one. Uncertainty
+  // alone does not close: after a WWV fix it starts near 30 ms and grows at the
+  // 0.5 ppm floor, so it would take ~39 hours to reach 100 ms — the table would
+  // keep re-learning against a clock that had drifted all day, the bias would
+  // silently absorb that drift, and RDS would become a mirror of the clock
+  // instead of an independent check on it. Measured when this was first built
+  // with the uncertainty gate alone: the learned rate ran away to -47 ppm and
+  // the clock lost its lock.
+  int64_t station_bias_learn_below_us = 100000;
+  int64_t station_bias_learn_window_us = 10LL * 60 * 1000000;  // after a WWV fix
+  StationBiasConfig station_bias;
+
+  int64_t drift_save_interval_us = 60LL * 60 * 1000000;
+  int64_t restore_uncertainty_us = 3600LL * 1000000; // warm boot is a memory
+  int64_t ntp_client_window_us = 5LL * 60 * 1000000;
+  int64_t source_recent_us = 2LL * 3600 * 1000000;   // for the "RDS+WWV" display
+
+  // What the shared audio detector listens for, per duty. WWV: the 1000 Hz
+  // minute marker in 20 ms blocks (edge quantisation vs selectivity balance).
+  // CW: a ~700 Hz beat note — where most operators park a CW note — in 5 ms
+  // blocks, because a 40 WPM dit is 30 ms long and 20 ms blocks cap usable
+  // speed near 15 WPM (morse.h). setMode() pushes these into the sampler at
+  // each transition; the numbers live here so the fakes see the same ones the
+  // device uses.
+  real wwv_tone_hz = 1000.0f;
+  int64_t wwv_block_us = 20000;
+  real cw_tone_hz = 700.0f;
+  int64_t cw_block_us = 5000;
+
+  // ── The 100 Hz timecode channel (date from HF alone) ──────────────────────
+  // The subcarrier bin runs beside the marker bin during every listen window.
+  // 50 ms blocks make a 20 Hz bin: narrow enough that 60 Hz mains hum and its
+  // 120 Hz harmonic — the two neighbours that could actually reach a 100 Hz
+  // detector — each sit a full bin away, while a 170 ms zero still spans three
+  // blocks of measurement. sub_hz <= 0 disables the whole chain.
+  real wwv_sub_hz = 100.0f;
+  int64_t wwv_sub_block_us = 50000;
+  WwvMarkerConfig subcarrier_pulse = defaultSubcarrierPulseConfig();
+  WwvTimecodeConfig timecode;
+  // Resolves the code's two-digit year. The firmware passes its build year;
+  // wrong only if the device outlives its last flash by fifty years.
+  int century_hint_year = 2026;
+  // What a confirmed frame is worth. The frame-start edge is measured through
+  // 50 ms blocks and a threshold crossing, and the code pulse itself begins
+  // 30 ms after its second (NIST's published offset — researched, not yet
+  // measured off the air, like the bit map). ±250 ms swallows all of that
+  // with margin. Identity is this fix's job; the 1000 Hz marker that follows
+  // it in the same window takes phase from there to ±30 ms.
+  int64_t wwv_timecode_uncertainty_us = 250000;
+  int64_t wwv_timecode_lead_us = 30000;
+};
+
+// Who owns the radio right now. See AirTimeApp::setMode for what each means.
+enum class OpMode : uint8_t { Clock, Radio, Cw, Spectrum };
+
+// What became of the last WWV marker that yielded a phase measurement — the
+// piece of the story the detector's own diag cannot tell (it sees tones, not
+// the arbiter's verdicts). Drives the serial/§5 status line.
+struct WwvFixDiag {
+  bool have = false;          // false until a marker survives phase correction
+  int64_t offset_us = 0;      // implied clock correction at the marker edge
+  bool corroborated = false;  // submitted as a two-marker pair (support = 2)
+  bool accepted = false;      // arbiter action != Rejected
+};
+
+// The same for the RDS side. Without it the arbiter's whole RDS conversation is
+// invisible from a serial log: the device that sat an hour wrong for a session
+// was, the entire time, being told the correct time by three stations and
+// accepting it — the only missing number was how big the correction was, and
+// whether it ever actually landed.
+struct RdsFixDiag {
+  bool have = false;
+  int64_t offset_us = 0;   // consensus clock error the voter reported
+  int stations = 0;        // agreeing stations behind it (= independent support)
+  bool accepted = false;
+};
+
+// The timecode chain's own story, stage by stage, because each boundary is a
+// different failure with a different fix: pulses but no frames means the
+// hunt never locks (edge timing, splinters); frames seen but none decoded
+// means structure damage (fading, a wrong bit map); decoded but never
+// confirmed means the minutes do not chain (alignment slipping between
+// frames). The counters mirror the decoder's own; the fix fields tell what
+// the arbiter made of the result.
+struct WwvTimecodeDiag {
+  uint32_t pulses = 0;       // completed bursts handed to the decoder
+  uint32_t splinters = 0;    // bursts <700 ms after the previous — dropped
+  uint32_t gap_seconds = 0;  // wholly-missed seconds fed as unreadable
+  bool have = false;         // a confirmed frame reached the arbiter
+  int64_t offset_us = 0;     // implied correction of the last submitted fix
+  bool accepted = false;
+};
+
+struct AppDeps {
+  IMonotonicClock* clock = nullptr;
+  IRdsSource* rds = nullptr;
+  IWwvSampler* wwv = nullptr;
+  IWiFiControl* wifi = nullptr;
+  ITimeStore* store = nullptr;  // optional
+};
+
+class AirTimeApp {
+ public:
+  static constexpr std::size_t kMaxStations = 8;
+
+  AirTimeApp(const AppDeps& deps, const AppConfig& cfg = AppConfig{});
+
+  // FM frequencies to rotate through while hunting RDS clock-time. This is a
+  // first-boot seed: begin() replaces it with a list the radio measured and
+  // saved, if there is one, and a seed is never saved back as measured.
+  void setFmStations(const int32_t* khz, std::size_t n);
+  // The list actually in use — the seed or the measured list that replaced it.
+  std::size_t stationCount() const { return station_count_; }
+  int32_t station(std::size_t i) const {
+    return i < station_count_ ? stations_[i] : 0;
+  }
+
+  // Operator-set time — tier 3 in PLAN.md §4, described there as the "always
+  // available fallback" and until now not available at all: the arbiter has
+  // always had Source::Manual and nothing could ever produce one.
+  //
+  // It matters more than a fallback usually would, because of the deadlock it
+  // breaks. WWV's minute marker carries phase but not identity, so it cannot
+  // start a clock, only refine one — which makes every cold start depend on
+  // RDS, which depends on a broadcast FM station being receivable. An operator
+  // with a wristwatch can supply the missing identity in five seconds, and WWV
+  // takes it from ±5 s to ±30 ms on the next marker.
+  //
+  // independent_support = 2 is not a fiction. Rule 3 requires two independent
+  // sources OR explicit operator confirmation for a correction over 500 ms, and
+  // a human deliberately setting the time IS that confirmation — this is the
+  // encoding of it, not a way around it.
+  void setManualUtc(int64_t utc_us);
+
+  // WWV band rotation, first entry tried first (default 5/10/15 MHz). A warm
+  // start like the FM list: order it by what actually works at the QTH — the
+  // learned per-band preference takes over as soon as any band delivers.
+  // Call before begin().
+  void setWwvBands(const int32_t* khz, std::size_t n) { sched_.setBands(khz, n); }
+
+  void begin();
+  void loop();
+
+  // Survey the FM dial for stations that carry usable clock time, then adopt
+  // and persist the result. Deliberately explicit: a device already keeping
+  // time must never be dragged off to go hunting. Started automatically only
+  // when there is nothing to fall back on — no supplied list and nothing
+  // stored. Timekeeping continues throughout; the survey only owns the dial.
+  // ── Modes ─────────────────────────────────────────────────────────────────
+  // One enum, one transition function, because the modes were once two booleans
+  // set from the firmware in a careful order — with a comment on the ordering
+  // that read "load-bearing, not tidiness", which is a bug report filed in
+  // advance. All sequencing now lives in setMode(), where the fakes test it.
+  //
+  // Clock — what the device IS. AirTime owns the dial and WiFi.
+  // Radio — the dial belongs to the human. No retuning, no WWV windows; WiFi
+  //         stays UP, so NTP serves *better* here — with no ADC sampling there
+  //         is no §2 conflict to schedule around. The clock coasts on its
+  //         learned drift: an hour costs single-digit milliseconds, and the
+  //         uncertainty reported to NTP grows to match. It does not stop being
+  //         right; it stops being re-checked, and says so.
+  // Cw    — Radio, plus the audio tap. Same tap as WWV, same silicon rule
+  //         (PLAN.md §2): the access point is DOWN and NTP does not answer for
+  //         as long as the operator stays. Not worked around — stated, on the
+  //         screen, in the mode that causes it. Entering repoints the shared
+  //         detector at the CW note; leaving repoints it at WWV and flushes the
+  //         half-assembled character so the last letter of a callsign is not
+  //         eaten by the mode change.
+  // Spectrum — Radio, plus the audio tap as a WATERFALL. The same §2 trade as
+  //         Cw, accepted by the operator for the same reason: seeing the
+  //         passband while tuning is worth more than serving NTP for the
+  //         duration. The core only sequences ownership (tap running, WiFi
+  //         down, dial untouched); what is done with the samples — the
+  //         Goertzel bank, the history, the drawing — is the firmware's
+  //         business entirely, which is why this mode has no poll function.
+  //
+  // Leaving for Clock is the direction with teeth: for however long the
+  // operator had the dial, every cached belief about where the chip points has
+  // been going stale behind our back. setMode(Clock) forgets them all and
+  // retunes. Never persisted: every power-on comes up as a clock (see begin()).
+  void setMode(OpMode m);
+  OpMode mode() const { return mode_; }
+  bool radioMode() const { return mode_ == OpMode::Radio; }
+  bool cwMode() const { return mode_ == OpMode::Cw; }
+
+  // What has been decoded, oldest first, as a NUL-terminated string.
+  const MorseTextBuffer& cwText() const { return cw_text_; }
+  MorseStatus cwStatus() const { return cw_.status(); }
+  // Tone power in the most recent block against the decoder's noise floor —
+  // the number an operator tunes for a peak on. 0 when nothing is arriving.
+  real cwLevel() const { return cw_level_; }
+  // Tone power against the decoder's own tracked noise floor. This is the
+  // number an operator tunes for a peak on, and it is more use than the raw
+  // power because it is already scaled by how noisy the band is. The decoder
+  // calls the key down above 4x, so anything holding above that is copy.
+  real cwSnr() const;
+  void cwClear() { cw_text_.clear(); }
+
+  void startSurvey();
+  bool surveying() const { return survey_.phase() != SurveyPhase::Idle &&
+                                  survey_.phase() != SurveyPhase::Done; }
+  const FmSurvey& survey() const { return survey_; }
+
+  // Answer an NTP request. Returns false if it is not a valid client request.
+  bool handleNtpRequest(const uint8_t* req, std::size_t len, uint32_t client_id,
+                        uint8_t* resp48);
+
+  // Operator actions (§5).
+  void operatorListenNow() { sched_.requestListenNow(); }
+  void operatorServeNow() { sched_.requestServeNow(); }
+  void operatorConfirmStep() { arbiter_.setOperatorConfirm(true); }
+  void operatorSetTime(int64_t utc_us);
+
+  DisplayState displayState() const;
+  int64_t utcNow() const;
+
+  const Arbiter& arbiter() const { return arbiter_; }
+  const Scheduler& scheduler() const { return sched_; }
+  const Directive& directive() const { return directive_; }
+  const WwvMarkerDetector& wwvMarker() const { return marker_; }
+  const WwvMarkerDetector& wwvPulse() const { return pulse_; }
+  const WwvTimecodeDecoder& wwvTimecode() const { return timecode_; }
+  const WwvFixDiag& wwvFixDiag() const { return wwv_diag_; }
+  const RdsFixDiag& rdsFixDiag() const { return rds_diag_; }
+  const WwvTimecodeDiag& wwvTimecodeDiag() const { return tc_diag_; }
+  // What WWV has taught us about each station (§4: sources correct each other).
+  const StationBiasTable& stationBias() const { return bias_; }
+  // Every source tried, rated Green / Yellow / Red (source_table.h).
+  const SourceTable& sources() const { return sources_; }
+  // RDS groups of one type heard since the dial last moved. 4A is clock time:
+  // thousands of 0A/2A with no 4A is a station that does not send it.
+  uint32_t rdsGroupsOfType(int type, bool version_b) const {
+    return (type >= 0 && type < 16) ? group_types_[(type << 1) | (version_b ? 1 : 0)] : 0;
+  }
+
+ private:
+  // The scheduler's directive, adjusted for what only the app knows. Today
+  // that is one rule: no WWV listening until a real source has landed. WWV
+  // markers are ±30 s ambiguous — pollWwv discards them unseeded — and on the
+  // real single-tuner radio a pre-seed listen window also starves the RDS
+  // acquisition that CAN seed. A restored warm-boot time does NOT lift the
+  // rule: it can be hours stale, and a marker cannot tell you which minute
+  // you are in. See the implementation for what that cost.
+  Directive effectiveDirective(Directive d) const;
+
+  // Rate a source that just delivered a time, and confirm the source the clock
+  // stands on if this one — a different source — agrees with it.
+  void noteFmSourceTime(SourceRow* row, uint16_t pi, int64_t err_us, int64_t now);
+  void noteWwvSourceTime(int64_t err_us);
+  // Green first, then Yellow, then untried, then Red: the power-on order.
+  void orderStationsByRating();
+  void applyDirective(const Directive& d);
+  void pollRds(int64_t now);
+  void pollSurvey(int64_t now);
+  void adoptSurveyResult();
+  void pollWwv(int64_t now);
+  void pollWwvTimecode(int64_t now);
+  void resetTimecodeChain();
+  void pollCw(int64_t now);
+  // EVERY retune of the FM side goes through here, because the radio has ONE
+  // tuner and `tuned_wwv_khz_` is a claim about it: any move of the dial that
+  // does not go through the WWV path leaves that claim stale, and a stale
+  // claim makes applyDirective skip the retune into the next listen window —
+  // three minutes spent sampling FM program audio while the log says 15000.
+  void tuneRds(int32_t khz);
+  void tuneFmStation(int64_t now);   // current station + dwell restart
+  void submitRdsVote(int64_t now);
+  void persist(int64_t now, bool force);
+  void noteAccepted(Source s, int64_t now);
+  uint8_t recentSourceMask(int64_t now) const;
+
+  AppDeps deps_;
+  AppConfig cfg_;
+
+  Arbiter arbiter_;
+  Scheduler sched_;
+  StationVoter voter_;
+  StationBiasTable bias_;
+  FmSurvey survey_;
+  WwvMarkerDetector marker_;
+  WwvMarkerDetector pulse_;      // 100 Hz burst widths (the timecode symbols)
+  WwvTimecodeDecoder timecode_;
+  ClientCounter clients_;
+
+  Directive directive_;
+
+  int32_t stations_[kMaxStations] = {};
+  std::size_t station_count_ = 0;
+  std::size_t station_idx_ = 0;
+  // True once the list came from a survey or a saved measurement. A seed from
+  // setFmStations() alone is never written back to the store.
+  bool stations_measured_ = false;
+
+  // What the clock currently stands on. A source that agrees with it CONFIRMS
+  // it only if it is a different source; a station repeating itself does not.
+  enum class Anchor : uint8_t { None, Manual, Fm, Wwv, Multi };
+  SourceTable sources_;
+  Anchor anchor_ = Anchor::None;
+  uint16_t anchor_pi_ = 0;
+  int32_t anchor_wwv_khz_ = 0;
+  bool dwell_heard_ct_ = false;
+  int64_t red_tried_[kMaxStations] = {};
+  uint32_t group_types_[32] = {};
+  int64_t fm_dwell_start_ = 0;
+
+  int32_t tuned_wwv_khz_ = 0;
+  // The previous minute's rejected marker, waiting for this minute's to agree
+  // with it (see AppConfig::wwv_pair_*). Cleared on acceptance: the clock
+  // moved, so the stored offset no longer describes it.
+  bool have_prev_wwv_ = false;
+  int64_t prev_wwv_mono_ = 0;
+  int64_t prev_wwv_offset_us_ = 0;
+  // When WWV last actually moved the clock — the only moments at which a
+  // station's disagreement is a measurement of the STATION rather than of our
+  // own accumulated drift. See station_bias_learn_window_us.
+  bool have_wwv_accept_ = false;
+  int64_t last_wwv_accept_mono_ = 0;
+  WwvFixDiag wwv_diag_;
+  RdsFixDiag rds_diag_;
+  WwvTimecodeDiag tc_diag_;
+  // Leading edge of the last second's pulse — the cadence reference that
+  // finds splinters (too soon) and holes (too late) in the symbol stream.
+  int64_t tc_last_edge_us_ = 0;
+  uint32_t tc_frames_decoded_seen_ = 0;  // for the band-productivity signal
+  // Set when the bias table or band stats move; persist() writes only then.
+  bool learned_dirty_ = false;
+  bool have_new_ct_ = false;
+  int64_t last_rds_submit_ = 0;
+  int64_t last_ct_mono_ = 0;       // last RDS clock time from ANY station
+  bool survey_started_ = false;    // this power-on
+  int64_t last_survey_start_ = 0;
+  int64_t last_persist_ = 0;
+
+  OpMode mode_ = OpMode::Clock;
+  MorseDecoder cw_;
+  MorseTextBuffer cw_text_;
+  real cw_level_ = 0.0f;
+  bool ever_synced_ = false;
+  int64_t last_sync_mono_ = 0;
+  int64_t last_sync_utc_ = 0;
+  Source last_source_ = Source::None;
+  int64_t source_seen_[4] = {0, 0, 0, 0};  // indexed by Source
+  bool source_ever_[4] = {false, false, false, false};
+};
+
+}  // namespace airtime
