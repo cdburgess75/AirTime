@@ -26,7 +26,7 @@ void StationVoter::prune(int64_t cutoff_mono_us) {
   count_ = w;
 }
 
-VoteResult StationVoter::vote(int64_t tolerance_us) const {
+VoteResult StationVoter::vote(int64_t tolerance_us, bool clock_is_sourced) const {
   VoteResult vr{false, 0, 0, static_cast<int>(count_)};
   if (count_ == 0) return vr;
 
@@ -44,7 +44,9 @@ VoteResult StationVoter::vote(int64_t tolerance_us) const {
     for (std::size_t j = 0; j < count_; ++j) {
       if (iabs64(off[j] - off[i]) <= tolerance_us) ++n;
     }
-    if (n > best_n) {
+    const bool closer = clock_is_sourced && n == best_n &&
+                        iabs64(off[i]) < iabs64(off[best_center]);
+    if (n > best_n || closer) {
       best_n = n;
       best_center = i;
     }
@@ -70,6 +72,7 @@ VoteResult StationVoter::vote(int64_t tolerance_us) const {
 
   vr.offset_us = median;
   vr.agreeing_stations = best_n;
+  vr.center_pi = reports_[best_center].pi;
   vr.has_consensus = best_n >= 2;
   return vr;
 }

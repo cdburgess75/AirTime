@@ -293,6 +293,7 @@ static const MenuItem atSettingsMenu[] =
   {"Time Zone",   CMD_AT_ZONE},
   {"WWV Band",    CMD_AT_BAND},
   {"HF Listen",   CMD_AT_HF},
+  {"Sources",     CMD_AT_SOURCES},
   {"Set Clock",   CMD_AT_SETCLK},
   {"Reset Learn", CMD_AT_RESET},
   {"About",       CMD_ABOUT},
@@ -1117,6 +1118,11 @@ static void atActivate(uint16_t cmd)
       currentCmd = CMD_AT_HF;
       break;
 
+    case CMD_AT_SOURCES:
+      atSetSrcIdx(0);            // best-rated first is not promised; start at the top
+      currentCmd = CMD_AT_SOURCES;
+      break;
+
     case CMD_AT_SETCLK:
       atSetClkOpen();            // prefill from the clock, or the build date
       currentCmd = CMD_AT_SETCLK;
@@ -1199,6 +1205,7 @@ static void doAtBand(int16_t enc) { atSetBandIdx(wrap_range(atBandIdx(), enc, 0,
 static void doAtHf(int16_t enc)   { atSetHfSel(wrap_range(atHfSelIdx(), enc, 0, atHfCount() - 1)); }
 static void doAtMode(int16_t enc) { atSetModeSel(wrap_range(atModeSelIdx(), enc, 0, atModeCount() - 1)); }
 static void doAtNets(int16_t enc) { atSetNetIdx(wrap_range(atNetIdx(), enc, 0, atNetCount() - 1)); }
+static void doAtSources(int16_t enc) { if(atSrcCount() > 0) atSetSrcIdx(wrap_range(atSrcIdx(), enc, 0, atSrcCount() - 1)); }
 
 // Nets is the one AirTime list where scrolling is not the whole interaction.
 // The others are settings -- turning the encoder IS the change -- but a net is
@@ -1292,6 +1299,7 @@ bool doSideBar(uint16_t cmd, int16_t enc, int16_t enca)
     case CMD_AT_HF:      doAtHf(scrollDirection * enc);break;
     case CMD_AT_MODE:    doAtMode(scrollDirection * enc);break;
     case CMD_AT_NETS:    doAtNets(scrollDirection * enc);break;
+    case CMD_AT_SOURCES: doAtSources(scrollDirection * enc);break;
     // A value knob, not a list scroll: rotation edits the highlighted field
     // (year, month, ... minute), so scrollDirection does not apply.
     case CMD_AT_SETCLK:  atClkTurn(enc);break;
@@ -1313,6 +1321,7 @@ bool clickHandler(uint16_t cmd, bool shortPress)
     case CMD_SETTINGS: clickSettings(settingsIdx, shortPress);break;
 #ifdef AIRTIME
     case CMD_AT_NETS:  clickAtNets(atNetIdx(), shortPress);break;
+    case CMD_AT_SOURCES: currentCmd = CMD_NONE; break;   // a list to read, not to pick from
     case CMD_AT_MODE:  atModeCommit(); currentCmd = CMD_NONE; break;
     case CMD_AT_HF:    atHfCommit();   currentCmd = CMD_NONE; break;
     // Advances the field cursor; the click on GO is the time-set act itself
@@ -2034,8 +2043,22 @@ static void drawInfo(int x, int y, int sx)
 // menu tables (atLabelFor), so a renamed menu entry renames its panel; the
 // rows come from an accessor pair because the AirTime side owns the data and
 // the meaning — this side owns only the turning and the drawing.
+// Green / yellow / red rows for Settings → Sources. The letter at the front of
+// each name carries the same meaning for anyone who cannot tell the colors apart.
+static uint16_t atSrcColorFor(int i)
+{
+  switch(atSrcRating(i))
+  {
+    case 2:  return TFT_GREEN;
+    case 1:  return TFT_YELLOW;
+    case 3:  return TFT_RED;
+    default: return TH.menu_item;
+  }
+}
+
 static void drawAtList(const char *title, int count, int idx,
-                       const char *(*name)(int), int x, int y, int sx)
+                       const char *(*name)(int), int x, int y, int sx,
+                       uint16_t (*color)(int) = nullptr)
 {
   drawCommon(title, x, y, sx, true);
   if(count <= 0) return;
@@ -2049,7 +2072,7 @@ static void drawAtList(const char *title, int count, int idx,
       if(strlen(name(j)) <= 12) drawZoomedMenu(name(j));
       spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
     } else {
-      spr.setTextColor(TH.menu_item);
+      spr.setTextColor(color ? color(j) : TH.menu_item);
     }
     spr.setTextDatum(MC_DATUM);
     spr.drawString(name(j), 40+x+(sx/2), 64+y+(i*16), 2);
@@ -2069,6 +2092,7 @@ void drawSideBar(uint16_t cmd, int x, int y, int sx)
     case CMD_AT_HF:   drawAtList(atLabelFor(cmd), atHfCount(),   atHfSelIdx(),   atHfName,   x, y, sx); break;
     case CMD_AT_MODE: drawAtList(atLabelFor(cmd), atModeCount(), atModeSelIdx(), atModeName, x, y, sx); break;
     case CMD_AT_NETS: drawAtList(atLabelFor(cmd), atNetCount(),  atNetIdx(),  atNetName,  x, y, sx); break;
+    case CMD_AT_SOURCES: drawAtList(atLabelFor(cmd), atSrcCount(), atSrcIdx(), atSrcName, x, y, sx, atSrcColorFor); break;
     // The same list renderer; the highlighted row is the field being edited,
     // and its text carries the live value ("Hour  13"). Six rows fit whole.
     case CMD_AT_SETCLK: drawAtList(atLabelFor(cmd), atClkFieldCount(), atClkFieldIdx(), atClkFieldName, x, y, sx); break;

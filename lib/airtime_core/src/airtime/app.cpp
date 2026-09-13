@@ -19,6 +19,7 @@ void AirTimeApp::setFmStations(const int32_t* khz, std::size_t n) {
   for (std::size_t i = 0; i < n; ++i) stations_[i] = khz[i];
   station_count_ = n;
   station_idx_ = 0;
+  for (std::size_t i = 0; i < n; ++i) sources_.fm(stations_[i]);
 }
 
 void AirTimeApp::begin() {
@@ -48,13 +49,23 @@ void AirTimeApp::begin() {
     if (deps_.store->loadBlob(kBlobBandStats, blob, sizeof(blob), &got)) {
       decodeBandStats(blob, got, &sched_);
     }
-    // A surveyed station list outranks the compile-time warm start: it was
-    // measured HERE. Only adopted if the caller did not supply one explicitly.
-    if (station_count_ == 0 &&
-        deps_.store->loadBlob(kBlobStations, blob, sizeof(blob), &got)) {
+    // A station list this radio measured outranks the compile-time seed, which
+    // is only a first-boot guess. The firmware supplies that seed BEFORE
+    // begin(), so the saved list must replace it rather than wait for an empty
+    // slot — waiting is how every survey used to be thrown away at power-on.
+    if (deps_.store->loadBlob(kBlobStations, blob, sizeof(blob), &got)) {
       int32_t khz[kMaxStations];
       const std::size_t n = decodeStations(blob, got, khz, kMaxStations);
-      if (n > 0) setFmStations(khz, n);
+      if (n > 0) {
+        setFmStations(khz, n);
+        stations_measured_ = true;
+      }
+    }
+    // Green / Yellow / Red from earlier power-ons. The table verifies the blob
+    // whole or ignores it.
+    uint8_t sblob[SourceTable::kBlobMax];
+    if (deps_.store->loadBlob(kBlobSources, sblob, sizeof(sblob), &got)) {
+      sources_.decode(sblob, got);
     }
   }
 
@@ -65,9 +76,19 @@ void AirTimeApp::begin() {
   deps_.wwv->setDetector(cfg_.wwv_tone_hz, cfg_.wwv_block_us);
   deps_.wwv->setSubDetector(cfg_.wwv_sub_hz, cfg_.wwv_sub_block_us);
 
+  // Every source the radio will try has a row, and the rotation starts with
+  // the ones that have earned it. Red rows get one early retry this power-on.
+  for (std::size_t i = 0; i < station_count_; ++i) sources_.fm(stations_[i]);
+  for (std::size_t i = 0; i < sched_.bandCount(); ++i) {
+    sources_.wwv(sched_.bandStats(i).khz);
+  }
+  orderStationsByRating();
+  for (std::size_t i = 0; i < kMaxStations; ++i) red_tried_[i] = now - cfg_.red_recheck_us;
+
   sched_.start(now);
   fm_dwell_start_ = now;
   last_persist_ = now;
+  last_ct_mono_ = now;   // the list gets a fair run before it is judged
   tuneFmStation(now);
 
   // Nothing to listen to and nothing remembered: find out for ourselves.
@@ -79,6 +100,8 @@ void AirTimeApp::begin() {
 
 void AirTimeApp::startSurvey() {
   survey_.begin(deps_.clock->nowUs());
+  survey_started_ = true;
+  last_survey_start_ = deps_.clock->nowUs();
   const int32_t khz = survey_.wantTuned();
   if (khz != 0) tuneRds(khz);
 }
@@ -93,6 +116,7 @@ void AirTimeApp::pollSurvey(int64_t now) {
   // clock is required, not a correct one.
   RdsGroup g;
   while (deps_.rds->poll(&g)) {
+    ++group_types_[(g.b >> 11) & 0x1F];   // type<<1 | version, for the log
     RdsClockTime t;
     if (!decodeRdsClockTime(g.a, g.b, g.c, g.d, &t)) continue;
     const int64_t asserted = t.utc_epoch_s * 1000000;
@@ -119,6 +143,7 @@ void AirTimeApp::adoptSurveyResult() {
   if (n == 0) return;
 
   setFmStations(found, n);
+  stations_measured_ = true;   // heard here, tonight: this one may be saved
   tuneFmStation(deps_.clock->nowUs());
   learned_dirty_ = true;
   persist(deps_.clock->nowUs(), /*force=*/true);
@@ -137,7 +162,11 @@ void AirTimeApp::setManualUtc(int64_t utc_us) {
   f.uncertainty_us = 5000000;
   f.independent_support = 2;   // the operator's own confirmation, see header
   f.carries_date = true;
-  arbiter_.update(f);
+  const ArbiterUpdate u = arbiter_.update(f);
+  if (u.action != Action::Rejected) {
+    anchor_ = Anchor::Manual;   // what the clock now stands on: a person's watch
+    anchor_pi_ = 0;
+  }
   ever_synced_ = ever_synced_ || arbiter_.isSynced(now);
   learned_dirty_ = true;
   persist(now, /*force=*/true);
@@ -145,6 +174,7 @@ void AirTimeApp::setManualUtc(int64_t utc_us) {
 
 void AirTimeApp::tuneRds(int32_t khz) {
   deps_.rds->tuneKhz(khz);
+  for (uint32_t& c : group_types_) c = 0;   // counts describe the station on the dial
   // One tuner: the dial is on FM now, whatever the WWV cache used to claim.
   // Leaving that claim standing is how a listen window ends up sampling FM
   // program audio — applyDirective skips the WWV retune when the wanted band
@@ -382,6 +412,7 @@ void AirTimeApp::loop() {
 void AirTimeApp::pollRds(int64_t now) {
   RdsGroup g;
   while (deps_.rds->poll(&g)) {
+    ++group_types_[(g.b >> 11) & 0x1F];   // type<<1 | version, for the log
     RdsClockTime t;
     if (!decodeRdsClockTime(g.a, g.b, g.c, g.d, &t)) continue;
 
@@ -405,6 +436,16 @@ void AirTimeApp::pollRds(int64_t now) {
       learned_dirty_ = true;
     }
 
+    // Rate the station that spoke. Its error is taken after its learned bias,
+    // against the clock as it stood at reception.
+    SourceRow* row = sources_.fm(deps_.rds->tunedKhz());
+    if (row != nullptr) row->pi = g.a;
+    noteFmSourceTime(row, g.a, asserted + bias_.correction(g.a) - reference, now);
+    dwell_heard_ct_ = true;
+    // A station proven wrong against a confirmed clock does not vote. It is
+    // still heard, and the first good time it sends puts it back.
+    if (row != nullptr && sources_.rating(*row) == Rating::Red) continue;
+
     CtReport r;
     r.pi = g.a;
     // Put the station back on time before it votes. Zero until the station has
@@ -414,16 +455,48 @@ void AirTimeApp::pollRds(int64_t now) {
     r.rx_monotonic_us = g.mono_us;
     voter_.add(r);
     have_new_ct_ = true;
+    last_ct_mono_ = g.mono_us;
   }
 
   // Rotate the FM scan so every receivable station gets a chance to report —
   // but never while a WWV listen window owns the tuner. The fakes are two
   // independent radios; the device has ONE, and an ungated rotation here
   // yanked the chip from AM back to FM 75 s into every real listen window.
-  if (!directive_.wwv_listening && station_count_ > 1 &&
+  if (!directive_.wwv_listening && station_count_ > 0 &&
       (now - fm_dwell_start_) >= cfg_.fm_dwell_us) {
-    station_idx_ = (station_idx_ + 1) % station_count_;
-    tuneFmStation(now);
+    // The dwell is over: the station either delivered clock time or it did not.
+    sources_.noteDwellEnd(sources_.fm(stations_[station_idx_]), dwell_heard_ct_);
+    dwell_heard_ct_ = false;
+    learned_dirty_ = true;
+    if (station_count_ > 1) {
+      // Next station, passing over Red ones — each still gets one retry per
+      // recheck interval, because a silent or wrong station can come back.
+      std::size_t next = station_idx_;
+      for (std::size_t k = 0; k < station_count_; ++k) {
+        next = (next + 1) % station_count_;
+        const SourceRow* sr = sources_.find(SourceKind::Fm, stations_[next]);
+        if (sr == nullptr || sources_.rating(*sr) != Rating::Red) break;
+        if ((now - red_tried_[next]) >= cfg_.red_recheck_us) {
+          red_tried_[next] = now;
+          break;
+        }
+      }
+      station_idx_ = next;
+      tuneFmStation(now);
+    } else {
+      fm_dwell_start_ = now;
+    }
+  }
+
+  // A list that never delivers is worth nothing, however it was chosen. Go and
+  // find stations that do: the survey keeps what it hears, and the list it
+  // adopts now survives a reboot. Never inside a listen window — that tuner
+  // belongs to WWV.
+  if (cfg_.auto_survey && !directive_.wwv_listening &&
+      (now - last_ct_mono_) >= cfg_.silent_list_survey_after_us &&
+      (!survey_started_ || (now - last_survey_start_) >= cfg_.survey_retry_us)) {
+    startSurvey();
+    return;
   }
 
   voter_.prune(now - cfg_.rds_report_ttl_us);
@@ -439,7 +512,8 @@ void AirTimeApp::pollRds(int64_t now) {
 }
 
 void AirTimeApp::submitRdsVote(int64_t now) {
-  const VoteResult vr = voter_.vote(cfg_.rds_vote_tolerance_us);
+  const VoteResult vr =
+      voter_.vote(cfg_.rds_vote_tolerance_us, arbiter_.hasSourceFix());
   if (vr.total_reports == 0) return;
 
   have_new_ct_ = false;
@@ -464,7 +538,15 @@ void AirTimeApp::submitRdsVote(int64_t now) {
   rds_diag_.stations = vr.agreeing_stations;
   rds_diag_.accepted = u.action != Action::Rejected;
 
-  if (u.action != Action::Rejected) noteAccepted(Source::Rds, now);
+  if (u.action != Action::Rejected) {
+    noteAccepted(Source::Rds, now);
+    if (vr.agreeing_stations >= 2) {
+      anchor_ = Anchor::Multi;             // stations confirming each other
+    } else if (anchor_ == Anchor::None || anchor_ == Anchor::Manual) {
+      anchor_ = Anchor::Fm;                // one station's word, unconfirmed
+      anchor_pi_ = vr.center_pi;
+    }
+  }
 }
 
 void AirTimeApp::pollWwv(int64_t now) {
@@ -527,6 +609,7 @@ void AirTimeApp::pollWwv(int64_t now) {
       have_wwv_accept_ = true; // the teacher is in the room (see pollRds)
       last_wwv_accept_mono_ = m.leading_edge_us;
       noteAccepted(Source::Wwv, now);
+      noteWwvSourceTime(off);
       sched_.onWwvFix(now);    // only an ACCEPTED fix may end the window
     } else {
       have_prev_wwv_ = true;   // hold the window; next minute decides
@@ -623,9 +706,76 @@ void AirTimeApp::pollWwvTimecode(int64_t now) {
       have_wwv_accept_ = true;
       last_wwv_accept_mono_ = f.mono_us;
       noteAccepted(Source::Wwv, now);
+      noteWwvSourceTime(u.offset_us);
       sched_.onWwvFix(now);
     }
   }
+}
+
+void AirTimeApp::noteFmSourceTime(SourceRow* row, uint16_t pi, int64_t err_us,
+                                  int64_t now) {
+  if (row == nullptr) return;
+  learned_dirty_ = true;
+  // A hand-set clock cannot confirm a station, but it can catch one that is
+  // minutes out: 92.3 ran five minutes slow on the owner's radio, and was the
+  // only clock-time station on the dial, so nothing else was there to say so.
+  if (anchor_ == Anchor::Manual && arbiter_.isSet() &&
+      (err_us > cfg_.manual_wrong_us || err_us < -cfg_.manual_wrong_us)) {
+    sources_.noteWrong(row, err_us);
+    return;
+  }
+  // Only a clock backed by a real, synced, DIFFERENT source can check this one.
+  const bool different = anchor_ == Anchor::Multi || anchor_ == Anchor::Wwv ||
+                         (anchor_ == Anchor::Fm && pi != anchor_pi_);
+  const bool confirmable =
+      different && arbiter_.hasSourceFix() && arbiter_.isSynced(now);
+  sources_.noteTime(row, err_us, confirmable);
+  const int64_t mag = err_us < 0 ? -err_us : err_us;
+  if (!confirmable || mag > cfg_.rds_vote_tolerance_us) return;
+  // Agreement runs both ways: the source the clock stands on is confirmed too.
+  if (anchor_ == Anchor::Fm) sources_.noteConfirmed(sources_.findPi(anchor_pi_));
+  if (anchor_ == Anchor::Wwv) sources_.noteConfirmed(sources_.wwv(anchor_wwv_khz_));
+  anchor_ = Anchor::Multi;
+}
+
+void AirTimeApp::noteWwvSourceTime(int64_t err_us) {
+  const int32_t khz = tuned_wwv_khz_ != 0 ? tuned_wwv_khz_ : sched_.currentBandKhz();
+  SourceRow* row = sources_.wwv(khz);
+  if (row == nullptr) return;
+  learned_dirty_ = true;
+  // WWV is one station on every band: only FM can confirm it.
+  const bool different = anchor_ == Anchor::Fm || anchor_ == Anchor::Multi;
+  sources_.noteTime(row, err_us, different);
+  const int64_t mag = err_us < 0 ? -err_us : err_us;
+  if (different && mag <= cfg_.rds_vote_tolerance_us) {
+    if (anchor_ == Anchor::Fm) sources_.noteConfirmed(sources_.findPi(anchor_pi_));
+    anchor_ = Anchor::Multi;
+  } else if (anchor_ == Anchor::None || anchor_ == Anchor::Manual) {
+    anchor_ = Anchor::Wwv;
+    anchor_wwv_khz_ = khz;
+  }
+}
+
+void AirTimeApp::orderStationsByRating() {
+  const auto rank = [this](int32_t khz) {
+    const SourceRow* r = sources_.find(SourceKind::Fm, khz);
+    switch (r != nullptr ? sources_.rating(*r) : Rating::Unknown) {
+      case Rating::Green: return 0;
+      case Rating::Yellow: return 1;
+      case Rating::Unknown: return 2;
+      default: return 3;
+    }
+  };
+  for (std::size_t a = 1; a < station_count_; ++a) {   // stable insertion sort
+    const int32_t key = stations_[a];
+    std::size_t b = a;
+    while (b > 0 && rank(stations_[b - 1]) > rank(key)) {
+      stations_[b] = stations_[b - 1];
+      --b;
+    }
+    stations_[b] = key;
+  }
+  station_idx_ = 0;
 }
 
 void AirTimeApp::noteAccepted(Source s, int64_t now) {
@@ -672,8 +822,15 @@ void AirTimeApp::persist(int64_t now, bool force) {
     if (n > 0) deps_.store->saveBlob(kBlobStationBias, blob, n);
     n = encodeBandStats(sched_, blob, sizeof(blob));
     if (n > 0) deps_.store->saveBlob(kBlobBandStats, blob, n);
-    n = encodeStations(stations_, station_count_, blob, sizeof(blob));
-    if (n > 0) deps_.store->saveBlob(kBlobStations, blob, n);
+    // Only a measured list. The compiled seed is a guess, and saving it would
+    // make the guess outrank the next firmware's better one at every boot.
+    if (stations_measured_) {
+      n = encodeStations(stations_, station_count_, blob, sizeof(blob));
+      if (n > 0) deps_.store->saveBlob(kBlobStations, blob, n);
+    }
+    uint8_t sblob[SourceTable::kBlobMax];
+    n = sources_.encode(sblob, sizeof(sblob));
+    if (n > 0) deps_.store->saveBlob(kBlobSources, sblob, n);
     learned_dirty_ = false;
   }
 }
@@ -700,6 +857,7 @@ DisplayState AirTimeApp::displayState() const {
   st.clock_valid = arbiter_.isSet();
   st.synced = arbiter_.isSynced(now);
   st.ever_synced = ever_synced_;
+  st.confirmed = anchor_ == Anchor::Multi;
   st.utc_us = arbiter_.utcAt(now);
   // What we serve is off by the un-slewed remainder too; say so (§5 honesty).
   st.uncertainty_us = arbiter_.uncertaintyUs(now) + arbiter_.pendingCorrectionUs(now);
@@ -715,7 +873,11 @@ bool AirTimeApp::handleNtpRequest(const uint8_t* req, std::size_t len,
   const int64_t now = deps_.clock->nowUs();
 
   SntpServerState st;
-  st.synced = arbiter_.isSynced(now);
+  // A laptop must not set itself from time nothing has confirmed: this radio
+  // once served a station's clock five minutes slow as stratum 1. Until a
+  // DIFFERENT source agrees, the answer carries the alarm flag, and clients
+  // that respect it leave their clocks alone.
+  st.synced = arbiter_.isSynced(now) && anchor_ == Anchor::Multi;
   // Root dispersion must cover the correction still being slewed in: the client
   // is reading a clock we already know is that far out.
   st.uncertainty_us = arbiter_.uncertaintyUs(now) + arbiter_.pendingCorrectionUs(now);

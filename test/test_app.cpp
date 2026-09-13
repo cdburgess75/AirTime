@@ -1133,3 +1133,334 @@ AT_TEST(app_manual_time_is_inside_the_wwv_ambiguity_window) {
   const int64_t err = app.displayState().utc_us - sim.true_utc_us;
   AT_CHECK(err < 30000000 && err > -30000000);
 }
+
+// The firmware hands the app its compiled seed BEFORE begin(). A list the
+// radio measured for itself must still win, or every survey is thrown away at
+// the next power-on — which is how the owner's radio stayed on a list that
+// never delivered a single RDS group.
+AT_TEST(app_saved_stations_win_over_the_compiled_seed) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation seed{9110, 0x1001, true, 0};
+  FakeStation measured{10470, 0x6E47, true, 0};
+  sim.rds.stations = {seed, measured};
+
+  const int32_t saved[] = {10470};
+  uint8_t blob[kStationsBlobMax];
+  const std::size_t n = encodeStations(saved, 1, blob, sizeof(blob));
+  sim.store.blobs["fm"].assign(blob, blob + n);
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);   // the firmware's order: seed first...
+  app.begin();                // ...then begin()
+
+  AT_CHECK_EQ(sim.rds.tunedKhz(), 10470);
+  AT_CHECK(app.stationCount() == 1);
+  AT_CHECK_EQ(app.station(0), 10470);
+}
+
+// The compiled seed is a guess. Saving it back as though it had been measured
+// is how a researched-but-wrong list became permanent on the device.
+AT_TEST(app_seed_is_never_persisted_as_measured) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{9110, 0x1001, true, 0};
+  sim.rds.stations = {a};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {9110};
+  app.setFmStations(fm, 1);
+  app.begin();
+  app.setManualUtc(sim.true_utc_us);   // learned state now has something to save
+  sim.advance(2 * kHour, &app);        // past the save interval
+
+  AT_CHECK(sim.store.blob_saves > 0);            // learned state WAS written...
+  AT_CHECK(sim.store.blobs.count("fm") == 0);    // ...but never the seed
+}
+
+// A list is a guess until it delivers. When no station on it sends clock time,
+// the radio goes and finds stations that do — the owner's radio sat on a silent
+// list for a day and a half with plenty of clock-time stations on the dial.
+AT_TEST(app_surveys_when_its_list_stays_silent) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation dead{8930, 0x1001, false, 0};   dead.rssi = 30;   // listed, no CT
+  FakeStation live{10470, 0x6E47, true, 0};   live.rssi = 45;   // not listed
+  sim.rds.stations = {dead, live};
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {8930};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  sim.advance(9 * kMin, &app);
+  AT_CHECK(!app.surveying());        // the list gets a fair run first
+  sim.advance(2 * kMin, &app);
+  AT_CHECK(app.surveying());
+
+  sim.advance(20 * kMin, &app);      // survey finishes and adopts what it heard
+  AT_CHECK(!app.surveying());
+  AT_CHECK_EQ(app.station(0), 10470);
+  AT_CHECK(sim.store.blobs.count("fm") == 1);
+
+  sim.advance(10 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+}
+
+// A survey owns the dial for a quarter of an hour. A dial with nothing on it
+// must not be re-hunted every ten minutes.
+AT_TEST(app_silent_list_survey_is_rate_limited) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation dead{8930, 0x1001, false, 0};   dead.rssi = 30;
+  sim.rds.stations = {dead};          // nothing on the whole dial sends CT
+
+  AirTimeApp app(sim.deps());
+  const int32_t fm[] = {8930};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  sim.advance(40 * kMin, &app);       // one survey ran and found nothing
+  AT_CHECK(!app.surveying());
+  sim.advance(2 * kHour, &app);
+  AT_CHECK(!app.surveying());         // and it did not go hunting again
+}
+
+// One honest station and one that sends a wrong time, a single report each,
+// with the liar reporting FIRST. The clock is already right. The liar must not
+// win the 1-1 vote by list order: the arbiter would refuse it every time and
+// the honest station would never steer again — exactly what the owner's radio
+// did for half an hour with a CT date 12.6 days wrong.
+AT_TEST(app_honest_station_wins_a_tie_against_a_liar) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation liar{9110, 0x1001, true, 20 * kMin};
+  FakeStation honest{10470, 0x6E47, true, 0};
+  sim.rds.stations = {liar, honest};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9110, 10470};    // the liar is tuned, and heard, first
+  app.setFmStations(fm, 2);
+  app.begin();
+  app.setManualUtc(sim.true_utc_us);     // the clock we already have is right
+
+  sim.advance(12 * kMin, &app);          // both have reported; votes keep coming
+  AT_CHECK(app.rdsFixDiag().have);
+  AT_CHECK(app.rdsFixDiag().accepted);   // the latest vote went to the honest one
+  const int64_t err = app.displayState().utc_us - sim.true_utc_us;
+  AT_CHECK(err < 1000000 && err > -1000000);
+}
+
+// The owner's rule, end to end: the first station sets the clock and is only
+// Yellow; when a DIFFERENT station agrees, both are Green.
+AT_TEST(app_one_station_is_yellow_until_another_agrees) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{10470, 0x6E47, true, 0};
+  FakeStation b{8990, 0xA920, true, 0};
+  sim.rds.stations = {a, b};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10470, 8990};
+  app.setFmStations(fm, 2);
+  app.begin();
+
+  sim.advance(70 * kS, &app);                    // first dwell: only 104.7
+  const SourceRow* ra = app.sources().find(SourceKind::Fm, 10470);
+  AT_CHECK(ra != nullptr);
+  AT_CHECK(app.arbiter().isSet());
+  AT_CHECK(app.sources().rating(*ra) == Rating::Yellow);
+
+  sim.advance(4 * kMin, &app);                   // 89.9 is heard and agrees
+  const SourceRow* rb = app.sources().find(SourceKind::Fm, 8990);
+  AT_CHECK(rb != nullptr);
+  AT_CHECK(app.sources().rating(*rb) == Rating::Green);
+  AT_CHECK(app.sources().rating(*ra) == Rating::Green);
+}
+
+// A station whose time is wrong against a confirmed clock turns Red and stops
+// voting; the clock stays right.
+AT_TEST(app_wrong_station_turns_red) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{10470, 0x6E47, true, 0};
+  FakeStation b{8990, 0xA920, true, 0};
+  FakeStation liar{9110, 0x1001, true, 20 * kMin};
+  sim.rds.stations = {a, b, liar};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10470, 8990, 9110};
+  app.setFmStations(fm, 3);
+  app.begin();
+  sim.advance(20 * kMin, &app);
+
+  const SourceRow* rl = app.sources().find(SourceKind::Fm, 9110);
+  AT_CHECK(rl != nullptr);
+  AT_CHECK(app.sources().rating(*rl) == Rating::Red);
+  const int64_t err = app.displayState().utc_us - sim.true_utc_us;
+  AT_CHECK(err < 1000000 && err > -1000000);
+}
+
+// A station that never sends clock time turns Red after two whole dwells and
+// is then passed over, instead of costing a dwell every pass.
+AT_TEST(app_silent_station_turns_red_and_is_passed_over) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation mute{8930, 0x1001, false, 0};
+  FakeStation a{10470, 0x6E47, true, 0};
+  sim.rds.stations = {mute, a};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {8930, 10470};
+  app.setFmStations(fm, 2);
+  app.begin();
+  sim.advance(15 * kMin, &app);
+
+  const SourceRow* rm = app.sources().find(SourceKind::Fm, 8930);
+  AT_CHECK(rm != nullptr);
+  AT_CHECK(app.sources().rating(*rm) == Rating::Red);
+
+  int on_mute = 0;
+  for (int i = 0; i < 60; ++i) {                 // the next half hour
+    sim.advance(30 * kS, &app);
+    if (sim.rds.tunedKhz() == 8930) ++on_mute;
+  }
+  AT_CHECK_EQ(on_mute, 0);
+}
+
+// Ratings are remembered, and the next power-on tries Green stations first and
+// Red ones last.
+AT_TEST(app_ratings_survive_a_power_cycle) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation mute{8930, 0x1001, false, 0};
+  FakeStation a{10470, 0x6E47, true, 0};
+  FakeStation b{8990, 0xA920, true, 0};
+  sim.rds.stations = {mute, a, b};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  const int32_t fm[] = {8930, 10470, 8990};
+  {
+    AirTimeApp app(sim.deps(), cfg);
+    app.setFmStations(fm, 3);
+    app.begin();
+    sim.advance(2 * kHour, &app);                // past the save interval
+    AT_CHECK(sim.store.blobs.count("src") == 1);
+  }
+
+  AirTimeApp again(sim.deps(), cfg);             // same store: a power cycle
+  again.setFmStations(fm, 3);
+  again.begin();
+  const SourceRow* ra = again.sources().find(SourceKind::Fm, 10470);
+  AT_CHECK(ra != nullptr);
+  AT_CHECK(again.sources().rating(*ra) == Rating::Green);
+  AT_CHECK(again.station(0) != 8930);            // a Green station leads
+  AT_CHECK_EQ(again.station(2), 8930);           // the Red one comes last
+}
+
+// The group-type count is how the log tells "no clock time on this dial" from
+// "clock time lost on the way in": a CT station must show 4A, and only 4A.
+AT_TEST(app_counts_rds_group_types_per_station) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{10470, 0x6E47, true, 0};
+  sim.rds.stations = {a};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10470};
+  app.setFmStations(fm, 1);
+  app.begin();
+  sim.advance(3 * kMin, &app);
+
+  AT_CHECK(app.rdsGroupsOfType(4, false) > 0);
+  AT_CHECK(app.rdsGroupsOfType(0, false) == 0);
+  AT_CHECK(app.rdsGroupsOfType(4, true) == 0);
+}
+
+// The clock itself carries the rule: set from one station it is unconfirmed,
+// and only a different source agreeing makes it confirmed.
+AT_TEST(app_clock_is_unconfirmed_until_a_second_source_agrees) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{10470, 0x6E47, true, 0};
+  FakeStation b{8990, 0xA920, true, 0};
+  sim.rds.stations = {a, b};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10470, 8990};
+  app.setFmStations(fm, 2);
+  app.begin();
+
+  sim.advance(70 * kS, &app);
+  AT_CHECK(app.displayState().synced);
+  AT_CHECK(!app.displayState().confirmed);
+  sim.advance(4 * kMin, &app);
+  AT_CHECK(app.displayState().confirmed);
+}
+
+// 92.3 on the owner's dial: the only clock-time station, five minutes slow.
+// Set by hand, the clock is good to seconds — enough to call that station Red
+// and keep it out of the vote, though not enough to confirm anything.
+AT_TEST(app_hand_set_clock_turns_a_minutes_wrong_station_red) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation slow{9230, 0x986D, true, 5 * kMin};
+  sim.rds.stations = {slow};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9230};
+  app.setFmStations(fm, 1);
+  app.begin();
+  app.setManualUtc(sim.true_utc_us);
+  // A seeded clock may listen for WWV straight through the 5-minute acquisition
+  // window, and the tuner is single: the station is heard once serving begins.
+  sim.advance(15 * kMin, &app);
+
+  const SourceRow* r = app.sources().find(SourceKind::Fm, 9230);
+  AT_CHECK(r != nullptr);
+  AT_CHECK(app.sources().rating(*r) == Rating::Red);
+  const int64_t err = app.displayState().utc_us - sim.true_utc_us;
+  AT_CHECK(err < 10 * kS && err > -10 * kS);
+  AT_CHECK(!app.displayState().confirmed);
+}
+
+// A laptop is never handed time that nothing has confirmed. One station, five
+// minutes slow like 92.3 on the owner's dial, sets the radio's clock — but NTP
+// carries the alarm flag until a different source agrees.
+AT_TEST(app_ntp_refuses_unconfirmed_time) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation slow{9230, 0x986D, true, 5 * kMin};
+  sim.rds.stations = {slow};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9230};
+  app.setFmStations(fm, 1);
+  app.begin();
+  sim.advance(10 * kMin, &app);
+  AT_CHECK(app.arbiter().isSet());
+
+  uint8_t req[kNtpPacketSize], resp[kNtpPacketSize];
+  makeNtpRequest(req);
+  AT_CHECK(app.handleNtpRequest(req, sizeof(req), 0xC0A80402, resp));
+  AT_CHECK_EQ((resp[0] >> 6) & 0x03, kNtpLeapAlarm);
+  AT_CHECK_EQ(resp[1], kNtpStratumUnsync);
+}

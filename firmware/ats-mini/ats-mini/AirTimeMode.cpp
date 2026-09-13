@@ -50,35 +50,25 @@
 #include <airtime_core.h>
 #include <airtime_esp32.h>
 
-// ── Milestone 1 station survey ──────────────────────────────────────────────
-// SI4735 native FM units (10 kHz): 8990 = 89.9 MHz. Measured 2026-07-26 at
-// the home QTH (New Orleans dial), two runs ~35 min apart, offsets stable
-// between runs; full table in docs/STATUS.md. These three cluster within the
-// voter's tolerance and sit inside RDS's ±250 ms error model. Every other CT
-// sender on this dial measured 0.9 s to 6.2 hours from truth — excluded.
-// This list is a WARM START for this location, not the mechanism: the
-// self-survey design (STATUS.md, "Field variability") supersedes it.
-// ── CORRECTED FOR THE ACTUAL QTH ────────────────────────────────────────────
-// The previous list was surveyed against the NEW ORLEANS dial. The radio lives
-// in Loranger, Tangipahoa Parish (ZIP 70446) — about fifty miles north of it.
-// Every station in that list was therefore a fringe signal, which is the best
-// explanation anyone has offered for RSSI 14 dBuV on what should be a strong
-// local, and for a clock that synced on a good night and not otherwise.
+// ── FM seed list ────────────────────────────────────────────────────────────
+// SI4735 native FM units (10 kHz): 8990 = 89.9 MHz. A FIRST-BOOT SEED only:
+// the app replaces it with any list the radio has measured and saved (Survey
+// Dial), and never saves this one back as though it had been measured.
 //
-// 89.3 first: WRKF Baton Rouge is NPR, 28 kW, with a documented 60-mile radius
-// that explicitly covers Hammond and Ponchatoula — Loranger sits inside it. US
-// public stations are the most reliable RDS clock-time senders there are, and
-// the old list had the device sitting on 89.9 (New Orleans NPR, distant) with
-// 89.3 six-tenths of a megahertz away the whole time.
+// MEASURED at the owner's QTH, not researched. 104.7 WJSH (PI 6E47), 89.9 WWNO
+// (A920) and 107.5 K-LOVE (33CB) all delivered RDS clock time here: the radio
+// learned a station bias for each, and 104.7 decoded 442 groups at the bench
+// on 2026-09-12. 89.3 WRKF stays last and unmeasured — it costs one dwell per
+// pass. 107.1 WHMD is out: the July survey measured it 3.1 s late.
 //
-// These are RESEARCHED, not measured. The three offsets that used to be
-// documented here were real measurements and are gone with the frequencies
-// they belonged to; nothing below carries a learned bias yet. Run Survey Dial
-// at the bench to replace this with fact — that is what it is for.
+// The 07-31 list (89.3 / 107.1 / 89.9) was chosen on paper for this QTH and
+// never produced a single RDS group in the field. Measure before replacing
+// this list.
 static const int32_t kFmStations[] = {
-    8930,   // 89.3  WRKF   Baton Rouge NPR, 28 kW, covers Tangipahoa Parish
-    10710,  // 107.1 WHMD   Hammond — genuinely local, ~10 miles
-    8990,   // 89.9  WWNO   New Orleans NPR — kept: it has produced CT here
+    10470,  // 104.7 WJSH   PI 6E47
+    8990,   // 89.9  WWNO   PI A920 — the anchor
+    10750,  // 107.5 K-LOVE PI 33CB
+    8930,   // 89.3  WRKF   unmeasured — last
 };
 static const size_t kFmStationCount =
     sizeof(kFmStations) / sizeof(kFmStations[0]);
@@ -566,9 +556,16 @@ int airtimeAboutLines(const char *out[], int max)
            src, st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
   out[n] = l[n]; if(++n >= max) return n;
 
-  snprintf(l[n], sizeof(l[n]), "FM:     %.1f  %.1f  %.1f MHz",
-           (double)kFmStations[0] / 100.0, (double)kFmStations[1] / 100.0,
-           (double)kFmStations[2] / 100.0);
+  {
+    // The list the app is USING, not the compiled seed: a measured list
+    // replaces the seed at boot, and this line must say which one is live.
+    char b[40];
+    int off = 0;
+    for(size_t k = 0 ; k < atApp->stationCount() && off < (int)sizeof(b) - 6 ; k++)
+      off += snprintf(b + off, sizeof(b) - off, "%s%.1f", k ? " " : "",
+                      (double)atApp->station(k) / 100.0);
+    snprintf(l[n], sizeof(l[n]), "FM:     %s MHz", off ? b : "(none)");
+  }
   out[n] = l[n]; if(++n >= max) return n;
 
   {
@@ -994,7 +991,7 @@ void atSetHfIdx(int i)
   if(atApp == nullptr) return;
   if(atHfOpt == 0)      atApp->operatorListenNow();
   else if(atHfOpt == 1)  atApp->operatorServeNow();
-  else                   atApp->startSurvey();   // ~30 min; owns the dial
+  else                   atApp->startSurvey();   // ~15 min; owns the dial
 }
 
 // ── Scroll is looking; click is doing ───────────────────────────────────────
@@ -1153,7 +1150,7 @@ void airtimeScreen(AirTimeScreen *out)
     out->diag = diagBuf;
     out->cycle = cycleBuf; out->cycle_t = cycleTBuf;
     out->cycle_fraction = 0.0f; out->cycle_odd = false;
-    out->synced = false;   out->valid = false;
+    out->synced = false;   out->valid = false;   out->confirmed = false;
     return;
   }
 
@@ -1213,7 +1210,8 @@ void airtimeScreen(AirTimeScreen *out)
   else if(!st.synced)
     snprintf(statusBuf, sizeof(statusBuf), "UNSYNCED - last known %s", age);
   else
-    snprintf(statusBuf, sizeof(statusBuf), "%s   %s   sync %s", unc, src, age);
+    snprintf(statusBuf, sizeof(statusBuf), "%s   %s%s   sync %s", unc, src,
+             st.confirmed ? "" : " UNCONFIRMED", age);
 
   // The honest dial, replacing a frequency readout this build cannot keep
   // truthful. Without it the screen cannot explain why the radio is playing
@@ -1344,7 +1342,7 @@ void airtimeScreen(AirTimeScreen *out)
     out->diag   = diagBuf;
     out->cycle = cycleBuf; out->cycle_t = cycleTBuf;
     out->cycle_fraction = 0.0f; out->cycle_odd = false;
-    out->synced = st.synced; out->valid = st.clock_valid;
+    out->synced = st.synced; out->valid = st.clock_valid; out->confirmed = st.confirmed;
     return;
   }
 
@@ -1382,6 +1380,7 @@ void airtimeScreen(AirTimeScreen *out)
   out->cycle_t = cycleTBuf;
   out->synced = st.synced;
   out->valid  = st.clock_valid;
+  out->confirmed = st.confirmed;
 }
 
 // The serial console keeps the richer UTF-8 formatting from the core module.
@@ -1583,7 +1582,65 @@ void airtimeLoop()
       }
       Serial.printf("]\n");
     }
+
+    // Every source tried, rated: G confirmed by a different source, Y delivered
+    // but unconfirmed, R silent or wrong, ? not tried. confirmed/heard and the
+    // last measured error make each rating checkable from the log alone.
+    const airtime::SourceTable& srcs = atApp->sources();
+    if(srcs.count() > 0)
+    {
+      Serial.printf("  src[");
+      for(size_t i = 0 ; i < srcs.count() ; i++)
+      {
+        const airtime::SourceRow& r = srcs.at(i);
+        char nm[16];
+        airtime::SourceTable::name(r, srcs.rating(r), nm, sizeof(nm));
+        Serial.printf("%s%s", i ? " | " : "", nm);
+        if(r.pi) Serial.printf(" %04X", r.pi);
+        Serial.printf(" %u/%u", (unsigned)r.confirmed, (unsigned)r.heard);
+        if(r.err_known) Serial.printf(" %+dms", (int)r.err_ms);
+      }
+      Serial.printf("]\n");
+    }
+
+    // RDS group types from the station on the dial since it was tuned. 4A is
+    // clock time: thousands of 0A/2A and no 4A is a station that does not send
+    // it, which no amount of listening will change.
+    Serial.printf("  grp[%ld:", (long)atRds.tunedKhz());
+    for(int t = 0 ; t < 16 ; t++)
+      for(int v = 0 ; v < 2 ; v++)
+      {
+        const uint32_t n = atApp->rdsGroupsOfType(t, v != 0);
+        if(n) Serial.printf(" %d%c=%lu", t, v ? 'B' : 'A', (unsigned long)n);
+      }
+    Serial.printf("]\n");
   }
+}
+
+// ── Settings → Sources ──────────────────────────────────────────────────────
+// The rated list for the radio's own menu: "G 104.7", "R 89.3". Names go into
+// rotating buffers for the same reason as atNetName(): the renderer holds five.
+static int atSrcSel = 0;
+int atSrcCount() { return atApp ? (int)atApp->sources().count() : 0; }
+int atSrcIdx() { return atSrcSel; }
+void atSetSrcIdx(int i) { if(i >= 0 && i < atSrcCount()) atSrcSel = i; else atSrcSel = 0; }
+const char *atSrcName(int i)
+{
+  static char buf[5][16];
+  static uint8_t slot = 0;
+  if(atApp == nullptr || i < 0 || i >= atSrcCount()) return "?";
+  char *b = buf[slot];
+  slot = (slot + 1) % 5;
+  const airtime::SourceRow &r = atApp->sources().at(i);
+  airtime::SourceTable::name(r, atApp->sources().rating(r), b, sizeof(buf[0]));
+  return b;
+}
+// 0 unknown, 1 yellow, 2 green, 3 red — airtime::Rating's own order.
+int atSrcRating(int i)
+{
+  if(atApp == nullptr || i < 0 || i >= atSrcCount()) return 0;
+  const airtime::SourceRow &r = atApp->sources().at(i);
+  return (int)atApp->sources().rating(r);
 }
 
 #endif  // AIRTIME

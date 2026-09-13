@@ -334,7 +334,10 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
   // Both are right-aligned to the same edge so the two labels stack in a tidy
   // column. Amber instead of white while unsynchronised — §5 wants the device
   // to LOOK wrong when it is coasting, not to explain itself in small print.
-  const uint16_t clock_colour = s.synced ? TH.text : TH.text_warn;
+  // Yellow while the time rests on one source nothing has confirmed — the
+  // owner's rule, and the radio once sat on a station five minutes slow.
+  const uint16_t clock_colour = !s.synced ? TH.text_warn
+                             : s.confirmed ? TH.text : TFT_YELLOW;
 
   if(menu_open)
   {
@@ -392,7 +395,8 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
   else
   {
     spr.setTextDatum(TC_DATUM);
-    spr.setTextColor(s.valid && s.synced ? TH.text_muted : TH.text_warn);
+    spr.setTextColor(!(s.valid && s.synced) ? TH.text_warn
+                     : s.confirmed ? TH.text_muted : TFT_YELLOW);
     spr.drawString(s.status, 160, 108, 2);
 
     // The honest dial. Without this line the screen cannot explain why the

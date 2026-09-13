@@ -131,6 +131,7 @@ static const char kStyle[] =
   "th{color:#8a8;font-weight:400;width:14rem}"
   "td.w{color:#fb4}"
   "td.n{color:#6c8}"
+  "th.g{color:#6c8}th.y{color:#fb4}th.rd{color:#f66}"
   "p.note{color:#888;font-size:.82rem;margin:22px 0 0;white-space:normal}"
   "@media(prefers-color-scheme:light){body{background:#fff;color:#222}"
   "h1{color:#000}h2{color:#357}.big{color:#000}.sub{color:#25a}"
@@ -205,6 +206,7 @@ static const char kApp[] =
 ".r>span:first-child{opacity:.55;flex:0 0 auto}"
 ".r>span:last-child{text-align:right;font-variant-numeric:tabular-nums}"
 ".w{color:#ffb02e}"
+".srcG{color:#6c8}.srcY{color:#ffb02e}.srcR{color:#f66}"
 ".seg{display:flex;flex-wrap:wrap;gap:7px;margin-top:2px}"
 ".seg button{flex:1 1 auto;min-width:74px;padding:11px 8px;border:0;border-radius:10px;"
 "background:#1c2540;color:#cdd6e8;font:600 13px/1 inherit;-webkit-appearance:none}"
@@ -224,6 +226,7 @@ static const char kApp[] =
 "<h2>Cycle</h2><div class=seg id=seg></div>"
 "<h2>Clock</h2><div class=card id=cconf></div>"
 "<h2>Receiver</h2><div class=card id=crx></div>"
+"<h2>Clock sources</h2><div class=card id=csrc></div>"
 "<h2>Serving</h2><div class=card id=cntp></div>"
 "<p id=note></p>"
 "<div id=off><div><h3>Radio is off the air</h3>"
@@ -256,8 +259,8 @@ static const char kApp[] =
 "requestAnimationFrame(paint)}"
 "function apply(j){D=j;U0=j.utc;T0=performance.now();P=j.cyc.p;"
 "q('off').className='';q('ver').textContent=j.v;"
-"var p=q('pill');p.textContent=j.val?(j.syn?'SYNCED '+j.unc:'UNSYNCED'):'NO TIME YET';"
-"p.className='pill'+(j.syn?'':' w');"
+"var p=q('pill');p.textContent=j.val?(j.syn?(j.cnf?'SYNCED ':'UNCONFIRMED ')+j.unc:'UNSYNCED'):'NO TIME YET';"
+"p.className='pill'+(j.syn&&j.cnf?'':' w');"
 "rows(q('cconf'),[['uncertainty',j.unc,!j.syn],['sources',j.src,j.src=='none'],"
 "['last verified',j.age,!j.syn],['crystal',j.ppm],['on the air',j.net||'-']]);"
 "rows(q('crx'),[['dial',j.rx.d],['chip mode',j.rx.fm?'FM':'AM/SSB'],"
@@ -265,6 +268,9 @@ static const char kApp[] =
 "['schedule',j.eibi?(j.eibi+' entries'):'NOT INSTALLED',!j.eibi]]);"
 "rows(q('cntp'),[['NTP','192.168.4.1:123'],['clients',j.ntp.c],"
 "['requests answered',j.ntp.a],['uptime',j.up]]);"
+"var sh='';if(j.srcs)for(var i=0;i<j.srcs.length;i++){var s=j.srcs[i];"
+"sh+='<div class=r><span class=src'+s[0]+'>'+s[0]+' '+s[1]+'</span><span>'+s[2]+'</span></div>'}"
+"q('csrc').innerHTML=sh||'<div class=r><span>none yet</span></div>';"
 "seg();"
 "q('note').textContent='Polls every 2 s; the clock runs from the radio\\u2019s own time '"
 "+'between polls, never the phone\\u2019s. Full diagnostics at /status.'}"
@@ -318,7 +324,7 @@ static void atHandleApi()
   atRowf("{\"v\":\"%s\",\"val\":%d,\"syn\":%d,\"utc\":%lld,\"tzo\":%d,\"zone\":\"%s\",",
          AIRTIME_VERSION, st.clock_valid ? 1 : 0, st.synced ? 1 : 0,
          (long long)(st.utc_us / 1000), atLocalOffsetS(), s.zone);
-  atRowf("\"unc\":\"%s\",\"age\":\"%s\",\"src\":\"%s\",",
+  atRowf("\"cnf\":%d,\"unc\":\"%s\",\"age\":\"%s\",\"src\":\"%s\",", st.confirmed ? 1 : 0,
          atMs(st.uncertainty_us), st.clock_valid ? atAge(st.since_sync_us) : "never",
          srcs);
   atRowf("\"ppm\":\"%+.2f ppm\",\"net\":\"%s\",", app->arbiter().ratePpm(), s.net);
@@ -331,6 +337,23 @@ static void atHandleApi()
          st.phase == airtime::Phase::Acquiring ? "acquiring" : "serving time");
   atRowf("\"ntp\":{\"c\":%d,\"a\":%lu},\"eibi\":%d,",
          st.ntp_clients, (unsigned long)airtimeNtpServed(), eibiEntryCount());
+
+  // Clock sources for the phone app: [rating letter, name, confirmed/heard].
+  {
+    const airtime::SourceTable &t = app->sources();
+    atSend("\"srcs\":[");
+    for(size_t i = 0; i < t.count(); i++)
+    {
+      const airtime::SourceRow &r = t.at(i);
+      const airtime::Rating rt = t.rating(r);
+      char nm[16];
+      airtime::SourceTable::name(r, rt, nm, sizeof(nm));
+      atRowf("%s[\"%c\",\"%s\",\"%u/%u\"]", i ? "," : "",
+             airtime::SourceTable::letter(rt), nm + 2,
+             (unsigned)r.confirmed, (unsigned)r.heard);
+    }
+    atSend("],");
+  }
 
   const uint32_t up = millis() / 1000;
   atRowf("\"up\":\"%luh %02lum\",", (unsigned long)(up / 3600),
@@ -518,6 +541,29 @@ static void atHandleStatus()
   atRowf("<tr><th>minute markers accepted</th><td class=\"%s\">%lu</td></tr>",
          m.markers ? "n" : "", (unsigned long)m.markers);
   atSend("</table>");
+
+  // ── Every clock source tried, rated ─────────────────────────────────────
+  // Green: confirmed by a different source. Yellow: delivered a time, not yet
+  // confirmed. Red: silent through whole dwells, or wrong. ?: not tried yet.
+  {
+    const airtime::SourceTable &t = app->sources();
+    atSend("<h2>Clock sources</h2><table>"
+           "<tr><th>source</th><td>PI</td><td>confirmed / heard</td><td>last error</td></tr>");
+    for(size_t i = 0; i < t.count(); i++)
+    {
+      const airtime::SourceRow &r = t.at(i);
+      const airtime::Rating rt = t.rating(r);
+      char nm[16], pi[8], er[16];
+      airtime::SourceTable::name(r, rt, nm, sizeof(nm));
+      if(r.pi) snprintf(pi, sizeof(pi), "%04X", r.pi); else snprintf(pi, sizeof(pi), "-");
+      if(r.err_known) snprintf(er, sizeof(er), "%+d ms", (int)r.err_ms); else snprintf(er, sizeof(er), "-");
+      atRowf("<tr><th class=\"%s\">%s</th><td>%s</td><td>%u / %u</td><td>%s</td></tr>",
+             rt == airtime::Rating::Green ? "g" : rt == airtime::Rating::Yellow ? "y" :
+             rt == airtime::Rating::Red ? "rd" : "",
+             nm, pi, (unsigned)r.confirmed, (unsigned)r.heard, er);
+    }
+    atSend("</table>");
+  }
 
   // ── What each FM station has been caught doing ───────────────────────────
   // A station that is reliably late is still useful once the lateness is known

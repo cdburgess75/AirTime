@@ -140,3 +140,27 @@ AT_TEST(learned_state_refuses_a_short_buffer) {
   Scheduler s;
   AT_CHECK_EQ(encodeBandStats(s, tiny, sizeof(tiny)), 0u);
 }
+
+AT_TEST(learned_stations_round_trip) {
+  const int32_t src[] = {10470, 8990, 10750};
+  uint8_t blob[kStationsBlobMax];
+  const std::size_t n = encodeStations(src, 3, blob, sizeof(blob));
+  AT_CHECK(n > 0);
+
+  int32_t dst[8] = {};
+  AT_CHECK(decodeStations(blob, n, dst, 8) == 3);
+  AT_CHECK_EQ(dst[0], 10470);
+  AT_CHECK_EQ(dst[1], 8990);
+  AT_CHECK_EQ(dst[2], 10750);
+}
+
+// Version 1 lists were also written from the compiled seed, so one may be a
+// guess dressed as a measurement — the list on the owner's radio was exactly
+// that (89.3 / 107.1 / 89.9, never one RDS group). It must not be believed.
+AT_TEST(learned_stations_ignore_v1_blob) {
+  const uint8_t v1[] = {1, 3, 0xE2, 0x22, 0, 0,    // 8930
+                              0xD6, 0x29, 0, 0,    // 10710
+                              0x1E, 0x23, 0, 0};   // 8990
+  int32_t dst[8] = {};
+  AT_CHECK(decodeStations(v1, sizeof(v1), dst, 8) == 0);
+}

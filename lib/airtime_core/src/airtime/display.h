@@ -31,6 +31,7 @@ struct DisplayState {
   bool clock_valid = false;   // false only before any seed at all
   bool synced = false;        // uncertainty within the sync threshold
   bool ever_synced = false;   // distinguishes cold boot from stale sync
+  bool confirmed = false;     // a DIFFERENT source agreed (Green), not one alone
   int64_t utc_us = 0;
   int64_t uncertainty_us = 0;
   int64_t since_sync_us = 0;

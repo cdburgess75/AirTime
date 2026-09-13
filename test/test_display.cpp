@@ -41,6 +41,7 @@ AT_TEST(disp_status_line_synced) {
   st.ntp_clients = 2;
 
   char buf[128];
+  st.confirmed = true;
   formatStatusLine(st, buf, sizeof(buf));
   AT_CHECK(eq(buf, "±60 ms · RDS+WWV · sync 3h ago · NTP: 2 clients"));
 }
@@ -83,4 +84,22 @@ AT_TEST(disp_sources_combine) {
   formatSources(kSrcWwv, b, sizeof(b));            AT_CHECK(eq(b, "WWV"));
   formatSources(kSrcRds | kSrcWwv, b, sizeof(b));  AT_CHECK(eq(b, "RDS+WWV"));
   formatSources(0, b, sizeof(b));                  AT_CHECK(eq(b, "none"));
+}
+
+// One source and nothing to check it: the line must say so beside the ±, which
+// on its own reads as a promise the radio cannot keep.
+AT_TEST(disp_status_line_says_unconfirmed) {
+  DisplayState st;
+  st.clock_valid = true;
+  st.synced = true;
+  st.ever_synced = true;
+  st.uncertainty_us = 124000;
+  st.since_sync_us = 5 * 60 * kS;
+  st.sources = kSrcRds;
+  char buf[128];
+  formatStatusLine(st, buf, sizeof(buf));
+  AT_CHECK(std::strstr(buf, "RDS (unconfirmed)") != nullptr);
+  st.confirmed = true;
+  formatStatusLine(st, buf, sizeof(buf));
+  AT_CHECK(std::strstr(buf, "unconfirmed") == nullptr);
 }

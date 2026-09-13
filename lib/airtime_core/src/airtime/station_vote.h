@@ -48,6 +48,7 @@ struct VoteResult {
   int64_t offset_us;     // consensus clock offset (median of the winning cluster)
   int agreeing_stations; // distinct stations in the winning cluster
   int total_reports;     // reports considered
+  uint16_t center_pi = 0; // a station in the winning cluster (its identity)
 };
 
 class StationVoter {
@@ -62,9 +63,16 @@ class StationVoter {
 
   // Winning cluster = the set of reports whose implied offsets all fall within
   // tolerance_us of a common member, maximizing distinct-station count.
+  //
+  // Ties go to the cluster that agrees with the clock we already have, when
+  // `clock_is_sourced` says that clock came from a real source (offsets are then
+  // clock ERRORS, so the smaller one agrees). Without this, one lying station
+  // and one honest station tied 1-1 and the liar won by list order: the arbiter
+  // refused its correction every time, and the honest station never got to
+  // steer — seen on the owner's radio, a CT date 12.6 days wrong.
   // With one report: has_consensus=false but offset_us/agreeing_stations still
   // describe that single source (usable for small single-source slews).
-  VoteResult vote(int64_t tolerance_us) const;
+  VoteResult vote(int64_t tolerance_us, bool clock_is_sourced = false) const;
 
   // Drop reports received before `cutoff_mono_us`, so a station that goes off
   // air (or drifts out of range) stops voting instead of carrying a stale

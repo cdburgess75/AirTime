@@ -36,6 +36,7 @@ namespace airtime {
 constexpr const char* kBlobStationBias = "sta";
 constexpr const char* kBlobBandStats = "band";
 constexpr const char* kBlobStations = "fm";
+constexpr const char* kBlobSources = "src";   // Green/Yellow/Red, source_table.h
 
 // Worst-case encoded sizes, for caller-side buffers.
 constexpr std::size_t kStationBiasBlobMax = 2 + StationBiasTable::kMaxStations * 8;

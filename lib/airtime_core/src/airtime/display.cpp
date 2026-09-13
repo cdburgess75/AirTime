@@ -76,7 +76,7 @@ void formatUtcLine(const DisplayState& st, char* buf, std::size_t n) {
 void formatStatusLine(const DisplayState& st, char* buf, std::size_t n) {
   if (buf == nullptr || n == 0) return;
 
-  char srcs[24];
+  char srcs[40];
   formatSources(st.sources, srcs, sizeof(srcs));
 
   if (!st.clock_valid) {
@@ -102,6 +102,13 @@ void formatStatusLine(const DisplayState& st, char* buf, std::size_t n) {
   }
 
   char unc[24], age[16];
+  if (!st.confirmed) {
+    // One source and nothing to check it against: the owner's Yellow. The ±
+    // beside it describes only that source, so say so where it is read.
+    std::size_t l = 0;
+    while (srcs[l] != 0) ++l;
+    std::snprintf(srcs + l, sizeof(srcs) - l, " (unconfirmed)");
+  }
   formatUncertainty(st.uncertainty_us, unc, sizeof(unc));
   formatAge(st.since_sync_us, age, sizeof(age));
   std::snprintf(buf, n, "%s · %s · sync %s ago · NTP: %d clients",

@@ -52,6 +52,7 @@
 #define CMD_AT_NETS    0x3280 // | AirTime: scheduled nets
 #define CMD_AT_RESET   0x32C0 // | AirTime: wipe learned state and reboot
 #define CMD_AT_SETCLK  0x32E0 // | AirTime: manual UTC entry (tier-3 source)
+#define CMD_AT_SOURCES 0x32F0 // | AirTime: clock sources, rated G/Y/R
 #endif
 #define CMD_ABOUT      0x3300 //-+
 
@@ -163,6 +164,8 @@ int atModeSelIdx();  void atSetModeSel(int i);  void atModeSelReset();  void atM
 int atHfSelIdx();    void atSetHfSel(int i);    void atHfSelReset();    void atHfCommit();
 const char *atNetDetail();
 int atNetCount();   const char *atNetName(int i);   int atNetIdx();   void atSetNetIdx(int i);
+int atSrcCount();   const char *atSrcName(int i);   int atSrcIdx();   void atSetSrcIdx(int i);
+int atSrcRating(int i);
 
 // The app's state, pre-formatted for a screen. Both the TFT layout and the web
 // status page render from this, so the two can never disagree about what the
@@ -191,6 +194,7 @@ struct AirTimeScreen {
   float cycle_fraction;    // 0..1, how far into the slot
   bool cycle_odd;          // slot parity — FT8 alternates TX and RX on it
   bool synced;          // false => clock drawn in the warning colour
+  bool confirmed;       // synced but false => yellow: one unconfirmed source
   bool valid;           // false => no time at all yet
 };
 void airtimeScreen(AirTimeScreen *out);

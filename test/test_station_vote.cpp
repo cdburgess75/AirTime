@@ -77,3 +77,19 @@ AT_TEST(vote_empty) {
   AT_CHECK_EQ(r.agreeing_stations, 0);
   AT_CHECK_EQ(r.total_reports, 0);
 }
+
+// A 1-1 tie between a station that agrees with our sourced clock and one that
+// does not must go to the one that agrees. List order must not decide it: that
+// is how a date 12.6 days wrong won every vote on the owner's radio.
+AT_TEST(vote_tie_goes_to_the_station_agreeing_with_the_clock) {
+  StationVoter v;
+  v.add(rep(0x1001, 1093610205000LL));   // wrong date, listed first
+  v.add(rep(0x6E47, 40));                // agrees with our clock
+  const VoteResult r = v.vote(400000, /*clock_is_sourced=*/true);
+  AT_CHECK_EQ(r.agreeing_stations, 1);
+  AT_CHECK_EQ(r.offset_us, 40);
+
+  // With no sourced clock the offsets are not errors, so there is nothing to
+  // prefer: the old behaviour stands.
+  AT_CHECK_EQ(v.vote(400000).offset_us, 1093610205000LL);
+}

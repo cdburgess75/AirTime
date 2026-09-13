@@ -23,6 +23,7 @@
 #include "rds_ct.h"
 #include "scheduler.h"
 #include "sntp.h"
+#include "source_table.h"
 #include "learned_state.h"
 #include "morse.h"
 #include "station_bias.h"
@@ -93,10 +94,22 @@ struct AppConfig {
   // reporting itself synced.) 75 s clears the minute with margin and is not a
   // divisor of it.
   int64_t fm_dwell_us = 75LL * 1000000;
+  // A Red station is passed over in the rotation, but tried again this often:
+  // transmitters get fixed and propagation changes.
+  int64_t red_recheck_us = 6LL * 60 * 60 * 1000000;
+  // A hand-set clock is good to seconds: a station further out than this from
+  // it is wrong, even though the hand-set clock cannot confirm anything.
+  int64_t manual_wrong_us = 30LL * 1000000;
 
   // Survey the dial automatically when there is nothing else to go on. A
   // radio with no stations is not keeping time and has nothing to protect.
   bool auto_survey = true;
+  // ...and when the list it has goes quiet. A list is a guess until it
+  // delivers: if no station on it has sent clock time for this long, survey
+  // the dial for ones that do. At most once per retry interval — a survey owns
+  // the dial for ~15 min, and a quiet night is not a reason to hunt hourly.
+  int64_t silent_list_survey_after_us = 10LL * 60 * 1000000;
+  int64_t survey_retry_us = 6LL * 60 * 60 * 1000000;
   FmSurveyConfig survey_cfg;
 
   // WWV self-corroboration. A lone marker implying a ≥500 ms correction is
@@ -226,9 +239,15 @@ class AirTimeApp {
 
   AirTimeApp(const AppDeps& deps, const AppConfig& cfg = AppConfig{});
 
-  // FM frequencies to rotate through while hunting RDS clock-time. Populated
-  // from the Milestone 1 station survey.
+  // FM frequencies to rotate through while hunting RDS clock-time. This is a
+  // first-boot seed: begin() replaces it with a list the radio measured and
+  // saved, if there is one, and a seed is never saved back as measured.
   void setFmStations(const int32_t* khz, std::size_t n);
+  // The list actually in use — the seed or the measured list that replaced it.
+  std::size_t stationCount() const { return station_count_; }
+  int32_t station(std::size_t i) const {
+    return i < station_count_ ? stations_[i] : 0;
+  }
 
   // Operator-set time — tier 3 in PLAN.md §4, described there as the "always
   // available fallback" and until now not available at all: the arbiter has
@@ -340,6 +359,13 @@ class AirTimeApp {
   const WwvTimecodeDiag& wwvTimecodeDiag() const { return tc_diag_; }
   // What WWV has taught us about each station (§4: sources correct each other).
   const StationBiasTable& stationBias() const { return bias_; }
+  // Every source tried, rated Green / Yellow / Red (source_table.h).
+  const SourceTable& sources() const { return sources_; }
+  // RDS groups of one type heard since the dial last moved. 4A is clock time:
+  // thousands of 0A/2A with no 4A is a station that does not send it.
+  uint32_t rdsGroupsOfType(int type, bool version_b) const {
+    return (type >= 0 && type < 16) ? group_types_[(type << 1) | (version_b ? 1 : 0)] : 0;
+  }
 
  private:
   // The scheduler's directive, adjusted for what only the app knows. Today
@@ -350,6 +376,13 @@ class AirTimeApp {
   // rule: it can be hours stale, and a marker cannot tell you which minute
   // you are in. See the implementation for what that cost.
   Directive effectiveDirective(Directive d) const;
+
+  // Rate a source that just delivered a time, and confirm the source the clock
+  // stands on if this one — a different source — agrees with it.
+  void noteFmSourceTime(SourceRow* row, uint16_t pi, int64_t err_us, int64_t now);
+  void noteWwvSourceTime(int64_t err_us);
+  // Green first, then Yellow, then untried, then Red: the power-on order.
+  void orderStationsByRating();
   void applyDirective(const Directive& d);
   void pollRds(int64_t now);
   void pollSurvey(int64_t now);
@@ -388,6 +421,20 @@ class AirTimeApp {
   int32_t stations_[kMaxStations] = {};
   std::size_t station_count_ = 0;
   std::size_t station_idx_ = 0;
+  // True once the list came from a survey or a saved measurement. A seed from
+  // setFmStations() alone is never written back to the store.
+  bool stations_measured_ = false;
+
+  // What the clock currently stands on. A source that agrees with it CONFIRMS
+  // it only if it is a different source; a station repeating itself does not.
+  enum class Anchor : uint8_t { None, Manual, Fm, Wwv, Multi };
+  SourceTable sources_;
+  Anchor anchor_ = Anchor::None;
+  uint16_t anchor_pi_ = 0;
+  int32_t anchor_wwv_khz_ = 0;
+  bool dwell_heard_ct_ = false;
+  int64_t red_tried_[kMaxStations] = {};
+  uint32_t group_types_[32] = {};
   int64_t fm_dwell_start_ = 0;
 
   int32_t tuned_wwv_khz_ = 0;
@@ -413,6 +460,9 @@ class AirTimeApp {
   bool learned_dirty_ = false;
   bool have_new_ct_ = false;
   int64_t last_rds_submit_ = 0;
+  int64_t last_ct_mono_ = 0;       // last RDS clock time from ANY station
+  bool survey_started_ = false;    // this power-on
+  int64_t last_survey_start_ = 0;
   int64_t last_persist_ = 0;
 
   OpMode mode_ = OpMode::Clock;

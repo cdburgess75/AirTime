@@ -116,6 +116,13 @@ bool decodeBandStats(const void* buf, std::size_t len, Scheduler* out) {
   return true;
 }
 
+namespace {
+// Version 2: a saved list now means MEASURED. Version 1 blobs were also written
+// from the compiled seed, so a v1 list may be a guess — the one on the owner's
+// radio was — and it must cost a relearn rather than be believed.
+constexpr uint8_t kStationsVersion = 2;
+}  // namespace
+
 std::size_t encodeStations(const int32_t* khz, std::size_t n, void* buf,
                            std::size_t cap) {
   if (khz == nullptr || buf == nullptr || n == 0) return 0;
@@ -123,7 +130,7 @@ std::size_t encodeStations(const int32_t* khz, std::size_t n, void* buf,
   const std::size_t need = 2 + n * 4;
   if (cap < need) return 0;
   uint8_t* p = static_cast<uint8_t*>(buf);
-  *p++ = kVersion;
+  *p++ = kStationsVersion;
   *p++ = static_cast<uint8_t>(n);
   for (std::size_t i = 0; i < n; ++i) put32(p, khz[i]);
   return need;
@@ -133,7 +140,7 @@ std::size_t decodeStations(const void* buf, std::size_t len, int32_t* khz_out,
                            std::size_t max) {
   if (buf == nullptr || khz_out == nullptr || len < 2) return 0;
   const uint8_t* p = static_cast<const uint8_t*>(buf);
-  if (*p++ != kVersion) return 0;
+  if (*p++ != kStationsVersion) return 0;
   std::size_t n = *p++;
   if (n > 8 || len < 2 + n * 4) return 0;
   if (n > max) n = max;

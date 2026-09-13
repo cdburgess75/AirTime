@@ -25,6 +25,7 @@
 #include "airtime/nets.h"
 #include "airtime/rds_ct.h"
 #include "airtime/scheduler.h"
+#include "airtime/source_table.h"
 #include "airtime/sntp.h"
 #include "airtime/station_vote.h"
 #include "airtime/timezone.h"
