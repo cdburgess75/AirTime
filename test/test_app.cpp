@@ -1440,6 +1440,33 @@ AT_TEST(app_hand_set_clock_turns_a_minutes_wrong_station_red) {
   AT_CHECK(!app.displayState().confirmed);
 }
 
+// The order it really happened in on the owner's radio: 92.3 set the clock
+// first, five minutes slow, and the owner set it by hand afterwards.
+AT_TEST(app_hand_set_after_a_slow_station_synced_the_clock) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation slow{9230, 0x986D, true, 5 * kMin};
+  sim.rds.stations = {slow};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9230};
+  app.setFmStations(fm, 1);
+  app.begin();
+  sim.advance(20 * kMin, &app);
+  AT_CHECK(app.displayState().utc_us - sim.true_utc_us < -4 * kMin);   // on 92.3's time
+
+  app.setManualUtc(sim.true_utc_us);
+  sim.advance(15 * kMin, &app);
+
+  const SourceRow* r = app.sources().find(SourceKind::Fm, 9230);
+  const int64_t err = app.displayState().utc_us - sim.true_utc_us;
+  AT_CHECK(r != nullptr);
+  AT_CHECK(app.sources().rating(*r) == Rating::Red);
+  AT_CHECK(err < 10 * kS && err > -10 * kS);
+}
+
 // A laptop is never handed time that nothing has confirmed. One station, five
 // minutes slow like 92.3 on the owner's dial, sets the radio's clock — but NTP
 // carries the alarm flag until a different source agrees.

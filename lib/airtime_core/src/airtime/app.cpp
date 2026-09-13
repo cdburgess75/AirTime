@@ -166,6 +166,15 @@ void AirTimeApp::setManualUtc(int64_t utc_us) {
   if (u.action != Action::Rejected) {
     anchor_ = Anchor::Manual;   // what the clock now stands on: a person's watch
     anchor_pi_ = 0;
+    // Reports heard before the set were measured against the clock just thrown
+    // away. Voted now, they read as "no error", get accepted, and turn the
+    // anchor back to Fm — so the station that was five minutes slow is never
+    // checked against the hand-set time, and never turns Red.
+    voter_.clear();
+    have_new_ct_ = false;
+    // The sync age and source mask now describe the hand-set. The status line
+    // still reads UNSYNCED: ±5 s is outside the sync threshold, by design.
+    noteAccepted(Source::Manual, now);
   }
   ever_synced_ = ever_synced_ || arbiter_.isSynced(now);
   learned_dirty_ = true;
