@@ -125,6 +125,10 @@ class Scheduler {
   bool seeded() const { return seeded_; }
 
   Phase phase() const { return phase_; }
+  // How long until the phase changes on its own: the end of the power-on hunt,
+  // the next listen window, or the end of this one. For the screen, which has
+  // to say when HF will be checked. Never negative.
+  int64_t usUntilPhaseChange(int64_t mono_us) const;
   bool hasFix() const { return has_fix_; }
   int32_t currentBandKhz() const;
   std::size_t bandCount() const { return band_count_; }

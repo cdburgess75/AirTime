@@ -170,6 +170,11 @@ struct AppConfig {
   // this long — two dwells — before HF is tried, instead of the whole
   // acquisition. FM that has delivered keeps the full hunt. See loop().
   int64_t unproven_fm_acquire_us = 150LL * 1000000;
+
+  // After acquisition ends on one FM station's word (Yellow), the other
+  // stations get this long to agree before a WWV window is started, instead of
+  // a whole unseeded interval. Clock mode only. 0 turns it off.
+  int64_t unconfirmed_listen_after_us = 150LL * 1000000;
 };
 
 // Who owns the radio right now. See AirTimeApp::setMode for what each means.
@@ -256,6 +261,11 @@ class AirTimeApp {
   // `uncertainty_us` is what the setter is worth: 5 s for a person with a
   // watch, about 1 s for a phone whose own clock is network-disciplined.
   void setManualUtc(int64_t utc_us, int64_t uncertainty_us = 5000000);
+
+  // For the screen: microseconds until the radio moves between FM and HF on
+  // its own — a listen window starting or ending, including the short FM turn
+  // after an unconfirmed seed.
+  int64_t hfChangeInUs() const;
 
   // WWV band rotation, first entry tried first (default 5/10/15 MHz). A warm
   // start like the FM list: order it by what actually works at the QTH — the
@@ -405,6 +415,7 @@ class AirTimeApp {
   WwvMarkerDetector marker_;
   SubcarrierSecondReader sub_reader_;  // the timecode symbols, read by their timing
   int64_t acquire_began_ = 0;          // when this power-on's acquisition started
+  int64_t quick_listen_at_ = 0;        // unconfirmed after acquisition: WWV at this time, 0 = none
   bool fmProven() const;               // any listed station has delivered here, not Red
   WwvTimecodeDecoder timecode_;
   ClientCounter clients_;

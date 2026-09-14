@@ -1324,17 +1324,37 @@ void airtimeScreen(AirTimeScreen *out)
   // drawn from the right, and the first cut of the SEARCHING prefix grew the
   // text until the two overprinted — photographed in the field as
   // "for RDSTAm0 clients". Fits in 21 characters or it collides.
-  if(atApp->directive().wwv_listening)
-    snprintf(tunedBuf, sizeof(tunedBuf), "%sWWV %ld kHz",
-             st.synced ? "" : "SEARCH ",
+  //
+  // Until the time is CONFIRMED the line also says when that changes. Field
+  // report, 2026-09-14: "I cannot tell what frequency you are currently on" —
+  // eight minutes of FM at the big antenna with no way to see that HF was
+  // still a quarter of an hour off. The right side carries the countdown
+  // while unconfirmed; NTP refuses laptops then anyway, so its client count
+  // says nothing until the clock turns Green. Left <= 19 characters, right
+  // <= 13, so the two never meet.
+  const bool onHf = atApp->directive().wwv_listening;
+  if(onHf)
+    snprintf(tunedBuf, sizeof(tunedBuf), "%sWWV %ld AM",
+             st.confirmed ? "" : "SEARCH ",
              (long)atApp->directive().wwv_band_khz);
   else
-    snprintf(tunedBuf, sizeof(tunedBuf), "%sFM %.1f RDS",
-             st.synced ? "" : "SEARCH ",
+    snprintf(tunedBuf, sizeof(tunedBuf), "%sFM %.1f",
+             st.confirmed ? "" : "SEARCH ",
              (double)atRds.tunedKhz() / 100.0);
 
-  snprintf(clientsBuf, sizeof(clientsBuf), "NTP: %d client%s",
-           st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
+  if(!st.confirmed)
+  {
+    const long left = (long)(atApp->hfChangeInUs() / 1000000);
+    if(onHf)
+      snprintf(clientsBuf, sizeof(clientsBuf), "HF %ld:%02ld left", left / 60, left % 60);
+    else
+      snprintf(clientsBuf, sizeof(clientsBuf), "HF in %ld:%02ld", left / 60, left % 60);
+  }
+  else
+  {
+    snprintf(clientsBuf, sizeof(clientsBuf), "NTP: %d client%s",
+             st.ntp_clients, st.ntp_clients == 1 ? "" : "s");
+  }
 
   // ── Why it is still searching ─────────────────────────────────────────────
   // Only while unsynced: once time is good this row is noise, and the net

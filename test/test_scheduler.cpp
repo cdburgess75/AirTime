@@ -255,6 +255,35 @@ AT_TEST(sched_custom_bands) {
   AT_CHECK_EQ(s.tick(2 * kMin).wwv_band_khz, 5000);
 }
 
+// Listen Now pressed during the power-on hunt starts a window at once. It was
+// silently dropped: ignored while acquiring, then wiped when serving began.
+AT_TEST(sched_listen_now_is_honoured_while_acquiring) {
+  Scheduler s;
+  s.start(0);
+  AT_CHECK(s.tick(1 * kMin).phase == Phase::Acquiring);
+  s.requestListenNow();
+  const Directive d = s.tick(1 * kMin + kS);
+  AT_CHECK(d.phase == Phase::Listening);
+  AT_CHECK(d.wwv_listening);
+}
+
+// The screen's countdown: until the hunt ends, until the next window, until
+// this window ends.
+AT_TEST(sched_counts_down_to_the_next_phase_change) {
+  Scheduler s;
+  s.start(0);
+  s.tick(1 * kMin);
+  AT_CHECK_EQ(s.usUntilPhaseChange(1 * kMin), 4 * kMin);        // 5-min hunt
+  s.tick(6 * kMin);                                              // hunt over
+  AT_CHECK(s.phase() == Phase::Serving);
+  AT_CHECK_EQ(s.usUntilPhaseChange(10 * kMin), 56 * kMin);      // hourly, seeded
+  s.requestListenNow();
+  s.tick(10 * kMin);
+  AT_CHECK(s.phase() == Phase::Listening);
+  AT_CHECK_EQ(s.usUntilPhaseChange(11 * kMin), 2 * kMin);       // 3-min window
+  AT_CHECK_EQ(s.usUntilPhaseChange(20 * kMin), 0);              // never negative
+}
+
 // ── The unseeded cadence ────────────────────────────────────────────────────
 // Before any source has fixed the clock, the listen windows ARE the
 // acquisition: sooner (15 min, not 60), longer (8 min, not 3), and with a

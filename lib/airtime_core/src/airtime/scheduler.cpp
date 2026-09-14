@@ -53,6 +53,16 @@ void Scheduler::maybeStepBand(int64_t mono_us) {
   bands_[band_idx_].attempts++;
 }
 
+int64_t Scheduler::usUntilPhaseChange(int64_t mono_us) const {
+  int64_t due = mono_us;
+  switch (phase_) {
+    case Phase::Acquiring: due = acquire_start_ + cfg_.acquire_timeout_us; break;
+    case Phase::Serving:   due = last_listen_end_ + listenIntervalUs(); break;
+    case Phase::Listening: due = listen_start_ + listenDurationUs(); break;
+  }
+  return due > mono_us ? due - mono_us : 0;
+}
+
 int32_t Scheduler::currentBandKhz() const {
   return band_count_ > 0 ? bands_[band_idx_].khz : 0;
 }
@@ -134,6 +144,14 @@ Directive Scheduler::tick(int64_t mono_us) {
 
   switch (phase_) {
     case Phase::Acquiring: {
+      // An operator's Listen Now is honoured here too. It used to wait for
+      // the hunt to end and then be wiped by enterServing(): the owner pressed
+      // it at power-on and heard FM for another fifteen minutes.
+      if (want_listen_) {
+        enterServing(mono_us);
+        enterListening(mono_us);
+        break;
+      }
       // §5: serve on the first credible fix, or when the hunt times out.
       if (has_fix_ || want_serve_ ||
           (mono_us - acquire_start_) >= cfg_.acquire_timeout_us) {

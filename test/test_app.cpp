@@ -177,6 +177,9 @@ AT_TEST(app_lone_large_wwv_marker_keeps_listening) {
 
   AppConfig cfg;
   cfg.wwv_calibration_us = 25000;
+  // This test opens its own window at a chosen moment; the automatic one after
+  // an unconfirmed seed is scheduling policy, tested on its own elsewhere.
+  cfg.unconfirmed_listen_after_us = 0;
   AirTimeApp app(sim.deps(), cfg);
   const int32_t fm[] = {9110};
   app.setFmStations(fm, 1);
@@ -956,7 +959,10 @@ AT_TEST(app_cw_mode_decodes_traffic_onto_the_screen) {
   sim.true_utc_us = startUtcUs();
   FakeStation a{9110, 0x1001, true, 0};
   sim.rds.stations = {a};
-  AirTimeApp app(sim.deps());
+  // Mode mechanics, not scheduling: no automatic window after the Yellow seed.
+  AppConfig cfg;
+  cfg.unconfirmed_listen_after_us = 0;
+  AirTimeApp app(sim.deps(), cfg);
   const int32_t fm[] = {9110};
   app.setFmStations(fm, 1);
   app.begin();
@@ -1051,7 +1057,10 @@ AT_TEST(app_spectrum_mode_owns_the_tap_and_hands_it_back) {
   sim.true_utc_us = startUtcUs();
   FakeStation a{9110, 0x1001, true, 0};
   sim.rds.stations = {a};
-  AirTimeApp app(sim.deps());
+  // Mode mechanics, not scheduling: no automatic window after the Yellow seed.
+  AppConfig cfg;
+  cfg.unconfirmed_listen_after_us = 0;
+  AirTimeApp app(sim.deps(), cfg);
   const int32_t fm[] = {9110};
   app.setFmStations(fm, 1);
   app.begin();
@@ -1627,6 +1636,60 @@ AT_TEST(app_wwv_breaks_a_tie_between_disagreeing_stations) {
   AT_CHECK(app.sources().rating(*r) != Rating::Red);
   AT_CHECK(app.displayState().confirmed);
   AT_CHECK(iabs(sim.clockErrorUs(app)) < 500000);
+}
+
+// One honest FM station sets the clock at power-on: Yellow. After one short
+// turn for other FM stations to agree, the first WWV window must follow — not
+// fifteen minutes later; the owner stood at the big antenna for eight minutes
+// hearing only FM.
+AT_TEST(app_yellow_at_power_on_listens_for_wwv_within_minutes) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {10000};
+  FakeStation honest{10610, 0x829D, true, 0};
+  sim.rds.stations = {honest};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10610};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  const int64_t start = sim.clock.mono_us;
+  bool listening = false;
+  for (int i = 0; i < 10 * 60 && !listening; ++i) {
+    sim.advance(kS, &app);
+    listening = app.scheduler().phase() == Phase::Listening;
+  }
+  AT_CHECK(listening);
+  AT_CHECK(app.arbiter().hasSourceFix());           // FM did set it first
+  AT_CHECK(sim.clock.mono_us - start <= 5 * kMin);  // and HF within minutes
+}
+
+// The operator presses Listen Now while the radio is still hunting FM at
+// power-on. The tuner goes to HF within seconds, not after the hunt.
+AT_TEST(app_listen_now_during_the_fm_hunt_starts_wwv) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {10000};
+  FakeStation mute{9230, 0x986D, false, 0};
+  sim.rds.stations = {mute};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9230};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  sim.advance(30 * kS, &app);
+  AT_CHECK(app.scheduler().phase() == Phase::Acquiring);
+  app.operatorListenNow();
+  sim.advance(5 * kS, &app);
+  AT_CHECK(app.scheduler().phase() == Phase::Listening);
+  AT_CHECK(sim.wwv.isRunning());
+  AT_CHECK(!sim.adc_wifi_conflict);
 }
 
 // A laptop is never handed time that nothing has confirmed. One station, five

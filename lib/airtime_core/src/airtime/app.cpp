@@ -398,6 +398,16 @@ bool AirTimeApp::fmProven() const {
   return false;
 }
 
+int64_t AirTimeApp::hfChangeInUs() const {
+  const int64_t now = deps_.clock->nowUs();
+  int64_t us = sched_.usUntilPhaseChange(now);
+  if (quick_listen_at_ != 0 && sched_.phase() == Phase::Serving) {
+    const int64_t q = quick_listen_at_ > now ? quick_listen_at_ - now : 0;
+    if (q < us) us = q;
+  }
+  return us;
+}
+
 void AirTimeApp::resetTimecodeChain() {
   sub_reader_.reset();
   timecode_.reset();
@@ -425,11 +435,29 @@ void AirTimeApp::loop() {
     sched_.requestServeNow();
   }
   directive_ = effectiveDirective(sched_.tick(now));
-  // Acquisition ended with nothing: listen now, not a whole unseeded interval
-  // from now. There is nothing to serve yet anyway.
-  if (was_acquiring && sched_.phase() == Phase::Serving &&
-      !arbiter_.hasSourceFix() && !surveying()) {
-    sched_.requestListenNow();
+  // Acquisition ended without a CONFIRMED time. With nothing at all, go and
+  // listen now. With one FM station's word, give the other stations one short
+  // turn to agree — the tuner is single, and a window would take it from them
+  // for eight minutes — then check HF instead of waiting a whole unseeded
+  // interval. The owner stood at the big antenna for eight minutes hearing FM,
+  // because 106.1 had set the clock and the first WWV window was fifteen
+  // minutes off. NTP flags an unconfirmed time unusable meanwhile.
+  if (was_acquiring && sched_.phase() == Phase::Serving && !surveying() &&
+      mode_ == OpMode::Clock) {
+    if (!arbiter_.hasSourceFix()) {
+      sched_.requestListenNow();
+    } else if (anchor_ != Anchor::Multi && cfg_.unconfirmed_listen_after_us > 0) {
+      quick_listen_at_ = now + cfg_.unconfirmed_listen_after_us;
+    }
+  }
+  if (quick_listen_at_ != 0) {
+    if (anchor_ == Anchor::Multi || mode_ != OpMode::Clock) {
+      quick_listen_at_ = 0;       // FM confirmed it, or the operator has the dial
+    } else if (now >= quick_listen_at_ && sched_.phase() == Phase::Serving &&
+               !surveying()) {
+      sched_.requestListenNow();
+      quick_listen_at_ = 0;
+    }
   }
   applyDirective(directive_);
 
