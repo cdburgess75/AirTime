@@ -3,6 +3,9 @@
 #include "Utils.h"
 #include "Menu.h"
 #include "EIBI.h"
+#ifdef AIRTIME
+#include "airtime/time_stations.h"
+#endif
 
 // CB frequency range
 #define MIN_CB_FREQUENCY 26060
@@ -346,6 +349,17 @@ bool identifyFrequency(uint16_t freq, bool periodic)
   // For non-periodic calls the name will be found earlier
   if(!periodic)
   {
+#ifdef AIRTIME
+    // Time stations first, long form: "WWV WWVH BPM HLA YVTO" does not fit the
+    // big font, and the name must hold against EiBi on the periodic refresh.
+    name = airtime::timeStationsAt(freq);
+    if(name)
+    {
+      name_found = true;
+      return(showStationName(name, true));
+    }
+#endif
+
     // Try list of named frequencies first
     name = findNameByFreq(freq, namedFrequencies, ITEM_COUNT(namedFrequencies));
     if(name)

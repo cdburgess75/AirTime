@@ -170,6 +170,12 @@ To reset the receiver settings (current band, frequency, favorite stations, down
 | 12M  | 24800 kHz     | 25000 kHz     | USB          |
 | 10M  | 28000 kHz     | 29700 kHz     | USB          |
 | CB   | 25000 kHz     | 28000 kHz     | AM           |
+| TIME | 2500 kHz      | 20000 kHz     | AM           |
+
+The TIME band (AirTime builds) holds the standard time stations. Each knob click moves to the next
+time-station frequency, and the frequency-name line lists who may be heard there:
+2500, 5000, 10000, 15000 kHz WWV, WWVH, BPM (5000 also HLA, YVTO); 20000 kHz WWV;
+3330, 7850, 14670 kHz CHU; 4996, 9996, 14996 kHz RWM (Morse only, switch to USB to hear it).
 
 ## Remote control
 

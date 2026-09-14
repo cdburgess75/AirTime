@@ -64,6 +64,13 @@ Band bands[] =
   // https://www.hfunderground.com/wiki/CB
   // Also see MIN_CB_FREQUENCY and MAX_CB_FREQUENCY
   {"CB",   SW_BAND_TYPE, AM,  25000, 28000, 27135, 0, 4, 0, 0},
+#ifdef AIRTIME
+  // Standard time stations: WWV, WWVH, CHU, BPM, RWM, HLA, YVTO. One knob
+  // detent is one station frequency (doTune, airtime/time_stations.h), and
+  // the frequency-name line says who may be on it. Last in the table so the
+  // band index saved in prefs still means the same band for every other row.
+  {"TIME", SW_BAND_TYPE, AM,   2500, 20000, 10000, 1, 4, 0, 0},
+#endif
 };
 
 int getTotalBands() { return(ITEM_COUNT(bands)); }

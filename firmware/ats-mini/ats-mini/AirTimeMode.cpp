@@ -935,7 +935,7 @@ static uint8_t atChipMode(airtime::NetMode m)
 static int atBandForKhz(int32_t khz, uint8_t mode)
 {
   // bands[] is extern here with unknown extent, so the buffer is a constant:
-  // 32 clears the 28 shipped rows. A grown table clamps rather than overruns —
+  // 32 clears the 29 shipped rows. A grown table clamps rather than overruns —
   // and if that ever happens, the last bands become unreachable to nets, which
   // the -1 path reports on screen instead of hiding.
   constexpr int kMaxSpans = 32;
@@ -946,6 +946,10 @@ static int atBandForKhz(int32_t khz, uint8_t mode)
   {
     spans[i].min_khz = bands[i].minimumFreq;
     spans[i].max_khz = bands[i].maximumFreq;
+    // TIME (2500-20000 kHz) is narrower than ALL, so a net outside every ham
+    // band would land in it and rewrite its mode. It is a station list, not a
+    // place to hold nets: an empty span keeps it out and the indices aligned.
+    if(!strcmp(bands[i].bandName, "TIME")) { spans[i].min_khz = 1; spans[i].max_khz = 0; }
     spans[i].fm = (bands[i].bandType == FM_BAND_TYPE) || (bands[i].bandMode == FM);
     spans[i].mode = bands[i].bandMode;
   }

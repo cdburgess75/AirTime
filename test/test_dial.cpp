@@ -47,6 +47,7 @@ const DialBandSpan kShipped[] = {
     {24800, 25000, false, USB}, // 25 12M
     {28000, 29700, false, USB}, // 26 10M
     {25000, 28000, false, AM},  // 27 CB
+    {1, 0, false, AM},        // 28 TIME — atBandForKhz passes an empty span
 };
 constexpr std::size_t kN = sizeof(kShipped) / sizeof(kShipped[0]);
 

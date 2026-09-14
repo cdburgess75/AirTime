@@ -3,6 +3,9 @@
 // =================================
 
 #include "Common.h"
+#ifdef AIRTIME
+#include "airtime/time_stations.h"
+#endif
 #include <Wire.h>
 #include "Rotary.h"
 #include "Button.h"
@@ -613,6 +616,19 @@ bool doSeek(int16_t enc, int16_t enca)
 //
 bool doTune(int16_t enc)
 {
+#ifdef AIRTIME
+  // TIME band: one detent is one time-station frequency, whatever the step or
+  // the acceleration says. Wraps at the ends; see airtime/time_stations.h.
+  if(enc && !strcmp(getCurrentBand()->bandName, "TIME"))
+  {
+    updateFrequency(airtime::timeStationStep(currentFrequency + currentBFO / 1000,
+                                             enc > 0 ? 1 : -1), true);
+    clearStationInfo();
+    identifyFrequency(currentFrequency + currentBFO / 1000);
+    return(true);
+  }
+#endif
+
   //
   // SSB tuning
   //
