@@ -26,8 +26,9 @@
 //  * SI4732 GPIO1 switches the antenna input path between FM and AM/SW (see
 //    useBand in ats-mini.ino, credit G8PTN). Forgetting it means WWV silence.
 //  * The IO11 audio tap is downstream of the DSP volume control: Milestone 0
-//    measured tone_power 1.9e-3 at volume 35. WWV listening therefore forces
-//    volume 35 and restores the user's volume afterwards. Yes, the radio is
+//    measured tone_power 1.9e-3 at volume 35 on a strong USB beat. WWV
+//    listening therefore forces kWwvListenVolume and restores the user's volume
+//    afterwards. Yes, the radio is
 //    audible while it listens; for a time receiver that is honest behaviour,
 //    and the tone is the sound of it working.
 //  * AM channel bandwidth is set to 3 kHz explicitly rather than trusting
@@ -38,6 +39,7 @@
 #ifdef AIRTIME
 
 #include "Common.h"
+#include <algorithm>
 #include "Utils.h"  // loadSSB/unloadSSB — the SSB patch state the chip needs
 #include "Menu.h"   // getCurrentUTCOffset(), utcOffsets[] — the device's own
                     // timezone setting, so local time is adjustable in the field
@@ -213,7 +215,12 @@ static const airtime::HamNet kNets[] = {
 };
 static const size_t kNetCount = sizeof(kNets) / sizeof(kNets[0]);
 
-static const uint8_t kWwvListenVolume = 35; // the level Milestone 0 calibrated
+// Milestone 0 calibrated 35 against a strong USB zero-beat. WWV's AM tones at
+// the owner's QTH are far weaker than that, and the tap's floor is the radio's
+// own electronics (the same levels at the desk and at the big antenna), so the
+// window listens louder. Headroom: with WiFi down the ADC swung 250-600 of
+// ~4000 counts at 35 (wwv_sampler.h).
+static const uint8_t kWwvListenVolume = 50;
 
 static airtime_esp32::EspMonotonicClock atMono;
 static airtime_esp32::Esp32RdsSource atRds;
@@ -239,7 +246,7 @@ class AtRawWwv : public airtime::IWwvSampler {
  public:
   void tuneKhz(int32_t khz) override { atWwv.tuneKhz(khz); }
   void start() override { atWwv.start(); }
-  void stop() override { atWwv.stop(); flush(); }
+  void stop() override { atWwv.stop(); flush(); closeWindow(); }
   bool isRunning() const override { return atWwv.isRunning(); }
   bool setDetector(airtime::real hz, int64_t bus) override { return atWwv.setDetector(hz, bus); }
   bool setSubDetector(airtime::real hz, int64_t bus) override { return atWwv.setSubDetector(hz, bus); }
@@ -247,41 +254,61 @@ class AtRawWwv : public airtime::IWwvSampler {
   bool nextPower(int64_t* mono_us, airtime::real* power) override
   {
     if(!atWwv.nextPower(mono_us, power)) return false;
-    record(*mono_us, *power, m_, &mn_, sizeof(m_));
+    record(*mono_us, *power, false);
     return true;
   }
   bool nextSubPower(int64_t* mono_us, airtime::real* power) override
   {
     if(!atWwv.nextSubPower(mono_us, power)) return false;
-    record(*mono_us, *power, s_, &sn_, sizeof(s_));
+    record(*mono_us, *power, true);
     return true;
   }
 
+  // The last few windows, analysed in the radio, oldest first. Field lesson
+  // 2026-09-14: the laptop's USB cable drowns WWV in RFI at the big antenna,
+  // so a window has to be judged with the cable out and read back afterwards.
+  int summaries() const { return nsum_; }
+  const char *summary(int i) const { return sum_[(sum_next_ + kSums - nsum_ + i) % kSums]; }
+
  private:
+  static constexpr int kSums = 4;
   static bool logging() { return atApp != nullptr && atApp->directive().wwv_listening; }
 
-  void record(int64_t mono_us, airtime::real power, char *buf, size_t *n, size_t cap)
+  void record(int64_t mono_us, airtime::real power, bool sub)
   {
     if(!logging())
     {
       mn_ = 0;
       sn_ = 0;
       start_us_ = -1;
+      closeWindow();
       return;
     }
+    if(!win_open_) openWindow(mono_us);
+    const int db = dbOf(power);
+    accumulate(mono_us, power, sub, db);
+
     if(start_us_ < 0) start_us_ = mono_us;
     if(mono_us - start_us_ >= 1000000)
     {
       flush();
       start_us_ = mono_us;
     }
+    char *buf = sub ? s_ : m_;
+    size_t *n = sub ? &sn_ : &mn_;
+    const size_t cap = sub ? sizeof(s_) : sizeof(m_);
     if(*n + 3 > cap) return;
+    buf[(*n)++] = '0' + db / 10;
+    buf[(*n)++] = '0' + db % 10;
+    buf[*n] = '\0';
+  }
+
+  static int dbOf(airtime::real power)
+  {
     int v = power > 0 ? (int)lround(10.0 * log10((double)power / 1e-8)) : 0;
     if(v < 0) v = 0;
     if(v > 99) v = 99;
-    buf[(*n)++] = '0' + v / 10;
-    buf[(*n)++] = '0' + v % 10;
-    buf[*n] = '\0';
+    return v;
   }
 
   void flush()
@@ -295,11 +322,142 @@ class AtRawWwv : public airtime::IWwvSampler {
     s_[0] = '\0';
   }
 
+  // ── Per-window analysis ──────────────────────────────────────────────────
+  // Ticks: 1000 Hz power folded by position in the second (20 ms bins).
+  // Minute tone: 1000 Hz mean power per second of the minute, by the radio's
+  // clock. Code: 100 Hz power folded by position in the second (50 ms bins).
+  // Each is reported as its strongest bin over the median bin: ~1.0-1.2 is
+  // noise, a real tick or tone stands clearly above that.
+  void openWindow(int64_t mono_us)
+  {
+    win_open_ = true;
+    win_start_us_ = mono_us;
+    win_last_us_ = mono_us;
+    win_start_utc_s_ = atApp->arbiter().utcAt(mono_us) / 1000000;
+    win_band_ = (long)atApp->directive().wwv_band_khz;
+    win_mk0_ = atApp->wwvMarker().diag().markers;
+    for(int i = 0; i < 50; i++) { f1_[i] = 0; c1_[i] = 0; }
+    for(int i = 0; i < 20; i++) { f2_[i] = 0; c2_[i] = 0; }
+    for(int i = 0; i < 60; i++) { fs_[i] = 0; cs_[i] = 0; }
+    for(int i = 0; i < 100; i++) hist_[i] = 0;
+    nhist_ = 0;
+  }
+
+  void accumulate(int64_t mono_us, airtime::real power, bool sub, int db)
+  {
+    win_last_us_ = mono_us;
+    const int64_t ph = ((mono_us % 1000000) + 1000000) % 1000000;
+    if(sub)
+    {
+      const int k = (int)(ph / 50000);
+      f2_[k] += power;
+      c2_[k]++;
+      return;
+    }
+    const int k = (int)(ph / 20000);
+    f1_[k] += power;
+    c1_[k]++;
+    int64_t sec = (atApp->arbiter().utcAt(mono_us) / 1000000) % 60;
+    if(sec < 0) sec += 60;
+    fs_[sec] += power;
+    cs_[sec]++;
+    hist_[db]++;
+    nhist_++;
+  }
+
+  // Strongest bin over the median bin; *at gets the strongest bin's index and
+  // *next_at / *next the runner-up, when asked for.
+  static double foldRatio(const double *f, const uint32_t *c, int n, int *at,
+                          int *next_at = nullptr, double *next = nullptr)
+  {
+    double v[60];
+    double mean[60];
+    int k = 0;
+    *at = -1;
+    int second = -1;
+    for(int i = 0; i < n; i++)
+    {
+      mean[i] = c[i] ? f[i] / c[i] : 0.0;
+      if(!c[i]) continue;
+      v[k++] = mean[i];
+      if(*at < 0 || mean[i] > mean[*at]) { second = *at; *at = i; }
+      else if(second < 0 || mean[i] > mean[second]) second = i;
+    }
+    if(k == 0 || *at < 0) return 0.0;
+    std::sort(v, v + k);
+    const double med = v[k / 2];
+    if(med <= 0) return 0.0;
+    if(next_at) *next_at = second;
+    if(next) *next = second >= 0 ? mean[second] / med : 0.0;
+    return mean[*at] / med;
+  }
+
+  int percentile(double p) const
+  {
+    if(nhist_ == 0) return 0;
+    const uint32_t want = (uint32_t)(p * (nhist_ - 1));
+    uint32_t acc = 0;
+    for(int i = 0; i < 100; i++)
+    {
+      acc += hist_[i];
+      if(acc > want) return i;
+    }
+    return 99;
+  }
+
+  void closeWindow()
+  {
+    if(!win_open_) return;
+    win_open_ = false;
+    const long secs = (long)((win_last_us_ - win_start_us_) / 1000000);
+    if(secs < 30 || atApp == nullptr) return;
+
+    int tick_at = -1, code_at = -1, min_at = -1, min_next_at = -1;
+    double min_next = 0.0;
+    const double tick = foldRatio(f1_, c1_, 50, &tick_at);
+    const double code = foldRatio(f2_, c2_, 20, &code_at);
+    const double minute = foldRatio(fs_, cs_, 60, &min_at, &min_next_at, &min_next);
+    int maxdb = 0;
+    for(int i = 0; i < 100; i++) if(hist_[i]) maxdb = i;
+    const unsigned long mk = (unsigned long)(atApp->wwvMarker().diag().markers - win_mk0_);
+
+    int64_t sod = win_start_utc_s_ % 86400;
+    if(sod < 0) sod += 86400;
+    snprintf(sum_[sum_next_], sizeof(sum_[0]),
+             "%02d:%02dZ %ld kHz %lds vol %d | tick x%.2f | minute :%02d x%.2f, :%02d x%.2f"
+             " | code x%.2f | dB p50 %d p99 %d max %d | tones %lu",
+             (int)(sod / 3600), (int)(sod / 60 % 60), win_band_, secs, (int)kWwvListenVolume,
+             tick, min_at < 0 ? 0 : min_at, minute, min_next_at < 0 ? 0 : min_next_at, min_next,
+             code, percentile(0.5), percentile(0.99), maxdb, mk);
+    sum_next_ = (sum_next_ + 1) % kSums;
+    if(nsum_ < kSums) nsum_++;
+    Serial.printf("  win[%s]\n", sum_[(sum_next_ + kSums - 1) % kSums]);
+  }
+
   char m_[2 * 64 + 1] = {};
   char s_[2 * 32 + 1] = {};
   size_t mn_ = 0;
   size_t sn_ = 0;
   int64_t start_us_ = -1;
+
+  bool win_open_ = false;
+  int64_t win_start_us_ = 0;
+  int64_t win_last_us_ = 0;
+  int64_t win_start_utc_s_ = 0;
+  long win_band_ = 0;
+  uint32_t win_mk0_ = 0;
+  double f1_[50] = {};
+  uint32_t c1_[50] = {};
+  double f2_[20] = {};
+  uint32_t c2_[20] = {};
+  double fs_[60] = {};
+  uint32_t cs_[60] = {};
+  uint32_t hist_[100] = {};
+  uint32_t nhist_ = 0;
+
+  char sum_[kSums][200] = {};
+  int sum_next_ = 0;
+  int nsum_ = 0;
 };
 static AtRawWwv atRawWwv;
 static uint8_t atUserVolume = kWwvListenVolume;  // the operator's own setting
@@ -1267,6 +1425,8 @@ int atLocalOffsetS()
 // The adapters and the app are statics in this file. Rather than make them
 // globals so one page can read them, hand out exactly what it asks for.
 const airtime::AirTimeApp *airtimeApp() { return atApp; }
+int airtimeWindowSummaryCount() { return atRawWwv.summaries(); }
+const char *airtimeWindowSummary(int i) { return atRawWwv.summary(i); }
 
 // "Set radio clock from this phone" on the web app: the phone's own clock,
 // network-disciplined almost everywhere on earth, taken once as a hand-set.
@@ -1704,6 +1864,15 @@ void airtimeLoop()
     // known clock, is the empirical check of the bit map that the decoder
     // header promises: one capture and the table is confirmed or corrected
     // without guesswork. 0/1/M/? = zero, one, position marker, unreadable.
+    // The in-radio window summaries, once a minute: plug the cable in after an
+    // unplugged test and they arrive within sixty seconds.
+    static uint32_t lastWinPrint = 0;
+    if(nowMs - lastWinPrint >= 60000)
+    {
+      lastWinPrint = nowMs;
+      for(int i = 0; i < atRawWwv.summaries(); i++)
+        Serial.printf("  win[%s]\n", atRawWwv.summary(i));
+    }
     static uint32_t lastFramesSeen = 0;
     if(tcd.framesSeen() != lastFramesSeen)
     {

@@ -61,6 +61,8 @@ using fs::FS;
 
 // Supplied by AirTimeMode.cpp — the live app, or nullptr before setup runs.
 const airtime::AirTimeApp *airtimeApp();
+int airtimeWindowSummaryCount();
+const char *airtimeWindowSummary(int i);
 uint32_t airtimeRdsAccepted();
 uint32_t airtimeRdsRejected();
 uint32_t airtimeRdsNotFm();
@@ -627,6 +629,13 @@ static void atHandleStatus()
          "That is the device working correctly, not a fault; it comes back by "
          "itself when the window closes.</p>");
 
+  // The radio's own analysis of its last WWV windows (AirTimeMode.cpp, AtRawWwv):
+  // readable on the phone after a test done without the laptop's cable.
+  atSend("<h2>Last WWV windows</h2><table>");
+  if(airtimeWindowSummaryCount() == 0) atSend("<tr><td>none since power-on</td></tr>");
+  for(int i = 0; i < airtimeWindowSummaryCount(); i++)
+    atRowf("<tr><td>%s</td></tr>", airtimeWindowSummary(i));
+  atSend("</table>");
   atSend("</body></html>");
   atSend("");   // terminate the chunked response
 }
