@@ -203,6 +203,15 @@ static const size_t kNetCount = sizeof(kNets) / sizeof(kNets[0]);
 // window listens louder. Headroom: with WiFi down the ADC swung 250-600 of
 // ~4000 counts at 35 (wwv_sampler.h).
 static const uint8_t kWwvListenVolume = 50;
+// Silence (owner's request 2026-09-14). On FM in Clock mode the audio is muted:
+// the time arrives as RDS data and needs no sound. Whether a WWV window can be
+// silent is unknown — the tap may sit on the amplifier's output — so windows
+// alternate the speaker amplifier off and on, and each window's record says
+// which (see airtimeLoop and AtRawWwv::closeWindow).
+static bool atWindowSpeakerOff = false;
+static uint32_t atWindowCount = 0;
+static bool atFmMuted = false;
+static bool atAmpOn = true;
 
 static airtime_esp32::EspMonotonicClock atMono;
 static airtime_esp32::Esp32RdsSource atRds;
@@ -406,9 +415,10 @@ class AtRawWwv : public airtime::IWwvSampler {
     int64_t sod = win_start_utc_s_ % 86400;
     if(sod < 0) sod += 86400;
     snprintf(sum_[sum_next_], sizeof(sum_[0]),
-             "%02d:%02dZ %ld kHz %lds vol %d | tick x%.2f | minute :%02d x%.2f, :%02d x%.2f"
+             "%02d:%02dZ %ld kHz %lds vol %d spk %s | tick x%.2f | minute :%02d x%.2f, :%02d x%.2f"
              " | code x%.2f | dB p50 %d p99 %d max %d | tones %lu",
              (int)(sod / 3600), (int)(sod / 60 % 60), win_band_, secs, (int)kWwvListenVolume,
+             atWindowSpeakerOff ? "off" : "on",
              tick, min_at < 0 ? 0 : min_at, minute, min_next_at < 0 ? 0 : min_next_at, min_next,
              code, percentile(0.5), percentile(0.99), maxdb, mk);
     sum_next_ = (sum_next_ + 1) % kSums;
@@ -1776,14 +1786,57 @@ void airtimeLoop()
   const bool listening = atApp->directive().wwv_listening;
   if(listening != atWasListening)
   {
-    if(listening) { atUserVolume = volume; rx.setVolume(kWwvListenVolume); }
-    else          { volume = atUserVolume; rx.setVolume(volume); }
+    if(listening)
+    {
+      atUserVolume = volume;
+      rx.setVolume(kWwvListenVolume);
+      // Test: alternate windows with the speaker amplifier off. The window's
+      // record says which, beside how clearly it heard WWV.
+      atWindowSpeakerOff = (++atWindowCount % 2) == 1;
+    }
+    else
+    {
+      volume = atUserVolume;
+      rx.setVolume(volume);
+      atWindowSpeakerOff = false;
+    }
     atWasListening = listening;
   }
   else if(listening && volume != atUserVolume)
   {
     atUserVolume = volume;            // they turned it; apply it afterwards
     rx.setVolume(kWwvListenVolume);   // ...but not to the tap, not right now
+  }
+
+  // Clock mode on FM is silent; a WWV window unmutes the chip (the detector
+  // needs its audio) and, on alternate windows, switches the speaker amplifier
+  // off. Only Clock mode: Radio, CW and the waterfall are the operator's to
+  // hear. Re-asserted once a second because stock code (band changes, muteOn)
+  // can undo it; re-writing the same level is not a pulse on PIN_AMP_EN.
+  {
+    static uint32_t lastAudioAssert = 0;
+    const uint32_t audioNow = millis();
+    if(airtimeOwnsDial())
+    {
+      const bool wantMute = !listening;
+      const bool wantAmp = !(listening && atWindowSpeakerOff);
+      if(wantMute != atFmMuted || wantAmp != atAmpOn || audioNow - lastAudioAssert >= 1000)
+      {
+        rx.setAudioMute(wantMute);
+        if(PIN_AMP_EN >= 0) digitalWrite(PIN_AMP_EN, wantAmp ? HIGH : LOW);
+        atFmMuted = wantMute;
+        atAmpOn = wantAmp;
+        lastAudioAssert = audioNow;
+      }
+    }
+    else if(atFmMuted || !atAmpOn)
+    {
+      // Leaving Clock mode: the operator's radio is audible again.
+      rx.setAudioMute(false);
+      if(PIN_AMP_EN >= 0) digitalWrite(PIN_AMP_EN, HIGH);
+      atFmMuted = false;
+      atAmpOn = true;
+    }
   }
 
   const uint32_t nowMs = millis();
