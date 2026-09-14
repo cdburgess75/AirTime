@@ -766,8 +766,16 @@ void AirTimeApp::noteFmSourceTime(SourceRow* row, uint16_t pi, int64_t err_us,
                          (anchor_ == Anchor::Fm && pi != anchor_pi_);
   const bool confirmable =
       different && arbiter_.hasSourceFix() && arbiter_.isSynced(now);
-  sources_.noteTime(row, err_us, confirmable);
   const int64_t mag = err_us < 0 ? -err_us : err_us;
+  // One unconfirmed station cannot convict another. Two single stations that
+  // disagree say one of them is wrong, not which: on the owner's radio 106.1,
+  // about 3 s slow, set the clock and then marked 98.9 Red for being right.
+  // Agreement still confirms both; disagreement waits for a third source.
+  if (confirmable && anchor_ == Anchor::Fm && mag > cfg_.rds_vote_tolerance_us) {
+    sources_.noteTime(row, err_us, false);
+    return;
+  }
+  sources_.noteTime(row, err_us, confirmable);
   if (!confirmable || mag > cfg_.rds_vote_tolerance_us) return;
   // Agreement runs both ways: the source the clock stands on is confirmed too.
   if (anchor_ == Anchor::Fm) sources_.noteConfirmed(sources_.findPi(anchor_pi_));
@@ -782,15 +790,22 @@ void AirTimeApp::noteWwvSourceTime(int64_t err_us) {
   learned_dirty_ = true;
   // WWV is one station on every band: only FM can confirm it.
   const bool different = anchor_ == Anchor::Fm || anchor_ == Anchor::Multi;
-  sources_.noteTime(row, err_us, different);
   const int64_t mag = err_us < 0 ? -err_us : err_us;
   if (different && mag <= cfg_.rds_vote_tolerance_us) {
+    sources_.noteTime(row, err_us, true);
     if (anchor_ == Anchor::Fm) sources_.noteConfirmed(sources_.findPi(anchor_pi_));
     anchor_ = Anchor::Multi;
-  } else if (anchor_ == Anchor::None || anchor_ == Anchor::Manual) {
-    anchor_ = Anchor::Wwv;
-    anchor_wwv_khz_ = khz;
+    return;
   }
+  // Only ACCEPTED fixes arrive here, so where this one disagreed with the old
+  // anchor the clock now stands on WWV: its markers seconded each other, or it
+  // carried the date. It is heard, not judged against the source it just
+  // overruled — that would mark WWV Red for being right whenever the station
+  // that set the clock was the wrong one. The overruled source is judged by
+  // its own next report, against a clock that is now WWV's.
+  sources_.noteTime(row, err_us, false);
+  anchor_ = Anchor::Wwv;
+  anchor_wwv_khz_ = khz;
 }
 
 void AirTimeApp::orderStationsByRating() {

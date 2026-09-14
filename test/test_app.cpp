@@ -1576,6 +1576,59 @@ AT_TEST(app_yellow_keeps_listening_until_wwv_confirms) {
   AT_CHECK((app.displayState().sources & kSrcWwv) != 0);
 }
 
+// Two single stations that disagree: one is wrong, and nothing yet says which,
+// so neither may be marked Red. On the owner's radio 106.1 ran about 3 s slow,
+// set the clock, and then convicted 98.9 — which was the right one.
+AT_TEST(app_one_unconfirmed_station_cannot_convict_another) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation slow{10610, 0x829D, true, 3 * kS};
+  FakeStation right{9890, 0x8B94, true, 0};
+  sim.rds.stations = {slow, right};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10610, 9890};
+  app.setFmStations(fm, 2);
+  app.begin();
+  sim.advance(20 * kMin, &app);
+
+  const SourceRow* s = app.sources().find(SourceKind::Fm, 10610);
+  const SourceRow* r = app.sources().find(SourceKind::Fm, 9890);
+  AT_CHECK(s != nullptr && r != nullptr);
+  AT_CHECK(app.sources().rating(*s) != Rating::Red);
+  AT_CHECK(app.sources().rating(*r) != Rating::Red);
+  AT_CHECK(!app.displayState().confirmed);
+}
+
+// The same two stations with WWV on the air: WWV breaks the tie. The clock
+// ends on the right time, the slow station is Red, and the right one stands.
+AT_TEST(app_wwv_breaks_a_tie_between_disagreeing_stations) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  FakeStation slow{10610, 0x829D, true, 3 * kS};
+  FakeStation right{9890, 0x8B94, true, 0};
+  sim.rds.stations = {slow, right};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10610, 9890};
+  app.setFmStations(fm, 2);
+  app.begin();
+  sim.advance(90 * kMin, &app, 10000);
+
+  const SourceRow* s = app.sources().find(SourceKind::Fm, 10610);
+  const SourceRow* r = app.sources().find(SourceKind::Fm, 9890);
+  AT_CHECK(s != nullptr && r != nullptr);
+  AT_CHECK(app.sources().rating(*s) == Rating::Red);
+  AT_CHECK(app.sources().rating(*r) != Rating::Red);
+  AT_CHECK(app.displayState().confirmed);
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 500000);
+}
+
 // A laptop is never handed time that nothing has confirmed. One station, five
 // minutes slow like 92.3 on the owner's dial, sets the radio's clock — but NTP
 // carries the alarm flag until a different source agrees.
