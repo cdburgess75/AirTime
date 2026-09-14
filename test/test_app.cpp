@@ -1073,8 +1073,11 @@ AT_TEST(app_spectrum_mode_owns_the_tap_and_hands_it_back) {
   app.setMode(OpMode::Clock);
   AT_CHECK(!sim.wwv.isRunning());    // released synchronously on exit
   AT_CHECK(sim.tuner.onFm(9110));
-  sim.advance(2 * kMin, &app);
+  // One station's time is still unconfirmed, so a WWV window is due at once
+  // and may take the AP for its eight minutes. After that, it is back.
+  sim.advance(12 * kMin, &app);
   AT_CHECK(sim.wifi.isUp());
+  AT_CHECK(!sim.adc_wifi_conflict);
 }
 
 // CW blocks must never reach the marker detector. They are 5 ms of a beat note
@@ -1541,6 +1544,36 @@ AT_TEST(app_phone_set_claims_about_a_second) {
   const int64_t now = sim.clock.mono_us;
   AT_CHECK(app.arbiter().isSet());
   AT_CHECK(app.arbiter().uncertaintyUs(now) <= 1100000);
+}
+
+// One honest FM station sets the clock and it is Yellow. The owner's radio
+// then sat Yellow all day, trying WWV three minutes an hour. Until something
+// confirms the time, the windows stay frequent, and WWV turns it Green.
+AT_TEST(app_yellow_keeps_listening_until_wwv_confirms) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  FakeStation honest{10470, 0x6E47, true, 0};
+  sim.rds.stations = {honest};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10470};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  sim.advance(3 * kMin, &app);
+  AT_CHECK(app.displayState().synced);
+  AT_CHECK(!app.displayState().confirmed);   // Yellow: one station's word
+
+  bool confirmed = false;
+  for (int i = 0; i < 30 && !confirmed; ++i) {
+    sim.advance(kMin, &app, 10000);
+    confirmed = app.displayState().confirmed;
+  }
+  AT_CHECK(confirmed);
+  AT_CHECK((app.displayState().sources & kSrcWwv) != 0);
 }
 
 // A laptop is never handed time that nothing has confirmed. One station, five

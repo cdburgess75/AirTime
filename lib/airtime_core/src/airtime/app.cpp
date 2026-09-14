@@ -407,9 +407,13 @@ void AirTimeApp::resetTimecodeChain() {
 void AirTimeApp::loop() {
   const int64_t now = deps_.clock->nowUs();
 
-  // The scheduler paces itself by whether anything has fixed the clock yet:
-  // unseeded, the listen windows are the acquisition and come accordingly.
-  sched_.setSeeded(arbiter_.hasSourceFix());
+  // The scheduler paces itself by whether the time is CONFIRMED, not merely
+  // set. One FM station, or a phone, gives a time nothing has checked; the
+  // hourly three-minute rhythm then left the owner's radio Yellow all day,
+  // with WWV barely tried. Until a second source agrees, the listen windows
+  // are still the acquisition, and NTP flags the time unusable meanwhile, so
+  // the windows cost nothing.
+  sched_.setSeeded(arbiter_.hasSourceFix() && anchor_ == Anchor::Multi);
 
   // FM that has never delivered a clock time here does not get the whole
   // five-minute boot hunt: two dwells, then HF. The owner's radio sat on FM for
