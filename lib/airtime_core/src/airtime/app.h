@@ -102,11 +102,24 @@ struct AppConfig {
   // coincidence. Such a pair is submitted with independent_support = 2, which
   // the arbiter's rule-3 gate already accepts — no arbiter change. dt spans
   // one to three minutes so a missed marker (band step mid-window, hour tone
-  // at 1500 Hz) doesn't break the pair; it does NOT reach across listen
-  // windows, where RDS may have moved the clock in between.
+  // at 1500 Hz) doesn't break the pair. Across listen windows RDS may have
+  // moved the clock in between, so offsets are not comparable there; see
+  // wwv_pair_span_* for how those pair instead.
   int64_t wwv_pair_min_dt_us = 50LL * 1000000;
   int64_t wwv_pair_max_dt_us = 190LL * 1000000;
   int64_t wwv_pair_agree_us = 120000;
+
+  // ...and ACROSS windows, on the minute grid. Two genuine markers sit a whole
+  // number of minutes apart in true time, whatever RDS did to the clock
+  // between them, and the crystal (under this many ppm) cannot blur that by
+  // more than wwv_pair_agree_us plus ppm x gap: at 90 min, about 390 ms, so a
+  // chance agreement is about 1%, and only for bursts that already passed the
+  // 700-900 ms gate. At the owner's QTH a fading band gave one marker per
+  // window, never two, and a 3.3 s correction waited all day; with windows
+  // 23 min apart, one or two silent windows put genuine markers 46-69 min
+  // apart, so the span has to reach past that.
+  int64_t wwv_pair_span_max_us = 90LL * 60 * 1000000;
+  int64_t wwv_pair_span_ppm = 50;
 
   // Learn each station's constant lateness only while the clock is better than
   // RDS itself could have made it — in practice, only just after WWV has
@@ -448,6 +461,7 @@ class AirTimeApp {
   bool have_prev_wwv_ = false;
   int64_t prev_wwv_mono_ = 0;
   int64_t prev_wwv_offset_us_ = 0;
+  int64_t prev_wwv_utc_us_ = 0;     // the minute boundary it implied, absolute
   // When WWV last actually moved the clock — the only moments at which a
   // station's disagreement is a measurement of the STATION rather than of our
   // own accumulated drift. See station_bias_learn_window_us.

@@ -178,6 +178,7 @@ class FakeWwvSampler : public IWwvSampler {
   int64_t block_us = 20000;
   int64_t chain_delay_us = 0;   // SI4732 DSP + amp + ADC latency
   int64_t marker_us = 800000;   // WWV minute marker length
+  int marker_every_min = 1;     // >1: only every Nth minute's marker is heard (a fading band)
   // Defaults are the levels MEASURED on the owner's ATS Mini (Milestone 0 §6),
   // normalised by half ADC scale — not round numbers. Simulating at realistic
   // levels is what catches threshold bugs like the min_power default that was
@@ -317,6 +318,10 @@ class FakeWwvSampler : public IWwvSampler {
     // The marker is heard chain_delay_us after it is transmitted.
     int64_t rel = (true_utc_us - chain_delay_us) % 60000000;
     if (rel < 0) rel += 60000000;
+    if (marker_every_min > 1) {
+      const int64_t minute = (true_utc_us - chain_delay_us - rel) / 60000000;
+      if (minute % marker_every_min != 0) return noise_power;
+    }
     return rel < marker_us ? tone_power : noise_power;
   }
 

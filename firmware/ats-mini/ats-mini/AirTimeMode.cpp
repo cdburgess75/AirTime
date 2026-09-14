@@ -560,6 +560,13 @@ static void atTuneWwv(int32_t khz, void*)
   rx.setBandwidth(2, 1);          // 3 kHz — the 1000 Hz marker passes cleanly
   doAgc(0);                       // AM's AGC table, for the same reason
   unloadSSB();                    // setAM() power-cycles too
+  // Weak signals are the whole job here. setAM() power-cycles the chip back to
+  // its 8 dB soft mute, which turns faint WWV down, and to whatever AVC was
+  // last sent. Field report 2026-09-14: ticks faint but audible in Radio mode
+  // (soft mute 4 dB), static only in the window. Radio mode reapplies the
+  // operator's own settings through useBand().
+  rx.setAmSoftMuteMaxAttenuation(0);
+  rx.setAvcAmMaxGain(48);
 }
 
 static int atRdsRssi(void*)

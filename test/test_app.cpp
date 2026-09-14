@@ -1692,6 +1692,73 @@ AT_TEST(app_listen_now_during_the_fm_hunt_starts_wwv) {
   AT_CHECK(!sim.adc_wifi_conflict);
 }
 
+// A fading band gives one minute marker per listen window, never two in the
+// same one: what the owner's radio got at the big antenna. Markers from
+// different windows must still pair, on the minute grid, and correct a clock
+// that one slow FM station set 3.3 s late.
+AT_TEST(app_wwv_markers_pair_across_listen_windows) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  sim.wwv.marker_every_min = 17;        // at most one per 8-minute window
+  sim.wwv.sub_carrier_present = false;  // the marker path alone
+  FakeStation slow{10610, 0x829D, true, 3300000};
+  sim.rds.stations = {slow};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10610};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  sim.advance(5 * kMin, &app);
+  AT_CHECK(iabs(sim.clockErrorUs(app)) > 3000000);   // on the slow station's time
+
+  bool corrected = false;
+  for (int i = 0; i < 180 && !corrected; ++i) {
+    sim.advance(kMin, &app, 10000);
+    corrected = iabs(sim.clockErrorUs(app)) < 500000;
+  }
+  AT_CHECK(corrected);
+  AT_CHECK((app.displayState().sources & kSrcWwv) != 0);
+}
+
+// A station rated Red before WWV spoke is retried as soon as WWV moves the
+// clock, not six hours later. On the owner's radio that is 98.9: right all
+// along, Red against 106.1's slow clock, and the second source that turns the
+// clock Green once WWV has corrected it.
+AT_TEST(app_red_stations_are_rechecked_after_wwv_corrects_the_clock) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.sub_carrier_present = false;
+  FakeStation slow{10610, 0x829D, true, 3300000};
+  FakeStation right{9890, 0x8B94, false, 0};    // silent at first: goes Red
+  sim.rds.stations = {slow, right};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10610, 9890};
+  app.setFmStations(fm, 2);
+  app.begin();
+
+  sim.advance(20 * kMin, &app, 10000);
+  const SourceRow* r = app.sources().find(SourceKind::Fm, 9890);
+  AT_CHECK(r != nullptr && app.sources().rating(*r) == Rating::Red);
+
+  // Now the right station is on the air and WWV comes in.
+  sim.rds.stations[1].sends_ct = true;
+  sim.wwv.propagating_bands = {5000, 10000, 15000};
+  bool green = false;
+  for (int i = 0; i < 90 && !green; ++i) {
+    sim.advance(kMin, &app, 10000);
+    green = app.displayState().confirmed;
+  }
+  AT_CHECK(green);
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 500000);
+}
+
 // A laptop is never handed time that nothing has confirmed. One station, five
 // minutes slow like 92.3 on the owner's dial, sets the radio's clock — but NTP
 // carries the alarm flag until a different source agrees.

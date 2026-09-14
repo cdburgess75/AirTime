@@ -670,6 +670,16 @@ void AirTimeApp::pollWwv(int64_t now) {
       if (dt >= cfg_.wwv_pair_min_dt_us && dt <= cfg_.wwv_pair_max_dt_us &&
           dof <= cfg_.wwv_pair_agree_us) {
         f.independent_support = 2;
+      } else if (dt > cfg_.wwv_pair_max_dt_us && dt <= cfg_.wwv_pair_span_max_us) {
+        // Across windows: compare the minute grid, not the offsets. Both
+        // implied times are whole-minute boundaries; genuine markers are as far
+        // apart in true time as the monotonic gap says, to within the crystal.
+        const int64_t du = f.utc_us - prev_wwv_utc_us_;
+        int64_t miss = du - dt;
+        if (miss < 0) miss = -miss;
+        const int64_t tol = cfg_.wwv_pair_agree_us +
+                            dt / 1000000 * cfg_.wwv_pair_span_ppm;
+        if (du >= 60LL * 1000000 && miss <= tol) f.independent_support = 2;
       }
     }
 
@@ -688,9 +698,10 @@ void AirTimeApp::pollWwv(int64_t now) {
       noteWwvSourceTime(off);
       sched_.onWwvFix(now);    // only an ACCEPTED fix may end the window
     } else {
-      have_prev_wwv_ = true;   // hold the window; next minute decides
+      have_prev_wwv_ = true;   // held: the next minute, or a later window, decides
       prev_wwv_mono_ = m.leading_edge_us;
       prev_wwv_offset_us_ = off;
+      prev_wwv_utc_us_ = f.utc_us;
     }
   }
 
@@ -834,6 +845,13 @@ void AirTimeApp::noteWwvSourceTime(int64_t err_us) {
   sources_.noteTime(row, err_us, false);
   anchor_ = Anchor::Wwv;
   anchor_wwv_khz_ = khz;
+  // The clock just moved onto WWV. Stations rated Red against the old clock
+  // may have been the right ones (the owner's 98.9): retry them now rather
+  // than at the six-hourly recheck, so one that agrees turns the clock Green.
+  if (mag > cfg_.rds_vote_tolerance_us) {
+    const int64_t now = deps_.clock->nowUs();
+    for (std::size_t i = 0; i < kMaxStations; ++i) red_tried_[i] = now - cfg_.red_recheck_us;
+  }
 }
 
 void AirTimeApp::orderStationsByRating() {
