@@ -222,6 +222,86 @@ static airtime_esp32::Esp32WiFiControl atWifi;
 static airtime_esp32::NvsTimeStore atStore;
 static airtime::AirTimeApp* atApp = nullptr;
 static bool atWasListening = false;
+
+// ── Raw WWV levels in the serial log (diagnostic) ───────────────────────────
+// Field report 2026-09-14: WWV plainly audible in the speaker, yet the 1000 Hz
+// detector saw only 20 ms blips and the 100 Hz reader barely 1.5x contrast.
+// Rather than guess thresholds a third time, this prints what the detectors
+// actually receive, so one listen window shows the real shape of the minute
+// tone, the ticks and the code pulses. It sits between the app and the
+// sampler and changes nothing: every call is forwarded as-is.
+//
+// While a listen window is open, one line per second of the radio's own
+// monotonic time: raw[t=<ms> m=<1000 Hz blocks> s=<100 Hz blocks>], each block
+// two digits of 10*log10(power / 1e-8), clamped 00..99. 1e-8 sits below the
+// quietest floor the radio has reported; +10 is ten times the power.
+class AtRawWwv : public airtime::IWwvSampler {
+ public:
+  void tuneKhz(int32_t khz) override { atWwv.tuneKhz(khz); }
+  void start() override { atWwv.start(); }
+  void stop() override { atWwv.stop(); flush(); }
+  bool isRunning() const override { return atWwv.isRunning(); }
+  bool setDetector(airtime::real hz, int64_t bus) override { return atWwv.setDetector(hz, bus); }
+  bool setSubDetector(airtime::real hz, int64_t bus) override { return atWwv.setSubDetector(hz, bus); }
+
+  bool nextPower(int64_t* mono_us, airtime::real* power) override
+  {
+    if(!atWwv.nextPower(mono_us, power)) return false;
+    record(*mono_us, *power, m_, &mn_, sizeof(m_));
+    return true;
+  }
+  bool nextSubPower(int64_t* mono_us, airtime::real* power) override
+  {
+    if(!atWwv.nextSubPower(mono_us, power)) return false;
+    record(*mono_us, *power, s_, &sn_, sizeof(s_));
+    return true;
+  }
+
+ private:
+  static bool logging() { return atApp != nullptr && atApp->directive().wwv_listening; }
+
+  void record(int64_t mono_us, airtime::real power, char *buf, size_t *n, size_t cap)
+  {
+    if(!logging())
+    {
+      mn_ = 0;
+      sn_ = 0;
+      start_us_ = -1;
+      return;
+    }
+    if(start_us_ < 0) start_us_ = mono_us;
+    if(mono_us - start_us_ >= 1000000)
+    {
+      flush();
+      start_us_ = mono_us;
+    }
+    if(*n + 3 > cap) return;
+    int v = power > 0 ? (int)lround(10.0 * log10((double)power / 1e-8)) : 0;
+    if(v < 0) v = 0;
+    if(v > 99) v = 99;
+    buf[(*n)++] = '0' + v / 10;
+    buf[(*n)++] = '0' + v % 10;
+    buf[*n] = '\0';
+  }
+
+  void flush()
+  {
+    if(mn_ == 0 && sn_ == 0) return;
+    Serial.printf("  raw[t=%lld m=%s s=%s]\n", (long long)(start_us_ / 1000),
+                  mn_ ? m_ : "-", sn_ ? s_ : "-");
+    mn_ = 0;
+    sn_ = 0;
+    m_[0] = '\0';
+    s_[0] = '\0';
+  }
+
+  char m_[2 * 64 + 1] = {};
+  char s_[2 * 32 + 1] = {};
+  size_t mn_ = 0;
+  size_t sn_ = 0;
+  int64_t start_us_ = -1;
+};
+static AtRawWwv atRawWwv;
 static uint8_t atUserVolume = kWwvListenVolume;  // the operator's own setting
 static uint32_t atLastReport = 0;
 
@@ -1057,7 +1137,7 @@ void airtimeSetup()
   airtime::AppDeps deps;
   deps.clock = &atMono;
   deps.rds = &atRds;
-  deps.wwv = &atWwv;
+  deps.wwv = &atRawWwv;   // forwards to atWwv; logs raw levels during windows
   deps.wifi = &atWifi;
   deps.store = &atStore;
 
