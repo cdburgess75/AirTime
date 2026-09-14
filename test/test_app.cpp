@@ -1759,6 +1759,83 @@ AT_TEST(app_red_stations_are_rechecked_after_wwv_corrects_the_clock) {
   AT_CHECK(iabs(sim.clockErrorUs(app)) < 500000);
 }
 
+// Carried somewhere else: the saved frequencies now carry other stations. Two
+// of them answering with strange ID codes mean a move; the radio surveys at
+// once, and the old ratings do not follow the frequencies.
+AT_TEST(app_notices_a_move_and_surveys_the_new_place) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a1{10610, 0x829D, true, 0};
+  FakeStation a2{9890, 0x8B94, true, 0};
+  sim.rds.stations = {a1, a2};
+
+  AppConfig cfg;
+  cfg.auto_survey = true;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10610, 9890};
+  app.setFmStations(fm, 2);
+  app.begin();
+  sim.advance(15 * kMin, &app);
+  const SourceRow* ra = app.sources().find(SourceKind::Fm, 10610);
+  AT_CHECK(ra != nullptr && ra->pi == 0x829D);
+  AT_CHECK_EQ(app.placeMoves(), 0u);
+
+  FakeStation b1{10610, 0x1111, true, 0};
+  FakeStation b2{9890, 0x2222, true, 0};
+  sim.rds.stations = {b1, b2};
+  bool surveyed = false;
+  for (int i = 0; i < 20 * 60 && !surveyed; ++i) {
+    sim.advance(kS, &app);
+    surveyed = app.surveying();
+  }
+  AT_CHECK(surveyed);
+  AT_CHECK_EQ(app.placeMoves(), 1u);
+  const SourceRow* rb = app.sources().find(SourceKind::Fm, 10610);
+  AT_CHECK(rb == nullptr || rb->pi != 0x829D);
+}
+
+// Home again: the place saved on leaving is recognised by a station's
+// frequency and ID code, and its list and ratings come back, including the
+// station that was proven wrong there.
+AT_TEST(app_remembers_a_place_and_restores_it_on_return) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  const std::vector<FakeStation> home = {{10610, 0x829D, true, 0},
+                                         {9890, 0x8B94, true, 0},
+                                         {9230, 0x986D, true, 20 * kMin}};
+  const std::vector<FakeStation> away = {{10610, 0x1111, true, 0},
+                                         {9890, 0x2222, true, 0},
+                                         {9230, 0x3333, true, 0}};
+  sim.rds.stations = home;
+
+  AppConfig cfg;
+  cfg.auto_survey = true;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {10610, 9890, 9230};
+  app.setFmStations(fm, 3);
+  app.begin();
+  sim.advance(25 * kMin, &app);
+  const SourceRow* wrong = app.sources().find(SourceKind::Fm, 9230);
+  AT_CHECK(wrong != nullptr && app.sources().rating(*wrong) == Rating::Red);
+
+  sim.rds.stations = away;
+  for (int i = 0; i < 60 * 60 && app.placeMoves() < 1; ++i) sim.advance(kS, &app);
+  AT_CHECK_EQ(app.placeMoves(), 1u);
+  for (int i = 0; i < 60 * 60 && (app.surveying() || app.stationCount() == 0); ++i) {
+    sim.advance(kS, &app);
+  }
+  AT_CHECK(app.stationCount() > 0);
+  sim.advance(10 * kMin, &app);
+
+  sim.rds.stations = home;
+  for (int i = 0; i < 90 * 60 && app.placeRestores() < 1; ++i) sim.advance(kS, &app);
+  AT_CHECK_EQ(app.placeRestores(), 1u);
+  AT_CHECK_EQ(app.stationCount(), 3u);
+  const SourceRow* back = app.sources().find(SourceKind::Fm, 9230);
+  AT_CHECK(back != nullptr && back->pi == 0x986D &&
+           app.sources().rating(*back) == Rating::Red);
+}
+
 // A laptop is never handed time that nothing has confirmed. One station, five
 // minutes slow like 92.3 on the owner's dial, sets the radio's clock — but NTP
 // carries the alarm flag until a different source agrees.

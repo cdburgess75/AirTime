@@ -284,6 +284,64 @@ AT_TEST(sched_counts_down_to_the_next_phase_change) {
   AT_CHECK_EQ(s.usUntilPhaseChange(20 * kMin), 0);              // never negative
 }
 
+// A window that hears nothing does not reopen on the same favourite band: the
+// next window starts elsewhere. Otherwise one early success pins the radio to
+// one band for good (it sat on 10 MHz all afternoon).
+AT_TEST(sched_after_a_silent_window_the_next_opens_elsewhere) {
+  Scheduler s;
+  s.start(0);
+  s.tick(6 * kMin);
+  s.requestListenNow();
+  s.tick(6 * kMin + kS);
+  const int32_t first = s.currentBandKhz();
+  s.onWwvMarker(1.0f);                       // this band earns credit
+  s.requestServeNow();
+  s.tick(7 * kMin);
+  s.requestListenNow();
+  s.tick(7 * kMin + kS);
+  AT_CHECK_EQ(s.currentBandKhz(), first);    // the band that worked, again
+  s.requestServeNow();                       // ...but this window heard nothing
+  s.tick(8 * kMin);
+  s.requestListenNow();
+  s.tick(8 * kMin + kS);
+  AT_CHECK(s.currentBandKhz() != first);     // so the next one tries another
+}
+
+// Every fourth window samples a band other than the favourite, even while the
+// favourite keeps delivering.
+AT_TEST(sched_every_fourth_window_samples_another_band) {
+  Scheduler s;
+  s.start(0);
+  s.tick(6 * kMin);
+  int64_t t = 6 * kMin;
+  int32_t fav = 0;
+  int elsewhere = 0;
+  for (int w = 1; w <= 8; ++w) {
+    s.requestListenNow();
+    s.tick(t += kS);
+    if (w == 1) fav = s.currentBandKhz();
+    if (s.currentBandKhz() != fav) ++elsewhere;
+    s.onWwvMarker(1.0f);
+    s.requestServeNow();
+    s.tick(t += kMin);
+  }
+  AT_CHECK_EQ(elsewhere, 2);   // windows 4 and 8
+}
+
+// Credit is kept by time of day: the band that works at night is not the one
+// chosen at noon.
+AT_TEST(sched_prefers_the_band_that_works_at_this_hour) {
+  Scheduler s;
+  const uint16_t night[4] = {6, 0, 0, 0};   // 00-05 UTC
+  const uint16_t noon[4] = {0, 0, 6, 0};    // 12-17 UTC
+  AT_CHECK(s.seedBandStats(5000, 6, 1.0f, night));
+  AT_CHECK(s.seedBandStats(15000, 6, 1.0f, noon));
+  s.setUtcHour(2);
+  AT_CHECK_EQ(s.bandStats(s.preferredBandIndex()).khz, 5000);
+  s.setUtcHour(13);
+  AT_CHECK_EQ(s.bandStats(s.preferredBandIndex()).khz, 15000);
+}
+
 // ── The unseeded cadence ────────────────────────────────────────────────────
 // Before any source has fixed the clock, the listen windows ARE the
 // acquisition: sooner (15 min, not 60), longer (8 min, not 3), and with a

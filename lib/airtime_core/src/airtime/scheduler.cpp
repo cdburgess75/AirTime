@@ -71,12 +71,17 @@ std::size_t Scheduler::preferredBandIndex() const {
   std::size_t best = band_idx_;
   int best_n = -1;
   for (std::size_t i = 0; i < band_count_; ++i) {
-    if (bands_[i].successes > best_n) {
-      best_n = bands_[i].successes;
+    if (creditFor(i) > best_n) {
+      best_n = creditFor(i);
       best = i;
     }
   }
   return best;
+}
+
+int Scheduler::creditFor(std::size_t i) const {
+  return utc_block_ >= 0 ? static_cast<int>(bands_[i].by_block[utc_block_])
+                         : bands_[i].successes;
 }
 
 Directive Scheduler::directive() const {
@@ -104,6 +109,7 @@ Directive Scheduler::directive() const {
 }
 
 void Scheduler::enterServing(int64_t mono_us) {
+  if (phase_ == Phase::Listening) last_window_productive_ = band_productive_;
   // A window that heard nothing hands the next one a fresh band. Without this
   // the sweep cannot finish: a 3-minute window holds at most two 2-minute
   // dwells, and every window restarted at the same place, so the third band was
@@ -129,8 +135,21 @@ void Scheduler::enterListening(int64_t mono_us) {
   // cursor alone — enterServing advanced it past whatever was silent last time,
   // and overriding that here is what made the rotation loop over the same two
   // bands forever.
+  //
+  // Two exceptions keep one early success from pinning the radio to one band
+  // for good (it sat on 10 MHz all afternoon): after a window that heard
+  // nothing, the cursor enterServing moved past that band stays put; and every
+  // explore_every-th window samples the next band on purpose.
+  ++windows_opened_;
   const std::size_t pref = preferredBandIndex();
-  if (band_count_ > 0 && bands_[pref].successes > 0) band_idx_ = pref;
+  const bool earned = band_count_ > 0 && creditFor(pref) > 0;
+  const bool sample = cfg_.explore_every > 0 && band_count_ > 1 &&
+                      windows_opened_ % static_cast<uint32_t>(cfg_.explore_every) == 0;
+  if (earned && sample) {
+    band_idx_ = (pref + 1) % band_count_;
+  } else if (earned && last_window_productive_) {
+    band_idx_ = pref;
+  }
   if (band_count_ > 0) bands_[band_idx_].attempts++;
   want_listen_ = false;
   want_serve_ = false;
@@ -189,6 +208,7 @@ void Scheduler::onWwvMarker(real snr) {
   if (band_count_ > 0) {
     BandStats& b = bands_[band_idx_];
     b.successes++;
+    if (utc_block_ >= 0 && b.by_block[utc_block_] < 0xFFFF) b.by_block[utc_block_]++;
     if (snr > b.best_snr) b.best_snr = snr;
   }
 }
@@ -200,10 +220,14 @@ void Scheduler::onWwvFix(int64_t mono_us) {
   }
 }
 
-bool Scheduler::seedBandStats(int32_t khz, int successes, real best_snr) {
+bool Scheduler::seedBandStats(int32_t khz, int successes, real best_snr,
+                              const uint16_t* by_block) {
   for (std::size_t i = 0; i < band_count_; ++i) {
     if (bands_[i].khz != khz) continue;
     bands_[i].successes = successes;
+    if (by_block != nullptr) {
+      for (int k = 0; k < 4; ++k) bands_[i].by_block[k] = by_block[k];
+    }
     if (best_snr > bands_[i].best_snr) bands_[i].best_snr = best_snr;
     return true;
   }

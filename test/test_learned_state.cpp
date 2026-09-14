@@ -164,3 +164,69 @@ AT_TEST(learned_stations_ignore_v1_blob) {
   int32_t dst[8] = {};
   AT_CHECK(decodeStations(v1, sizeof(v1), dst, 8) == 0);
 }
+
+using namespace airtime;
+
+AT_TEST(learned_band_stats_keep_credit_by_time_of_day) {
+  Scheduler src;
+  const uint16_t blocks[4] = {1, 2, 3, 4};
+  AT_CHECK(src.seedBandStats(10000, 10, 5.0f, blocks));
+  uint8_t blob[kBandStatsBlobMax];
+  const std::size_t n = encodeBandStats(src, blob, sizeof(blob));
+  AT_CHECK(n > 0);
+  Scheduler dst;
+  AT_CHECK(decodeBandStats(blob, n, &dst));
+  bool found = false;
+  for (std::size_t i = 0; i < dst.bandCount(); ++i) {
+    if (dst.bandStats(i).khz != 10000) continue;
+    found = dst.bandStats(i).successes == 10 && dst.bandStats(i).by_block[2] == 3;
+  }
+  AT_CHECK(found);
+}
+
+// A version-1 blob (no time of day), written by the build before, still loads:
+// its credit was earned on the air.
+AT_TEST(learned_band_stats_read_the_older_format) {
+  uint8_t blob[2 + 10];
+  uint8_t* p = blob;
+  *p++ = 1;
+  *p++ = 1;
+  const int32_t khz = 15000;
+  for (int s = 0; s < 32; s += 8) *p++ = static_cast<uint8_t>((khz >> s) & 0xFF);
+  *p++ = 7;
+  *p++ = 0;
+  const int32_t snr = 2000;
+  for (int s = 0; s < 32; s += 8) *p++ = static_cast<uint8_t>((snr >> s) & 0xFF);
+  Scheduler dst;
+  AT_CHECK(decodeBandStats(blob, sizeof(blob), &dst));
+  bool found = false;
+  for (std::size_t i = 0; i < dst.bandCount(); ++i) {
+    if (dst.bandStats(i).khz == 15000) found = dst.bandStats(i).successes == 7;
+  }
+  AT_CHECK(found);
+}
+
+AT_TEST(learned_place_round_trips) {
+  SourceTable t;
+  SourceRow* r = t.fm(10610);
+  r->pi = 0x829D;
+  r->heard = 3;
+  r->confirmed = 2;
+  SourceRow* w = t.fm(9230);
+  w->pi = 0x986D;
+  w->heard = 5;
+  w->wrong = true;
+  const int32_t khz[] = {10610, 9890, 9230};
+  uint8_t blob[kPlaceBlobMax];
+  const std::size_t n = encodePlace(7, khz, 3, t, blob, sizeof(blob));
+  AT_CHECK(n > 0);
+  PlaceRecord rec;
+  AT_CHECK(decodePlace(blob, n, &rec));
+  AT_CHECK(rec.seq == 7u);
+  AT_CHECK(rec.station_count == 3);
+  AT_CHECK(rec.stations[2] == 9230);
+  const SourceRow* back = rec.sources.find(SourceKind::Fm, 9230);
+  AT_CHECK(back != nullptr && back->wrong && back->pi == 0x986D);
+  blob[0] = 99;
+  AT_CHECK(!decodePlace(blob, n, &rec));
+}

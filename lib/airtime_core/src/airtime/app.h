@@ -188,6 +188,11 @@ struct AppConfig {
   // stations get this long to agree before a WWV window is started, instead of
   // a whole unseeded interval. Clock mode only. 0 turns it off.
   int64_t unconfirmed_listen_after_us = 150LL * 1000000;
+
+  // Two saved FM frequencies answering with station ID codes other than the
+  // recorded ones, this close together, mean the radio has been carried
+  // somewhere else. One alone could be a distant station skipping in at night.
+  int64_t move_confirm_us = 30LL * 60 * 1000000;
 };
 
 // Who owns the radio right now. See AirTimeApp::setMode for what each means.
@@ -251,6 +256,10 @@ class AirTimeApp {
   void setFmStations(const int32_t* khz, std::size_t n);
   // The list actually in use — the seed or the measured list that replaced it.
   std::size_t stationCount() const { return station_count_; }
+  // Places (see onMoved): how often the radio decided it had been carried
+  // somewhere new, and how often it recognised a place it had been before.
+  uint32_t placeMoves() const { return place_moves_; }
+  uint32_t placeRestores() const { return place_restores_; }
   int32_t station(std::size_t i) const {
     return i < station_count_ ? stations_[i] : 0;
   }
@@ -401,6 +410,10 @@ class AirTimeApp {
   void pollRds(int64_t now);
   void pollSurvey(int64_t now);
   void adoptSurveyResult();
+  void notePi(int32_t khz, uint16_t pi, int64_t now);
+  void onMoved(int64_t now);
+  void savePlace();
+  bool maybeRestorePlace(int32_t khz, uint16_t pi, int64_t now);
   void pollWwv(int64_t now);
   void pollWwvTimecode(int64_t now);
   void resetTimecodeChain();
@@ -481,6 +494,16 @@ class AirTimeApp {
   int64_t last_ct_mono_ = 0;       // last RDS clock time from ANY station
   bool survey_started_ = false;    // this power-on
   int64_t last_survey_start_ = 0;
+
+  // Where the radio is. See notePi / onMoved / maybeRestorePlace.
+  int32_t mismatch_khz_ = 0;        // a saved frequency that answered with a stranger
+  int64_t mismatch_at_ = 0;
+  bool ct_since_survey_ = false;    // the current list has delivered since it was adopted
+  bool survey_pending_ = false;     // a survey owed, waiting for the tuner
+  bool place_matched_ = false;      // a saved place already restored since the last move
+  uint32_t place_moves_ = 0;
+  uint32_t place_restores_ = 0;
+  uint32_t place_seq_ = 0;          // highest saved place sequence
   int64_t last_persist_ = 0;
 
   OpMode mode_ = OpMode::Clock;

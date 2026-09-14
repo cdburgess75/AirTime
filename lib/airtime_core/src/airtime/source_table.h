@@ -76,6 +76,11 @@ class SourceTable {
   std::size_t count() const { return count_; }
   const SourceRow& at(std::size_t i) const { return rows_[i]; }
   void clear() { count_ = 0; }
+  // Forget the FM rows and keep WWV's: an FM station's rating belongs to the
+  // place it was earned in, and the radio has left that place.
+  void clearFm();
+  // Put a saved row back exactly as it was (a place's ratings coming home).
+  void putRow(const SourceRow& r);
 
   // "G 104.7", "Y WWV 15", "R 89.3", "? WWV 2.5" — never more than 12
   // characters, the width of the radio's menu zoom box.

@@ -74,6 +74,15 @@ void AirTimeApp::begin() {
     if (deps_.store->loadBlob(kBlobSources, sblob, sizeof(sblob), &got)) {
       sources_.decode(sblob, got);
     }
+    for (std::size_t s = 0; s < kPlaceSlots; ++s) {
+      uint8_t pb[kPlaceBlobMax];
+      std::size_t pn = 0;
+      PlaceRecord rec;
+      if (deps_.store->loadBlob(kBlobPlaceKeys[s], pb, sizeof(pb), &pn) &&
+          decodePlace(pb, pn, &rec) && rec.seq > place_seq_) {
+        place_seq_ = rec.seq;
+      }
+    }
   }
 
   // Point both detector channels at their duty before anything can start the
@@ -107,6 +116,7 @@ void AirTimeApp::begin() {
 }
 
 void AirTimeApp::startSurvey() {
+  ct_since_survey_ = false;
   survey_.begin(deps_.clock->nowUs());
   survey_started_ = true;
   last_survey_start_ = deps_.clock->nowUs();
@@ -130,6 +140,8 @@ void AirTimeApp::pollSurvey(int64_t now) {
     const int64_t asserted = t.utc_epoch_s * 1000000;
     const int64_t reference =
         arbiter_.isSet() ? arbiter_.utcAt(g.mono_us) : g.mono_us;
+    // A station of a place seen before: stop surveying and bring that place back.
+    if (maybeRestorePlace(deps_.rds->tunedKhz(), g.a, now)) return;
     survey_.noteClockTime(g.a, reference - asserted);
   }
 
@@ -408,6 +420,126 @@ int64_t AirTimeApp::hfChangeInUs() const {
   return us;
 }
 
+// ── Places ─────────────────────────────────────────────────────────────────
+// A radio sold anywhere cannot ship a station list: it learns the stations
+// where it is, and notices when it has been carried somewhere else. A place is
+// its station list and the ratings earned there; up to kPlaceSlots are kept.
+
+void AirTimeApp::notePi(int32_t khz, uint16_t pi, int64_t now) {
+  if (pi == 0 || khz == 0 || surveying()) return;
+  const SourceRow* row = sources_.find(SourceKind::Fm, khz);
+  if (row == nullptr || row->pi == 0 || row->pi == pi) return;
+  if (mismatch_khz_ != 0 && mismatch_khz_ != khz &&
+      (now - mismatch_at_) <= cfg_.move_confirm_us) {
+    mismatch_khz_ = 0;
+    onMoved(now);
+    return;
+  }
+  mismatch_khz_ = khz;
+  mismatch_at_ = now;
+}
+
+void AirTimeApp::onMoved(int64_t now) {
+  savePlace();
+  ++place_moves_;
+  sources_.clearFm();          // ratings belong to the place, not the frequency
+  station_count_ = 0;
+  station_idx_ = 0;
+  stations_measured_ = true;   // an empty list is the truth here, and is saved
+  place_matched_ = false;
+  mismatch_khz_ = 0;
+  ct_since_survey_ = false;
+  quick_listen_at_ = 0;
+  last_ct_mono_ = now;
+  learned_dirty_ = true;
+  persist(now, /*force=*/true);
+  if (!cfg_.auto_survey) return;
+  if (directive_.wwv_listening || surveying()) {
+    survey_pending_ = true;
+  } else {
+    startSurvey();
+  }
+}
+
+void AirTimeApp::savePlace() {
+  if (deps_.store == nullptr || station_count_ == 0) return;
+  // The slot already holding this place (a station with the same frequency and
+  // ID code), else an empty slot, else the oldest.
+  std::size_t slot = kPlaceSlots;
+  std::size_t empty = kPlaceSlots;
+  std::size_t oldest = 0;
+  uint32_t oldest_seq = 0xFFFFFFFFu;
+  for (std::size_t s = 0; s < kPlaceSlots && slot == kPlaceSlots; ++s) {
+    uint8_t pb[kPlaceBlobMax];
+    std::size_t pn = 0;
+    PlaceRecord rec;
+    if (!deps_.store->loadBlob(kBlobPlaceKeys[s], pb, sizeof(pb), &pn) ||
+        !decodePlace(pb, pn, &rec)) {
+      if (empty == kPlaceSlots) empty = s;
+      continue;
+    }
+    if (rec.seq < oldest_seq) {
+      oldest_seq = rec.seq;
+      oldest = s;
+    }
+    for (std::size_t i = 0; i < sources_.count() && slot == kPlaceSlots; ++i) {
+      const SourceRow& r = sources_.at(i);
+      if (r.kind != SourceKind::Fm || r.pi == 0) continue;
+      for (std::size_t j = 0; j < rec.sources.count(); ++j) {
+        const SourceRow& q = rec.sources.at(j);
+        if (q.kind == SourceKind::Fm && q.freq == r.freq && q.pi == r.pi) {
+          slot = s;
+          break;
+        }
+      }
+    }
+  }
+  if (slot == kPlaceSlots) slot = empty != kPlaceSlots ? empty : oldest;
+  uint8_t out[kPlaceBlobMax];
+  const std::size_t n = encodePlace(++place_seq_, stations_, station_count_,
+                                    sources_, out, sizeof(out));
+  if (n > 0) deps_.store->saveBlob(kBlobPlaceKeys[slot], out, n);
+}
+
+bool AirTimeApp::maybeRestorePlace(int32_t khz, uint16_t pi, int64_t now) {
+  if (deps_.store == nullptr || place_matched_ || pi == 0 || khz == 0) return false;
+  for (std::size_t s = 0; s < kPlaceSlots; ++s) {
+    uint8_t pb[kPlaceBlobMax];
+    std::size_t pn = 0;
+    PlaceRecord rec;
+    if (!deps_.store->loadBlob(kBlobPlaceKeys[s], pb, sizeof(pb), &pn) ||
+        !decodePlace(pb, pn, &rec)) {
+      continue;
+    }
+    bool match = false;
+    for (std::size_t j = 0; j < rec.sources.count() && !match; ++j) {
+      const SourceRow& q = rec.sources.at(j);
+      match = q.kind == SourceKind::Fm && q.freq == khz && q.pi == pi;
+    }
+    if (!match) continue;
+
+    // A place seen before: its stations and the ratings earned there come back.
+    place_matched_ = true;
+    ++place_restores_;
+    if (surveying()) survey_.abort();
+    survey_pending_ = false;
+    sources_.clearFm();
+    for (std::size_t j = 0; j < rec.sources.count(); ++j) {
+      if (rec.sources.at(j).kind == SourceKind::Fm) sources_.putRow(rec.sources.at(j));
+    }
+    setFmStations(rec.stations, rec.station_count);
+    stations_measured_ = true;
+    for (std::size_t i = 0; i < kMaxStations; ++i) red_tried_[i] = now - cfg_.red_recheck_us;
+    orderStationsByRating();
+    tuneFmStation(now);
+    last_ct_mono_ = now;
+    learned_dirty_ = true;
+    persist(now, /*force=*/true);
+    return true;
+  }
+  return false;
+}
+
 void AirTimeApp::resetTimecodeChain() {
   sub_reader_.reset();
   timecode_.reset();
@@ -423,6 +555,13 @@ void AirTimeApp::loop() {
   // with WWV barely tried. Until a second source agrees, the listen windows
   // are still the acquisition, and NTP flags the time unusable meanwhile, so
   // the windows cost nothing.
+  if (arbiter_.isSet()) {
+    int64_t sod = (arbiter_.utcAt(now) / 1000000) % 86400;
+    if (sod < 0) sod += 86400;
+    sched_.setUtcHour(static_cast<int>(sod / 3600));
+  } else {
+    sched_.setUtcHour(-1);
+  }
   sched_.setSeeded(arbiter_.hasSourceFix() && anchor_ == Anchor::Multi);
 
   // FM that has never delivered a clock time here does not get the whole
@@ -475,6 +614,11 @@ void AirTimeApp::loop() {
     return;
   }
 
+  if (survey_pending_ && !directive_.wwv_listening && !surveying()) {
+    survey_pending_ = false;   // owed from a move; a listen window had the tuner
+    startSurvey();
+  }
+
   if (surveying()) {
     pollSurvey(now);
   } else {
@@ -514,8 +658,18 @@ void AirTimeApp::pollRds(int64_t now) {
 
     // Rate the station that spoke. Its error is taken after its learned bias,
     // against the clock as it stood at reception.
-    SourceRow* row = sources_.fm(deps_.rds->tunedKhz());
-    if (row != nullptr) row->pi = g.a;
+    // Who is on this frequency. A saved station answering with a different ID
+    // code means someone else is on it here: see notePi.
+    const int32_t tuned = deps_.rds->tunedKhz();
+    notePi(tuned, g.a, now);
+    if (station_count_ == 0) continue;               // just moved: nothing rated here yet
+    SourceRow* row = sources_.fm(tuned);
+    if (row != nullptr && row->pi == 0) {
+      row->pi = g.a;
+      if (maybeRestorePlace(tuned, g.a, now)) continue;   // a place seen before
+    }
+    if (row != nullptr && row->pi != g.a) continue;  // a stranger on a saved frequency
+    ct_since_survey_ = true;
     noteFmSourceTime(row, g.a, asserted + bias_.correction(g.a) - reference, now);
     dwell_heard_ct_ = true;
     // A station proven wrong against a confirmed clock does not vote. It is
@@ -569,10 +723,18 @@ void AirTimeApp::pollRds(int64_t now) {
   // adopts now survives a reboot. Never inside a listen window — that tuner
   // belongs to WWV.
   if (cfg_.auto_survey && !directive_.wwv_listening &&
-      (now - last_ct_mono_) >= cfg_.silent_list_survey_after_us &&
-      (!survey_started_ || (now - last_survey_start_) >= cfg_.survey_retry_us)) {
-    startSurvey();
-    return;
+      (now - last_ct_mono_) >= cfg_.silent_list_survey_after_us) {
+    if (!survey_started_ || (now - last_survey_start_) >= cfg_.survey_retry_us) {
+      startSurvey();
+      return;
+    }
+    // A list that was delivering has gone quiet inside the retry interval:
+    // the radio has most likely been carried somewhere else. That is worth a
+    // survey now, not in six hours.
+    if (ct_since_survey_) {
+      onMoved(now);
+      return;
+    }
   }
 
   voter_.prune(now - cfg_.rds_report_ttl_us);
@@ -722,9 +884,9 @@ void AirTimeApp::pollWwvTimecode(int64_t now) {
       // A new second boundary. Whatever frame alignment the decoder held was
       // measured against the old one.
       timecode_.reset();
-      // The code's shape standing this far out of the noise is propagation
-      // evidence in itself: hold the band while the frames arrive.
-      sched_.onWwvMarker(sub_reader_.diag().on_level);
+      // A lock alone earns the band nothing: weak locks held 10 MHz for whole
+      // windows all afternoon and kept every other band from being tried. An
+      // accepted marker or a decoded frame earns it.
     }
   }
 

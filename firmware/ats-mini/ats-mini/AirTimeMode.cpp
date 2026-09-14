@@ -52,28 +52,10 @@
 #include <airtime_core.h>
 #include <airtime_esp32.h>
 
-// ── FM seed list ────────────────────────────────────────────────────────────
-// SI4735 native FM units (10 kHz): 8990 = 89.9 MHz. A FIRST-BOOT SEED only:
-// the app replaces it with any list the radio has measured and saved (Survey
-// Dial), and never saves this one back as though it had been measured.
-//
-// MEASURED at the owner's QTH, not researched. 104.7 WJSH (PI 6E47), 89.9 WWNO
-// (A920) and 107.5 K-LOVE (33CB) all delivered RDS clock time here: the radio
-// learned a station bias for each, and 104.7 decoded 442 groups at the bench
-// on 2026-09-12. 89.3 WRKF stays last and unmeasured — it costs one dwell per
-// pass. 107.1 WHMD is out: the July survey measured it 3.1 s late.
-//
-// The 07-31 list (89.3 / 107.1 / 89.9) was chosen on paper for this QTH and
-// never produced a single RDS group in the field. Measure before replacing
-// this list.
-static const int32_t kFmStations[] = {
-    10470,  // 104.7 WJSH   PI 6E47
-    8990,   // 89.9  WWNO   PI A920 — the anchor
-    10750,  // 107.5 K-LOVE PI 33CB
-    8930,   // 89.3  WRKF   unmeasured — last
-};
-static const size_t kFmStationCount =
-    sizeof(kFmStations) / sizeof(kFmStations[0]);
+// ── FM stations ─────────────────────────────────────────────────────────────
+// No built-in FM station list: AirTime is sold everywhere, so it learns the
+// stations where it is (a survey at first power-on) and keeps them per place
+// (AirTimeApp::onMoved / maybeRestorePlace).
 
 // WWV band order — a warm start like the FM list above. 15 MHz first: it is
 // the only band that has produced a marker at this QTH (two sessions of logs),
@@ -1385,7 +1367,6 @@ void airtimeSetup()
 #endif
 
   atApp = new airtime::AirTimeApp(deps, cfg);
-  atApp->setFmStations(kFmStations, kFmStationCount);
   atApp->setWwvBands(kWwvBands, kWwvBandCount);
   atApp->begin();
 

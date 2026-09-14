@@ -38,6 +38,9 @@ int32_t get32(const uint8_t*& p) {
 
 constexpr std::size_t kBiasRec = 8;   // pi(2) + bias_ms(4) + samples(2)
 constexpr std::size_t kBandRec = 10;  // khz(4) + successes(2) + snr_milli(4)
+constexpr std::size_t kBandRecV2 = 18; // ...plus successes by time of day (4 x 2)
+constexpr uint8_t kBandVersion = 2;
+constexpr uint8_t kPlaceVersion = 1;
 
 }  // namespace
 
@@ -81,17 +84,18 @@ bool decodeStationBias(const void* buf, std::size_t len, StationBiasTable* out) 
 
 std::size_t encodeBandStats(const Scheduler& s, void* buf, std::size_t cap) {
   const std::size_t n = s.bandCount();
-  const std::size_t need = 2 + n * kBandRec;
+  const std::size_t need = 2 + n * kBandRecV2;
   if (buf == nullptr || cap < need) return 0;
 
   uint8_t* p = static_cast<uint8_t*>(buf);
-  *p++ = kVersion;
+  *p++ = kBandVersion;
   *p++ = static_cast<uint8_t>(n);
   for (std::size_t i = 0; i < n; ++i) {
     const BandStats& b = s.bandStats(i);
     put32(p, b.khz);
     put16(p, static_cast<uint16_t>(b.successes > 0xFFFF ? 0xFFFF : b.successes));
     put32(p, static_cast<int32_t>(b.best_snr * 1000.0f));
+    for (int k = 0; k < 4; ++k) put16(p, b.by_block[k]);
   }
   return need;
 }
@@ -99,19 +103,28 @@ std::size_t encodeBandStats(const Scheduler& s, void* buf, std::size_t cap) {
 bool decodeBandStats(const void* buf, std::size_t len, Scheduler* out) {
   if (buf == nullptr || out == nullptr || len < 2) return false;
   const uint8_t* p = static_cast<const uint8_t*>(buf);
-  if (*p++ != kVersion) return false;
+  // Version 1 (no time of day) is still read: the credit it holds was earned
+  // on the air and should not be thrown away by a firmware update.
+  const uint8_t version = *p++;
+  if (version != 1 && version != kBandVersion) return false;
+  const std::size_t rec = version == 1 ? kBandRec : kBandRecV2;
   const std::size_t n = *p++;
   if (n > Scheduler::kMaxBands) return false;
-  if (len < 2 + n * kBandRec) return false;
+  if (len < 2 + n * rec) return false;
 
   for (std::size_t i = 0; i < n; ++i) {
     const int32_t khz = get32(p);
     const uint16_t successes = get16(p);
     const int32_t snr_milli = get32(p);
+    uint16_t blocks[4] = {};
+    if (version == kBandVersion) {
+      for (int k = 0; k < 4; ++k) blocks[k] = get16(p);
+    }
     // Matched BY FREQUENCY, not by index: the band list is a compile-time
     // decision and may well have been reordered or extended by the build that
     // reads this back. An index would then credit the wrong band.
-    out->seedBandStats(khz, successes, static_cast<real>(snr_milli) / 1000.0f);
+    out->seedBandStats(khz, successes, static_cast<real>(snr_milli) / 1000.0f,
+                       version == kBandVersion ? blocks : nullptr);
   }
   return true;
 }
@@ -146,6 +159,47 @@ std::size_t decodeStations(const void* buf, std::size_t len, int32_t* khz_out,
   if (n > max) n = max;
   for (std::size_t i = 0; i < n; ++i) khz_out[i] = get32(p);
   return n;
+}
+
+std::size_t encodePlace(uint32_t seq, const int32_t* khz, std::size_t n,
+                        const SourceTable& sources, void* buf, std::size_t cap) {
+  if (buf == nullptr || (khz == nullptr && n > 0) || n > kPlaceMaxStations) return 0;
+  uint8_t src[SourceTable::kBlobMax];
+  const std::size_t sn = sources.encode(src, sizeof(src));
+  if (sn == 0) return 0;
+  const std::size_t need = 1 + 4 + 1 + n * 4 + 2 + sn;
+  if (cap < need) return 0;
+  uint8_t* p = static_cast<uint8_t*>(buf);
+  *p++ = kPlaceVersion;
+  put32(p, static_cast<int32_t>(seq));
+  *p++ = static_cast<uint8_t>(n);
+  for (std::size_t i = 0; i < n; ++i) put32(p, khz[i]);
+  put16(p, static_cast<uint16_t>(sn));
+  std::memcpy(p, src, sn);
+  return need;
+}
+
+bool decodePlace(const void* buf, std::size_t len, PlaceRecord* out) {
+  if (buf == nullptr || out == nullptr || len < 1 + 4 + 1 + 2) return false;
+  const uint8_t* p = static_cast<const uint8_t*>(buf);
+  if (*p++ != kPlaceVersion) return false;
+  const uint32_t seq = static_cast<uint32_t>(get32(p));
+  const std::size_t n = *p++;
+  if (n > kPlaceMaxStations || len < 1 + 4 + 1 + n * 4 + 2) return false;
+  int32_t khz[kPlaceMaxStations] = {};
+  for (std::size_t i = 0; i < n; ++i) {
+    khz[i] = get32(p);
+    if (khz[i] <= 0) return false;
+  }
+  const std::size_t sn = get16(p);
+  if (len != 1 + 4 + 1 + n * 4 + 2 + sn) return false;
+  SourceTable t;
+  if (!t.decode(p, sn)) return false;   // verified whole or not at all
+  out->seq = seq;
+  for (std::size_t i = 0; i < kPlaceMaxStations; ++i) out->stations[i] = i < n ? khz[i] : 0;
+  out->station_count = n;
+  out->sources = t;
+  return true;
 }
 
 }  // namespace airtime

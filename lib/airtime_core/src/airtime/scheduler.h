@@ -55,6 +55,11 @@ struct SchedulerConfig {
   int64_t listen_interval_unseeded_us = 15LL * 60 * 1000000;
   int64_t listen_duration_unseeded_us = 8LL * 60 * 1000000;
   int64_t band_dwell_unseeded_us = 4LL * 60 * 1000000;
+
+  // Every Nth listen window opens on a band other than the favourite, so a
+  // band that works better at this hour, or has opened up since, gets found.
+  // 0 turns the sampling off.
+  int explore_every = 4;
 };
 
 // What the hardware adapters should be doing right now.
@@ -73,6 +78,9 @@ struct BandStats {
   int attempts = 0;
   int successes = 0;
   real best_snr = 0.0f;
+  // Successes by time of day, in 6-hour UTC blocks (00-05, 06-11, 12-17,
+  // 18-23): the band that works at noon is not the one that works at night.
+  uint16_t by_block[4] = {};
 };
 
 class Scheduler {
@@ -111,7 +119,8 @@ class Scheduler {
   // FREQUENCY rather than index, so a build whose band list has been reordered
   // or extended cannot credit the wrong band. Returns false if this radio does
   // not currently rotate through that frequency.
-  bool seedBandStats(int32_t khz, int successes, real best_snr);
+  bool seedBandStats(int32_t khz, int successes, real best_snr,
+                     const uint16_t* by_block = nullptr);
 
   // Operator overrides from the encoder menu (§5).
   void requestListenNow();
@@ -122,6 +131,9 @@ class Scheduler {
   // unseeded cadences above. Defaults to seeded, so a caller that never says
   // gets exactly the old behaviour.
   void setSeeded(bool s) { seeded_ = s; }
+  // The UTC hour (0-23), or -1 while the clock is not set. Band credit is kept
+  // per 6-hour block and the favourite band is chosen for the current block.
+  void setUtcHour(int hour) { utc_block_ = (hour >= 0 && hour < 24) ? hour / 6 : -1; }
   bool seeded() const { return seeded_; }
 
   Phase phase() const { return phase_; }
@@ -150,6 +162,8 @@ class Scheduler {
   int64_t bandDwellUs() const {
     return seeded_ ? cfg_.band_dwell_us : cfg_.band_dwell_unseeded_us;
   }
+  // A band's credit for the current time of day, or overall when it is unknown.
+  int creditFor(std::size_t i) const;
 
   SchedulerConfig cfg_;
   Phase phase_ = Phase::Acquiring;
@@ -165,6 +179,9 @@ class Scheduler {
   bool want_listen_ = false;
   bool want_serve_ = false;
   bool band_productive_ = false;  // current band has yielded a marker
+  int utc_block_ = -1;                  // see setUtcHour
+  bool last_window_productive_ = true;  // did the last window hear anything
+  uint32_t windows_opened_ = 0;         // for explore_every
 
   BandStats bands_[kMaxBands];
   std::size_t band_count_ = 0;

@@ -131,3 +131,21 @@ AT_TEST(source_table_rejects_anything_it_cannot_verify) {
   AT_CHECK(!b.decode(bad, n));
   AT_CHECK_EQ(b.count(), static_cast<std::size_t>(0));   // untouched throughout
 }
+
+using namespace airtime;
+
+AT_TEST(source_table_clear_fm_keeps_wwv_and_put_row_restores) {
+  SourceTable t;
+  t.fm(10610)->pi = 0x829D;
+  t.wwv(10000)->heard = 2;
+  SourceRow saved = *t.fm(9230);
+  saved.pi = 0x986D;
+  saved.heard = 4;
+  saved.wrong = true;
+  t.clearFm();
+  AT_CHECK(t.find(SourceKind::Fm, 10610) == nullptr);
+  AT_CHECK(t.find(SourceKind::Wwv, 10000) != nullptr);
+  t.putRow(saved);
+  const SourceRow* r = t.find(SourceKind::Fm, 9230);
+  AT_CHECK(r != nullptr && r->wrong && r->pi == 0x986D && r->heard == 4);
+}

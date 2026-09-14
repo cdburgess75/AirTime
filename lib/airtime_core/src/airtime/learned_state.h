@@ -27,6 +27,7 @@
 #include <cstdint>
 
 #include "scheduler.h"
+#include "source_table.h"
 #include "station_bias.h"
 
 namespace airtime {
@@ -40,7 +41,7 @@ constexpr const char* kBlobSources = "src";   // Green/Yellow/Red, source_table.
 
 // Worst-case encoded sizes, for caller-side buffers.
 constexpr std::size_t kStationBiasBlobMax = 2 + StationBiasTable::kMaxStations * 8;
-constexpr std::size_t kBandStatsBlobMax = 2 + Scheduler::kMaxBands * 10;
+constexpr std::size_t kBandStatsBlobMax = 2 + Scheduler::kMaxBands * 18;
 constexpr std::size_t kStationsBlobMax = 2 + 8 * 4;
 
 // Returns bytes written, or 0 if `cap` is too small.
@@ -57,5 +58,25 @@ std::size_t encodeStations(const int32_t* khz, std::size_t n, void* buf,
 std::size_t decodeStations(const void* buf, std::size_t len, int32_t* khz_out,
                            std::size_t max);
 bool decodeBandStats(const void* buf, std::size_t len, Scheduler* out);
+
+// Places. A radio sold anywhere cannot ship an FM station list: it learns the
+// stations where it is. A place is that list and the ratings earned there,
+// kept in up to kPlaceSlots records so a radio carried away and brought back
+// picks up where it left off (AirTimeApp::onMoved / maybeRestorePlace).
+constexpr std::size_t kPlaceSlots = 4;
+constexpr const char* kBlobPlaceKeys[kPlaceSlots] = {"pl0", "pl1", "pl2", "pl3"};
+constexpr std::size_t kPlaceMaxStations = 8;
+constexpr std::size_t kPlaceBlobMax = 1 + 4 + 1 + kPlaceMaxStations * 4 + 2 + SourceTable::kBlobMax;
+
+struct PlaceRecord {
+  uint32_t seq = 0;                        // higher = saved more recently
+  int32_t stations[kPlaceMaxStations] = {};
+  std::size_t station_count = 0;
+  SourceTable sources;
+};
+
+std::size_t encodePlace(uint32_t seq, const int32_t* khz, std::size_t n,
+                        const SourceTable& sources, void* buf, std::size_t cap);
+bool decodePlace(const void* buf, std::size_t len, PlaceRecord* out);
 
 }  // namespace airtime

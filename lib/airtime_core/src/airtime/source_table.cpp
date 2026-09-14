@@ -53,6 +53,19 @@ const SourceRow* SourceTable::find(SourceKind k, int32_t freq) const {
   return nullptr;
 }
 
+void SourceTable::clearFm() {
+  std::size_t w = 0;
+  for (std::size_t i = 0; i < count_; ++i) {
+    if (rows_[i].kind != SourceKind::Fm) rows_[w++] = rows_[i];
+  }
+  count_ = w;
+}
+
+void SourceTable::putRow(const SourceRow& r) {
+  SourceRow* dst = rowFor(r.kind, r.freq);
+  if (dst != nullptr) *dst = r;
+}
+
 void SourceTable::noteTime(SourceRow* r, int64_t err_us, bool confirmable) {
   if (r == nullptr) return;
   if (r->heard < 0xFFFF) ++r->heard;
