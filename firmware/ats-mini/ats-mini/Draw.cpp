@@ -434,6 +434,16 @@ void drawScreen(const char *statusLine1, const char *statusLine2)
   // Clear screen buffer
   spr.fillSprite(TH.bg);
 
+#ifdef AIRTIME
+  // The power-on RADIO / AIRTIME choice owns the whole screen until it is made.
+  if(airtimeBootPickActive())
+  {
+    drawAirTimeBootPick();
+    spr.pushSprite(0, 0);
+    return;
+  }
+#endif
+
   // About screen is a special case
   if(currentCmd==CMD_ABOUT)
   {

@@ -935,6 +935,70 @@ int atCwLevelPct()
   int pct = (int)(100.0f * snr / 12.0f);
   return pct < 0 ? 0 : (pct > 100 ? 100 : pct);
 }
+// ── Power-on choice: RADIO or AIRTIME ───────────────────────────────────────
+// Owner's request, 2026-09-14: "when you turn on the device, it should just
+// ask you with two big things in the display: choose for radio or choose for
+// airtime." Knob to move, press to choose. Touching the knob restarts the
+// countdown; left alone for ten seconds it takes the highlighted choice, which
+// starts on AIRTIME, so a power cut with nobody near still comes back as a
+// clock. AirTime runs underneath the whole time; choosing Radio is exactly
+// Menu -> Mode -> Radio.
+static constexpr uint32_t kBootPickMs = 10000;
+static bool atBootPicking = false;
+static int atBootPickSel = 1;         // 0 = RADIO, 1 = AIRTIME
+static uint32_t atBootPickStart = 0;
+static int atBootPickShown = -1;      // the countdown second last drawn
+
+static void atSetModeIdxFwd(int i);
+
+bool airtimeBootPickActive() { return atBootPicking; }
+int airtimeBootPickSel() { return atBootPickSel; }
+
+int airtimeBootPickSecondsLeft()
+{
+  const uint32_t el = millis() - atBootPickStart;
+  return el >= kBootPickMs ? 0 : (int)((kBootPickMs - el + 999) / 1000);
+}
+
+static void atBootPickFinish()
+{
+  atBootPicking = false;
+  atSetModeIdxFwd(atBootPickSel == 0 ? 1 : 0);   // kModeNames: 0 Clock, 1 Radio
+}
+
+bool airtimeBootPickInput(int16_t enc, bool clicked)
+{
+  if(!atBootPicking) return false;
+  if(clicked)
+  {
+    atBootPickFinish();
+    return true;
+  }
+  if(enc)
+  {
+    atBootPickSel = atBootPickSel ? 0 : 1;
+    atBootPickStart = millis();
+    return true;
+  }
+  return false;
+}
+
+bool airtimeBootPickTick()
+{
+  if(!atBootPicking) return false;
+  if(millis() - atBootPickStart >= kBootPickMs)
+  {
+    atBootPickFinish();
+    return true;
+  }
+  const int sec = airtimeBootPickSecondsLeft();
+  if(sec == atBootPickShown) return false;
+  atBootPickShown = sec;
+  return true;
+}
+
+static void atSetModeIdxFwd(int i) { atSetModeIdx(i); }
+
 void atSetModeIdx(int i)
 {
   if(i < 0 || i >= atModeCount() || i == atModeOpt) return;
@@ -1159,6 +1223,9 @@ void airtimeSetup()
   atApp->setFmStations(kFmStations, kFmStationCount);
   atApp->setWwvBands(kWwvBands, kWwvBandCount);
   atApp->begin();
+
+  atBootPicking = true;           // ask RADIO or AIRTIME before anything else
+  atBootPickStart = millis();
 
   Serial.printf("AirTime %s: up. NTP at 192.168.4.1:123 while serving.\n",
                 AIRTIME_VERSION);

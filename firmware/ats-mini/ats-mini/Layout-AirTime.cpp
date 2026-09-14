@@ -471,3 +471,31 @@ void drawLayoutAirTime(const char *statusLine1, const char *statusLine2)
 }
 
 #endif  // AIRTIME
+
+// The power-on choice: two big boxes, the highlighted one outlined in yellow,
+// and a line saying which one starts, and when, if nobody touches it.
+void drawAirTimeBootPick()
+{
+  static const char *label[2] = {"RADIO", "AIRTIME"};
+  const int sel = airtimeBootPickSel();
+
+  for(int i = 0; i < 2; i++)
+  {
+    const int x = 10 + i * 155;
+    const bool on = i == sel;
+    spr.fillSmoothRoundRect(x, 16, 145, 104, 12, on ? TFT_YELLOW : TH.text_muted);
+    spr.fillSmoothRoundRect(x + (on ? 5 : 2), 16 + (on ? 5 : 2),
+                            145 - (on ? 10 : 4), 104 - (on ? 10 : 4), 9, TH.bg);
+    spr.setTextDatum(MC_DATUM);
+    spr.setTextColor(on ? TFT_YELLOW : TH.text_muted);
+    spr.drawString(label[i], x + 72, 68, 4);
+  }
+
+  char line[48];
+  snprintf(line, sizeof(line), "Turn to choose, press to start.  %s in %d s",
+           label[sel], airtimeBootPickSecondsLeft());
+  spr.setTextDatum(TC_DATUM);
+  spr.setTextColor(TH.text_muted);
+  spr.drawString(line, 160, 136, 2);
+}
+

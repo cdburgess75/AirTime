@@ -54,6 +54,7 @@ void drawLayoutDefault(const char *statusLine1, const char *statusLine2);
 void drawLayoutSmeter(const char *statusLine1, const char *statusLine2);
 #ifdef AIRTIME
 void drawLayoutAirTime(const char *statusLine1, const char *statusLine2);
+void drawAirTimeBootPick();
 #endif
 
 void drawAbout();

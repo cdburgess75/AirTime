@@ -211,6 +211,12 @@ bool airtimeRadioMode();
 // i.e. clock mode, whether harvesting RDS or listening for WWV. Callers
 // use it to keep expensive or meaningless work off a dial they do not own.
 bool airtimeOwnsDial();
+// Power-on RADIO / AIRTIME choice (AirTimeMode.cpp).
+bool airtimeBootPickActive();
+int airtimeBootPickSel();              // 0 = RADIO, 1 = AIRTIME
+int airtimeBootPickSecondsLeft();
+bool airtimeBootPickInput(int16_t enc, bool clicked);   // true: redraw
+bool airtimeBootPickTick();                             // true: redraw
 // The About page for this build, as ready-to-draw lines. Assembled here for
 // the same reason AirTimeScreen is: About.cpp needs no AirTime headers, and
 // there is exactly one place that decides what the device says about itself.

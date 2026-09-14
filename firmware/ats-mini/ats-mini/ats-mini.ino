@@ -825,6 +825,21 @@ void loop()
   encCountAccel = ble_direction? ble_direction : encCountAccel;
   if(ble_event & REMOTE_PREFS) prefsRequestSave(SAVE_ALL);
 
+#ifdef AIRTIME
+  // The power-on RADIO / AIRTIME choice takes the knob and the button until it
+  // is made, or times out into the highlighted choice. Nothing else sees them
+  // meanwhile, so the menu cannot open underneath it; AirTime itself already
+  // ran above and keeps time throughout.
+  if(airtimeBootPickActive())
+  {
+    const bool input = airtimeBootPickInput(encCount, pb1st.wasClicked || pb1st.wasShortPressed);
+    if(airtimeBootPickTick() || input) drawScreen();
+    elapsedSleep = elapsedCommand = currentTime;   // no display sleep, no menu timeout
+    delay(5);
+    return;
+  }
+#endif
+
   // Block encoder rotation when in the locked sleep mode
   if(encCount && sleepOn() && sleepModeIdx==SLEEP_LOCKED) encCount = encCountAccel = 0;
 
