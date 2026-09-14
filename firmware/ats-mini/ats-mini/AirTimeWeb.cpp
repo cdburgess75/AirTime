@@ -161,8 +161,9 @@ static const char kStyle[] =
 // A clock that ticks once per HTTP round trip looks broken. /api is polled
 // every 2 s and the browser advances the display itself between polls from the
 // device's UTC and its own monotonic clock, resyncing on each reply. The
-// phone's own wall clock is never consulted — that would defeat the entire
-// point of the device.
+// phone's own wall clock is never used for the display — that would defeat
+// the point of the device. The one exception is explicit: "Set radio clock
+// from this phone" sends the phone's time once, as a hand-set (/settime).
 static const char kApp[] =
 "<!doctype html><html lang=en><head><meta charset=utf-8>"
 "<meta name=viewport content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
@@ -225,6 +226,7 @@ static const char kApp[] =
 "<div class=bar id=bar style=display:none><i id=barf></i><b id=barn></b><u id=bart></u></div>"
 "<h2>Cycle</h2><div class=seg id=seg></div>"
 "<h2>Clock</h2><div class=card id=cconf></div>"
+"<div class=seg style=margin-top:8px><button onclick=setp()>Set radio clock from this phone</button></div>"
 "<h2>Receiver</h2><div class=card id=crx></div>"
 "<h2>Clock sources</h2><div class=card id=csrc></div>"
 "<h2>Serving</h2><div class=card id=cntp></div>"
@@ -244,6 +246,10 @@ static const char kApp[] =
 "h+='<button onclick=setc('+i+') class=\"'+(i==D.cyc.i?'on':'')+'\">'+D.cyc.l[i]+'</button>';"
 "q('seg').innerHTML=h}"
 "function setc(i){fetch('/set?cycle='+i).then(function(){return pull()})}"
+"function setp(){if(!confirm('Set the radio clock from this phone\\u2019s time?'))return;"
+"fetch('/settime?ms='+Date.now(),{cache:'no-store'}).then(function(r){return r.text()})"
+".then(function(t){alert(t=='ok'?'Radio clock set from this phone.':'The radio refused: '+t);return pull()})"
+".catch(function(){alert('The radio is not reachable right now.')})}"
 "function paint(){"
 "if(!D){requestAnimationFrame(paint);return}"
 "var now=U0+(performance.now()-T0);"                     /* device UTC, ms */
@@ -273,7 +279,7 @@ static const char kApp[] =
 "q('csrc').innerHTML=sh||'<div class=r><span>none yet</span></div>';"
 "seg();"
 "q('note').textContent='Polls every 2 s; the clock runs from the radio\\u2019s own time '"
-"+'between polls, never the phone\\u2019s. Full diagnostics at /status.'}"
+"+'between polls, never the phone\\u2019s unless you press Set. Full diagnostics at /status.'}"
 "function pull(){return fetch('/api',{cache:'no-store'}).then(function(r){return r.json()})"
 ".then(apply).catch(function(){q('off').className='on'})}"
 "pull();setInterval(pull,2000);requestAnimationFrame(paint);"
@@ -380,6 +386,16 @@ static void atHandleSet()
     atSetCycleIdx(atServer->arg("cycle").toInt());
   atServer->sendHeader("Cache-Control", "no-store");
   atServer->send(200, "text/plain", "ok");
+}
+
+// "Set radio clock from this phone": ms is the phone's Date.now() when it
+// sent the request.
+static void atHandleSetTime()
+{
+  atServer->sendHeader("Cache-Control", "no-store");
+  const bool ok = atServer->hasArg("ms") &&
+                  atSetUtcFromPhoneMs(strtoll(atServer->arg("ms").c_str(), nullptr, 10));
+  atServer->send(ok ? 200 : 400, "text/plain", ok ? "ok" : "not a plausible time");
 }
 
 static void atHandleStatus()
@@ -626,6 +642,7 @@ void airtimeWebService(bool wifi_up)
       atServer->on("/status", atHandleStatus);
       atServer->on("/api", atHandleApi);
       atServer->on("/set", atHandleSet);
+      atServer->on("/settime", atHandleSetTime);
       atServer->on("/icon.png", atHandleIcon);
       atServer->on("/manifest.json", atHandleManifest);
       atServer->onNotFound(atHandleApp);

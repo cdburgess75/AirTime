@@ -30,29 +30,10 @@
 #include "station_vote.h"
 #include "types.h"
 #include "wwv_marker.h"
+#include "wwv_subcarrier.h"
 #include "wwv_timecode.h"
 
 namespace airtime {
-
-// Pulse-measurement gates for the 100 Hz timecode subcarrier — the same
-// detector CLASS as the minute marker, pointed at different physics. The
-// duration gate is not a filter here but the measurement itself: every burst
-// from the shortest zero (170 ms) to the longest marker (770 ms) must come
-// back with its width, so the gate opens to [80, 900] ms and classifyPulse
-// does the discriminating downstream. Thresholds are set for a subcarrier at
-// roughly a quarter of the modulation the tick tones get, through a 20 Hz bin
-// whose noise floor is correspondingly lower than the marker bin's measured
-// 7.7e-5 — PROVISIONAL until the first sub[] serial report from the field,
-// exactly as min_power itself was until Milestone 0 measured it.
-inline WwvMarkerConfig defaultSubcarrierPulseConfig() {
-  WwvMarkerConfig c;
-  c.on_ratio = 4.0f;
-  c.off_ratio = 2.0f;
-  c.min_power = 5.0e-5f;
-  c.gate_min_us = 80000;
-  c.gate_max_us = 900000;
-  return c;
-}
 
 struct AppConfig {
   ArbiterConfig arbiter;
@@ -169,7 +150,9 @@ struct AppConfig {
   // blocks of measurement. sub_hz <= 0 disables the whole chain.
   real wwv_sub_hz = 100.0f;
   int64_t wwv_sub_block_us = 50000;
-  WwvMarkerConfig subcarrier_pulse = defaultSubcarrierPulseConfig();
+  // Reads the code by its timing, not a threshold (wwv_subcarrier.h). Its
+  // block_us is taken from wwv_sub_block_us above.
+  SubcarrierReaderConfig subcarrier_reader;
   WwvTimecodeConfig timecode;
   // Resolves the code's two-digit year. The firmware passes its build year;
   // wrong only if the device outlives its last flash by fifty years.
@@ -182,6 +165,11 @@ struct AppConfig {
   // it in the same window takes phase from there to ±30 ms.
   int64_t wwv_timecode_uncertainty_us = 250000;
   int64_t wwv_timecode_lead_us = 30000;
+
+  // At power-on, FM that has never delivered a clock time at this QTH gets
+  // this long — two dwells — before HF is tried, instead of the whole
+  // acquisition. FM that has delivered keeps the full hunt. See loop().
+  int64_t unproven_fm_acquire_us = 150LL * 1000000;
 };
 
 // Who owns the radio right now. See AirTimeApp::setMode for what each means.
@@ -264,7 +252,10 @@ class AirTimeApp {
   // sources OR explicit operator confirmation for a correction over 500 ms, and
   // a human deliberately setting the time IS that confirmation — this is the
   // encoding of it, not a way around it.
-  void setManualUtc(int64_t utc_us);
+  //
+  // `uncertainty_us` is what the setter is worth: 5 s for a person with a
+  // watch, about 1 s for a phone whose own clock is network-disciplined.
+  void setManualUtc(int64_t utc_us, int64_t uncertainty_us = 5000000);
 
   // WWV band rotation, first entry tried first (default 5/10/15 MHz). A warm
   // start like the FM list: order it by what actually works at the QTH — the
@@ -352,7 +343,7 @@ class AirTimeApp {
   const Scheduler& scheduler() const { return sched_; }
   const Directive& directive() const { return directive_; }
   const WwvMarkerDetector& wwvMarker() const { return marker_; }
-  const WwvMarkerDetector& wwvPulse() const { return pulse_; }
+  const SubcarrierSecondReader& wwvSubReader() const { return sub_reader_; }
   const WwvTimecodeDecoder& wwvTimecode() const { return timecode_; }
   const WwvFixDiag& wwvFixDiag() const { return wwv_diag_; }
   const RdsFixDiag& rdsFixDiag() const { return rds_diag_; }
@@ -412,7 +403,9 @@ class AirTimeApp {
   StationBiasTable bias_;
   FmSurvey survey_;
   WwvMarkerDetector marker_;
-  WwvMarkerDetector pulse_;      // 100 Hz burst widths (the timecode symbols)
+  SubcarrierSecondReader sub_reader_;  // the timecode symbols, read by their timing
+  int64_t acquire_began_ = 0;          // when this power-on's acquisition started
+  bool fmProven() const;               // any listed station has delivered here, not Red
   WwvTimecodeDecoder timecode_;
   ClientCounter clients_;
 

@@ -56,9 +56,9 @@ AT_TEST(wwv_rejects_long_tone) {
 // rejected — the ratio test alone must not be able to promote noise.
 AT_TEST(wwv_ignores_subfloor_burst) {
   Feeder f;
-  for (int i = 0; i < 10; ++i) f.feed(i, 1e-5f);    // quiet
-  for (int i = 10; i < 18; ++i) f.feed(i, 8e-5f);   // 800 ms, still under min_power
-  f.feed(18, 1e-5f);
+  for (int i = 0; i < 10; ++i) f.feed(i, 5e-6f);    // quiet
+  for (int i = 10; i < 18; ++i) f.feed(i, 3.5e-5f); // 800 ms, 7x the floor but under min_power
+  f.feed(18, 5e-6f);
   AT_CHECK(!f.got);
   AT_CHECK(!f.det.inTone());
 }
@@ -91,6 +91,19 @@ AT_TEST(wwv_diag_counts_and_survives_reset) {
   AT_CHECK_EQ(d.rejected_long, 0u);
   AT_CHECK(d.longest_tone_us >= 700000 && d.longest_tone_us <= 900000);
   AT_CHECK(d.max_power >= kTone);
+}
+
+// Levels the owner's radio actually reported in the field (mkr[] flr/pk,
+// 2026-09-13/14, good antenna): noise ~1.5e-5, strongest block ~1.5e-4 —
+// about 5x below the Milestone 0 bench. With min_power at the bench value
+// (2e-4) nothing could ever fire, though the tone stood 10x above the floor.
+AT_TEST(wwv_detects_at_field_levels) {
+  Feeder f;
+  for (int i = 0; i < 10; ++i) f.feed(i, 1.5e-5f);
+  for (int i = 10; i < 18; ++i) f.feed(i, 1.5e-4f);
+  f.feed(18, 1.5e-5f);
+  AT_CHECK(f.got);
+  AT_CHECK_EQ(f.marker.duration_us, 800000LL);
 }
 
 AT_TEST(wwv_detects_at_measured_levels) {

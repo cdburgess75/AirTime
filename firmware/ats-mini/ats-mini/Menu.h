@@ -244,6 +244,7 @@ int atCycleCount();                 // number of modes, NOT counting Off
 const char *atCycleName(int i);
 long atCyclePeriodMs(int i);        // 0 for Off
 void atSetCycleIdx(int i);
+bool atSetUtcFromPhoneMs(int64_t ms);
 // The operator's zone offset from UTC in seconds, DST applied for right now.
 // The phone app renders local time from the RADIO's UTC plus this, so the
 // phone's own clock never enters — which is rather the point of the device.

@@ -72,6 +72,8 @@ AT_TEST(app_cold_start_rds_seeds_and_serves) {
 
 // No sources at all: we still come up and serve, but we say we are unsynced —
 // and NTP marks itself unusable rather than handing out a confident wrong time.
+// With nothing proven on FM the radio listens for HF first (an 8-minute window
+// from about 2.5 minutes in), so serving is checked once that window is over.
 AT_TEST(app_starved_serves_but_flags_unsynced) {
   Sim sim;
   sim.true_utc_us = startUtcUs();
@@ -79,7 +81,7 @@ AT_TEST(app_starved_serves_but_flags_unsynced) {
   AirTimeApp app(sim.deps());
   app.begin();
 
-  sim.advance(6 * kMin, &app);
+  sim.advance(12 * kMin, &app);
 
   AT_CHECK(app.scheduler().phase() == Phase::Serving);
   AT_CHECK(!app.arbiter().isSet());
@@ -602,6 +604,38 @@ AT_TEST(app_timecode_cold_starts_from_hf_alone) {
   // And the fix ended the window: the device went back to serving.
   sim.advance(5 * kS, &app);
   AT_CHECK(sim.wifi.isUp());
+}
+
+// The same cold start at the levels the owner's radio reported in the field,
+// not the bench: marker bin noise ~1.5e-5 and peak ~1.5e-4 (mkr[]), subcarrier
+// peak ~2.9e-5 (code[]), about 5x under Milestone 0. The bench thresholds sat
+// above every one of those peaks, so the radio listened for hours and never
+// counted a single pulse while WWV was audible in the speaker.
+AT_TEST(app_timecode_cold_starts_at_field_levels) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs() + 17 * kMin + 23 * kS;
+  sim.crystal_ppm = 12.0;
+  sim.wwv.propagating_bands = {10000};
+  sim.wwv.tone_power = 1.5e-4f;
+  sim.wwv.noise_power = 1.5e-5f;
+  sim.wwv.sub_tone_power = 2.9e-5f;
+  sim.wwv.sub_noise_power = 6.0e-6f;
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  app.begin();
+
+  bool seeded = false;
+  for (int i = 0; i < 40 * 60 && !seeded; ++i) {
+    sim.advance(kS, &app, 10000);
+    seeded = app.arbiter().hasSourceFix();
+  }
+
+  AT_CHECK(app.wwvTimecodeDiag().pulses > 0);
+  AT_CHECK(seeded);
+  AT_CHECK(iabs(sim.clockErrorUs(app)) < 300000);
+  AT_CHECK((app.displayState().sources & kSrcWwv) != 0);
 }
 
 // Same sky, but the subcarrier is absent (band propagates, code unreadable):
@@ -1465,6 +1499,48 @@ AT_TEST(app_hand_set_after_a_slow_station_synced_the_clock) {
   AT_CHECK(r != nullptr);
   AT_CHECK(app.sources().rating(*r) == Rating::Red);
   AT_CHECK(err < 10 * kS && err > -10 * kS);
+}
+
+// FM that has never delivered clock time here gets two dwells at power-on,
+// then HF — not the full five-minute hunt plus a fifteen-minute wait, which is
+// what the owner's radio did at a QTH where FM had already proven useless.
+AT_TEST(app_unproven_fm_hands_over_to_wwv_within_minutes) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  sim.wwv.propagating_bands = {10000};
+  FakeStation mute{9230, 0x986D, false, 0};   // on the air, no clock time
+  sim.rds.stations = {mute};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {9230};
+  app.setFmStations(fm, 1);
+  app.begin();
+
+  const int64_t start = sim.clock.mono_us;
+  bool listening = false;
+  for (int i = 0; i < 10 * 60 && !listening; ++i) {
+    sim.advance(kS, &app);
+    listening = app.scheduler().phase() == Phase::Listening;
+  }
+  AT_CHECK(listening);
+  AT_CHECK(sim.clock.mono_us - start <= 3 * kMin);
+}
+
+// A phone's clock is worth about a second, not a wristwatch's five, and the
+// set says so.
+AT_TEST(app_phone_set_claims_about_a_second) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  AirTimeApp app(sim.deps(), cfg);
+  app.begin();
+  app.setManualUtc(sim.true_utc_us, 1000000);
+  const int64_t now = sim.clock.mono_us;
+  AT_CHECK(app.arbiter().isSet());
+  AT_CHECK(app.arbiter().uncertaintyUs(now) <= 1100000);
 }
 
 // A laptop is never handed time that nothing has confirmed. One station, five

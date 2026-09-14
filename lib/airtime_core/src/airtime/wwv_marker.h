@@ -29,7 +29,13 @@ struct WwvMarkerConfig {
   // This sits between them. The original 0.01 was a guess made before any
   // hardware existed and was ~5x ABOVE real signal — the detector would never
   // have fired. Worth re-validating against a genuine WWV marker in the field.
-  real min_power = 2.0e-4f;
+  // Re-validated 2026-09-13/14, and it failed: on the owner's radio in the
+  // field the in-bin noise EMA read 1.0-2.0e-5 and the strongest block
+  // 1.5-1.8e-4 — the whole chain ~5x under the bench — so 2e-4 sat above every
+  // peak and hours of listening counted zero tone starts while WWV was audible.
+  // 4e-5 is twice the highest field floor: the ratio test governs again, and
+  // the 700-900 ms gate plus two-marker corroboration still stop noise.
+  real min_power = 4.0e-5f;
   real noise_alpha = 0.05f; // EMA coefficient for noise-floor tracking (IDLE only)
   int64_t gate_min_us = 700000;  // accept marker durations in [700, 900] ms
   int64_t gate_max_us = 900000;

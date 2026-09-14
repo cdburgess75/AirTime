@@ -2,6 +2,13 @@
 
 namespace airtime {
 
+// The reader's bins must be the sampler's sub blocks, which AppConfig owns.
+static SubcarrierReaderConfig readerFor(const AppConfig& cfg) {
+  SubcarrierReaderConfig r = cfg.subcarrier_reader;
+  r.block_us = cfg.wwv_sub_block_us;
+  return r;
+}
+
 AirTimeApp::AirTimeApp(const AppDeps& deps, const AppConfig& cfg)
     : deps_(deps),
       cfg_(cfg),
@@ -10,7 +17,7 @@ AirTimeApp::AirTimeApp(const AppDeps& deps, const AppConfig& cfg)
       bias_(cfg.station_bias),
       survey_(cfg.survey_cfg),
       marker_(cfg.marker),
-      pulse_(cfg.subcarrier_pulse),
+      sub_reader_(readerFor(cfg)),
       timecode_(cfg.timecode, cfg.century_hint_year) {}
 
 void AirTimeApp::setFmStations(const int32_t* khz, std::size_t n) {
@@ -86,6 +93,7 @@ void AirTimeApp::begin() {
   for (std::size_t i = 0; i < kMaxStations; ++i) red_tried_[i] = now - cfg_.red_recheck_us;
 
   sched_.start(now);
+  acquire_began_ = now;
   fm_dwell_start_ = now;
   last_persist_ = now;
   last_ct_mono_ = now;   // the list gets a fair run before it is judged
@@ -149,17 +157,16 @@ void AirTimeApp::adoptSurveyResult() {
   persist(deps_.clock->nowUs(), /*force=*/true);
 }
 
-void AirTimeApp::setManualUtc(int64_t utc_us) {
+void AirTimeApp::setManualUtc(int64_t utc_us, int64_t uncertainty_us) {
   const int64_t now = deps_.clock->nowUs();
   TimeFix f;
   f.source = Source::Manual;
   f.mono_us = now;
   f.utc_us = utc_us;
-  // What an operator reading a watch and pressing a button is actually worth.
-  // Deliberately not optimistic: claiming better than this would let a manual
-  // set outrank a WWV marker in the blend, and the whole point is to hand off
-  // to WWV as fast as possible.
-  f.uncertainty_us = 5000000;
+  // What the setter is worth: 5 s for an operator with a watch (the default),
+  // about 1 s for a phone. Never better than a second, so a manual set cannot
+  // outrank a WWV fix in the blend — the point is to hand off to WWV fast.
+  f.uncertainty_us = uncertainty_us < 1000000 ? 1000000 : uncertainty_us;
   f.independent_support = 2;   // the operator's own confirmation, see header
   f.carries_date = true;
   const ArbiterUpdate u = arbiter_.update(f);
@@ -379,8 +386,20 @@ void AirTimeApp::applyDirective(const Directive& d) {
   }
 }
 
+// FM has earned its boot hunt if a station on the list has delivered a clock
+// time at this QTH and is not rated Red.
+bool AirTimeApp::fmProven() const {
+  for (std::size_t i = 0; i < station_count_; ++i) {
+    const SourceRow* r = sources_.find(SourceKind::Fm, stations_[i]);
+    if (r == nullptr || r->heard == 0) continue;
+    const Rating rt = sources_.rating(*r);
+    if (rt == Rating::Green || rt == Rating::Yellow) return true;
+  }
+  return false;
+}
+
 void AirTimeApp::resetTimecodeChain() {
-  pulse_.reset();
+  sub_reader_.reset();
   timecode_.reset();
   tc_last_edge_us_ = 0;
 }
@@ -391,7 +410,23 @@ void AirTimeApp::loop() {
   // The scheduler paces itself by whether anything has fixed the clock yet:
   // unseeded, the listen windows are the acquisition and come accordingly.
   sched_.setSeeded(arbiter_.hasSourceFix());
+
+  // FM that has never delivered a clock time here does not get the whole
+  // five-minute boot hunt: two dwells, then HF. The owner's radio sat on FM for
+  // five minutes and then waited fifteen more for its first WWV window, at a
+  // QTH where FM had already proven useless.
+  const bool was_acquiring = sched_.phase() == Phase::Acquiring;
+  if (was_acquiring && !arbiter_.hasSourceFix() && !surveying() && !fmProven() &&
+      (now - acquire_began_) >= cfg_.unproven_fm_acquire_us) {
+    sched_.requestServeNow();
+  }
   directive_ = effectiveDirective(sched_.tick(now));
+  // Acquisition ended with nothing: listen now, not a whole unseeded interval
+  // from now. There is nothing to serve yet anyway.
+  if (was_acquiring && sched_.phase() == Phase::Serving &&
+      !arbiter_.hasSourceFix() && !surveying()) {
+    sched_.requestListenNow();
+  }
   applyDirective(directive_);
 
   // In operator mode AirTime observes nothing and steers nothing. Reading RDS
@@ -637,44 +672,33 @@ void AirTimeApp::pollWwv(int64_t now) {
 void AirTimeApp::pollWwvTimecode(int64_t now) {
   int64_t t = 0;
   real p = 0;
-  WwvMarker pm;
   while (deps_.wwv->nextSubPower(&t, &p)) {
-    if (!pulse_.process(t, p, &pm)) continue;
-
-    if (tc_last_edge_us_ != 0) {
-      const int64_t dt = pm.leading_edge_us - tc_last_edge_us_;
-      if (dt < 700000) {
-        // A second burst inside the same second. The code sends exactly one
-        // pulse per second and the longest legal pulse ends 860 ms in, so
-        // this is voice or noise split by the hysteresis — drop the splinter,
-        // keep the cadence anchored on the real edge.
-        ++tc_diag_.splinters;
-        continue;
-      }
-      if (dt > 90000000) {
-        // The band went quiet for a minute and a half. Whatever alignment we
-        // held describes a signal that is gone; hunt fresh rather than feed
-        // ninety synthetic holes.
-        timecode_.reset();
-        tc_last_edge_us_ = 0;
-      } else {
-        // Seconds whose pulse never crossed the threshold. Feed each as an
-        // explicitly unreadable symbol so the frame keeps its shape: a holed
-        // frame is discarded either way, but an intact marker skeleton keeps
-        // the ALIGNMENT, and that is a minute of re-hunting saved (decoder
-        // header, "Holes").
-        const int64_t missed = (dt - 500000) / 1000000;
-        for (int64_t k = 1; k <= missed; ++k) {
-          ++tc_diag_.gap_seconds;
-          timecode_.onSecond(-1, tc_last_edge_us_ + k * 1000000);
-        }
-      }
+    const uint32_t locks_before = sub_reader_.diag().locks;
+    sub_reader_.process(t, p);
+    if (sub_reader_.diag().locks != locks_before) {
+      // A new second boundary. Whatever frame alignment the decoder held was
+      // measured against the old one.
+      timecode_.reset();
+      // The code's shape standing this far out of the noise is propagation
+      // evidence in itself: hold the band while the frames arrive.
+      sched_.onWwvMarker(sub_reader_.diag().on_level);
     }
-    tc_last_edge_us_ = pm.leading_edge_us;
-    ++tc_diag_.pulses;
+  }
 
-    const bool confirmed =
-        timecode_.onSecond(pm.duration_us / 1000, pm.leading_edge_us);
+  // One entry per second from the moment the reader locked: a width, or -1
+  // for a second it could not read. Holes keep the frame's shape (decoder
+  // header, "Holes"), so every second is fed, readable or not.
+  int64_t pulse_ms = 0;
+  int64_t edge_us = 0;
+  while (sub_reader_.next(&pulse_ms, &edge_us)) {
+    if (pulse_ms < 0) {
+      ++tc_diag_.gap_seconds;
+    } else {
+      ++tc_diag_.pulses;
+    }
+    tc_last_edge_us_ = edge_us;
+
+    const bool confirmed = timecode_.onSecond(pulse_ms, edge_us);
 
     // A frame that DECODES is propagation evidence as strong as a marker —
     // noise does not produce sixty structurally-correct symbols — so it pins
@@ -682,7 +706,7 @@ void AirTimeApp::pollWwvTimecode(int64_t now) {
     // frame confirms the time.
     if (timecode_.framesDecoded() != tc_frames_decoded_seen_) {
       tc_frames_decoded_seen_ = timecode_.framesDecoded();
-      sched_.onWwvMarker(pm.peak_power);
+      sched_.onWwvMarker(sub_reader_.diag().on_level);
       learned_dirty_ = true;
     }
 

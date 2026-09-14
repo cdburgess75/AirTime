@@ -616,7 +616,7 @@ int airtimeHfAboutLines(const char *out[], int max)
   if(atApp == nullptr || max <= 0) return 0;
 
   const airtime::WwvMarkerDiag md = atApp->wwvMarker().diag();
-  const airtime::WwvMarkerDiag pd = atApp->wwvPulse().diag();
+  const airtime::SubcarrierReaderDiag pd = atApp->wwvSubReader().diag();
   const airtime::WwvTimecodeDecoder& tc = atApp->wwvTimecode();
   const airtime::WwvTimecodeDiag& td = atApp->wwvTimecodeDiag();
 
@@ -637,9 +637,9 @@ int airtimeHfAboutLines(const char *out[], int max)
            (unsigned long)md.rejected_long, (long)(md.last_tone_us / 1000));
   out[n] = l[n]; if(++n >= max) return n;
 
-  snprintf(l[n], sizeof(l[n]), "Code:   flr %.0e  pulses %lu  gaps %lu",
-           (double)pd.noise_floor, (unsigned long)td.pulses,
-           (unsigned long)td.gap_seconds);
+  snprintf(l[n], sizeof(l[n]), "Code:   %s x%.1f  read %lu  gaps %lu",
+           pd.locked ? "locked" : "hunting", (double)pd.contrast,
+           (unsigned long)td.pulses, (unsigned long)td.gap_seconds);
   out[n] = l[n]; if(++n >= max) return n;
 
   snprintf(l[n], sizeof(l[n]), "        frames %lu  read %lu  paired %lu",
@@ -1120,6 +1120,18 @@ int atLocalOffsetS()
 // The adapters and the app are statics in this file. Rather than make them
 // globals so one page can read them, hand out exactly what it asks for.
 const airtime::AirTimeApp *airtimeApp() { return atApp; }
+
+// "Set radio clock from this phone" on the web app: the phone's own clock,
+// network-disciplined almost everywhere on earth, taken once as a hand-set.
+// ±1 s covers the phone and the round trip; WWV takes it from there.
+bool atSetUtcFromPhoneMs(int64_t ms)
+{
+  if(atApp == nullptr) return false;
+  // 2026-01-01 .. 2100-01-01: anything else is a broken phone, not a time.
+  if(ms < 1767225600000LL || ms >= 4102444800000LL) return false;
+  atApp->setManualUtc(ms * 1000, 1000000);
+  return true;
+}
 uint32_t airtimeRdsAccepted()  { return atRds.groupsAccepted(); }
 uint32_t airtimeRdsRejected()  { return atRds.groupsRejected(); }
 uint32_t airtimeRdsNotFm()     { return atRds.pollsNotFm(); }
@@ -1501,19 +1513,22 @@ void airtimeLoop()
         (unsigned long)md.rejected_short, (unsigned long)md.rejected_long,
         (unsigned long)md.markers);
     // The 100 Hz code chain, same shape: the subcarrier bin's health, then
-    // each stage of the ladder. blk/drop are the second queue; flr/pk the
-    // pulse detector's view of the 20 Hz bin — the numbers that will either
-    // confirm or correct the provisional thresholds in AppConfig.
-    const airtime::WwvMarkerDiag pdg = atApp->wwvPulse().diag();
+    // each stage of the ladder. blk/drop are the second queue; lock/x say
+    // whether the reader has found the second boundary and how far the
+    // folded pulse stands above the always-off window; on/off are the levels
+    // it reads against, pk the strongest block. read/gap: seconds read and
+    // seconds it could not read.
+    const airtime::SubcarrierReaderDiag pdg = atApp->wwvSubReader().diag();
     const airtime::WwvTimecodeDecoder& tcd = atApp->wwvTimecode();
     const airtime::WwvTimecodeDiag& tdg = atApp->wwvTimecodeDiag();
     Serial.printf(
-        "  code[blk=%lu drop=%lu flr=%.1e pk=%.1e pulses=%lu spl=%lu gap=%lu "
-        "frames=%lu read=%lu ok=%lu]\n",
+        "  code[blk=%lu drop=%lu lock=%d/%lu x=%.2f on=%.1e off=%.1e pk=%.1e "
+        "read=%lu gap=%lu frames=%lu dec=%lu ok=%lu]\n",
         (unsigned long)atWwv.subBlocksProduced(),
         (unsigned long)atWwv.subBlocksDropped(),
-        (double)pdg.noise_floor, (double)pdg.max_power,
-        (unsigned long)tdg.pulses, (unsigned long)tdg.splinters,
+        pdg.locked ? 1 : 0, (unsigned long)pdg.locks, (double)pdg.contrast,
+        (double)pdg.on_level, (double)pdg.off_level, (double)pdg.max_power,
+        (unsigned long)tdg.pulses,
         (unsigned long)tdg.gap_seconds, (unsigned long)tcd.framesSeen(),
         (unsigned long)tcd.framesDecoded(),
         (unsigned long)tcd.framesConfirmed());
