@@ -2,289 +2,264 @@
 
 # ⏱ AirTime
 
-### When the internet is gone and GPS can't be trusted, the time still arrives — over the air.
+### Accurate time from the air, with no internet and no GPS.
 
-**A multi-source, resilient time reference for FT8/JS8 digital modes, running on an unmodified pocket radio.**
-It listens to broadcast FM and to WWV on shortwave, arbitrates them into a drift-disciplined clock, and serves that clock to your laptop as **NTP** — from its own Wi‑Fi access point, with no internet anywhere in the loop.
+**A pocket shortwave radio that finds the correct time by itself, tells you how much to trust it, and hands it to your laptop for FT8 and JS8.**
 
-<br/>
-
-### [**▶  TRY THE APP  ◀**](https://cdburgess75.github.io/AirTime/demo/)
-
-**[cdburgess75.github.io/AirTime/demo](https://cdburgess75.github.io/AirTime/demo/)**
-
-*The real interface, running on simulated data. On an actual radio this is served by the device itself.*
+It listens to FM stations and to WWV, checks them against each other, and only calls the time **Green** when two different sources agree. It then serves that time over its own Wi‑Fi as NTP. Nothing in the loop touches the internet.
 
 <br/>
 
 [![Firmware](https://img.shields.io/badge/firmware-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](lib/airtime_core)
-[![Platform](https://img.shields.io/badge/ESP32--S3-SI4732-E7352C?logo=espressif&logoColor=white)](#-hardware)
-[![Tests](https://img.shields.io/badge/tests-189%20cases%20%2F%206412%20checks-2ea043)](test)
-[![Upstream](https://img.shields.io/badge/stock%20build-byte--identical-2ea043)](#-build)
-[![Web UI](https://img.shields.io/badge/web%20app-zero%20dependencies-635BFF)](#-save-it-to-your-phone)
+[![Platform](https://img.shields.io/badge/ESP32--S3-SI4732-E7352C?logo=espressif&logoColor=white)](#-what-you-need)
+[![Tests](https://img.shields.io/badge/tests-260%20cases%20%2F%206%2C808%20checks-2ea043)](test)
+[![Release](https://img.shields.io/github/v/release/cdburgess75/AirTime?label=firmware&color=635BFF)](https://github.com/cdburgess75/AirTime/releases/latest)
 [![Base](https://img.shields.io/badge/built%20on-ats--mini-informational)](https://github.com/esp32-si4732/ats-mini)
 
 <br/>
 
-![The AirTime clock face on the ATS Mini V4: large seven-segment local time in amber over green UTC, a confidence line reading plus-or-minus 31 ms with sources RDS+WWV, the tuned FM station, and the FT8 cycle bar filling across the bottom of the panel](docs/img/hero-device.jpg)
+![AirTime on the ATS Mini V4, green: local time 16:54:02 CDT, 21:54:02 UTC, plus or minus 125 ms from RDS, synced 5 minutes ago, on FM 89.9, with the JS8 cycle bar along the bottom](docs/img/clock-green.jpg)
 
-> **📸 Drop in:** a hero photo of the radio on the bench, screen lit, clock synced.
-> Landscape, ~1600 px wide. This is the first thing anyone sees — make it the device doing its job.
+*Green means two independent sources agree. This one is on a big HF antenna in Louisiana, confirmed by two FM stations.*
 
 </div>
 
 ---
 
-## 🌩 Why this exists
+## Why
 
-FT8 and JS8 need the operating computer's clock within about a second of UTC — under 200 ms is effectively perfect. In the field, or after a hurricane, there is no internet NTP. GPS is a single point of failure: jammable, spoofable, or simply not in the bag.
+FT8 and JS8 only work if your computer's clock is within about a second of UTC. In the field, after a storm, or anywhere without internet, there is no NTP. GPS is one more thing to carry, one more thing to fail, and it can be jammed or spoofed.
 
-Every commercial "field time server" is GPS-only, and none of them arbitrate multiple over-the-air sources or report honest uncertainty. AirTime is the missing device — and it runs on a $60 pocket radio with **no soldering and no modifications**.
+Time is already being broadcast, all day, everywhere in the country: FM stations send it in their RDS data, and WWV sends it on shortwave from Colorado. AirTime is a $60 radio that listens to both, works out which ones to believe, and serves the result to your laptop. **No soldering, no modifications**, and nothing to subscribe to.
 
 ---
 
-## ✨ Features
+## What it does
 
-**Time, from the air**
-- **📻 Two independent sources, either sufficient.** FM RDS clock-time supplies date and coarse time where FM reaches. On shortwave, WWV supplies **both jobs by itself**: the 100 Hz timecode carries minute/hour/day/year — decoded, and believed only when two whole frames agree in exact lockstep — and the 1000 Hz minute marker then pulls the phase onto the second. A big antenna and no FM dial is a working configuration now. (And if all else fails: Settings → Set Clock, dial the next minute, press at :00.)
-- **🗳 Multi-station voting.** Many FM stations send no clock-time, and some send it *wrong*. Stations vote; outliers lose.
-- **⚖️ An arbiter that never lies.** Sources steer the clock, they never step it. Corrections over 500 ms need two independent sources agreeing — the defence against a bad station and against spoofing.
-- **📉 It learns its own crystal.** Rate error is measured across syncs and stored, so an hourly listen is enough to hold discipline between them.
-- **🎚 Uncertainty is a first-class value.** Displayed always, served as real NTP root dispersion, and the clock flags itself **UNSYNCED** the moment the estimate goes stale. It would rather admit doubt than be confidently wrong.
+- **Finds the time on its own.** FM stations that send clock time are found by scanning the dial, wherever you are. WWV is checked on 5, 10 and 15 MHz. Nothing about your location is built in.
+- **Grades every source.** Each station gets a colour: **Green** (confirmed by a different source), **Yellow** (gave a time nobody has checked), **Red** (silent, or proven wrong). A wrong station, and there are plenty, is caught and ignored.
+- **Never claims more than it knows.** The screen always shows the uncertainty (±36 ms, ±400 ms…). Until two sources agree, the clock is Yellow and NTP tells your laptop not to use it yet.
+- **Learns its own crystal**, so it keeps good time between checks.
+- **Serves NTP** on `192.168.4.1` from its own Wi‑Fi network. Join it, sync, run FT8.
+- **Phone app**, served by the radio: big clock, live FT8/JS8 cycle bar, source list, and a **Set radio clock from this phone** button for when you want it right now.
+- **FT8/JS8 cycle bar** on the screen and in the app: FT8, FT4, FT2, JS8 (four speeds), JT65/JT9, WSPR. If your laptop starts transmitting when the bar hasn't rolled over, your laptop's clock is the one that's wrong.
+- **It's still a radio.** Choose RADIO at power-on and you get the full ATS Mini receiver: 150 kHz–30 MHz AM/SSB, FM, a **TIME** band with all the standard time stations (WWV, WWVH, CHU, BPM, RWM, HLA, YVTO), ~8,000 embedded shortwave schedules, ham net schedules, a CW decoder and a waterfall.
 
-**Things a clock this accurate makes possible**
-- **📶 FT8/JS8 cycle instrument.** A bar fills across the current transmit slot with a millisecond countdown — FT8, FT4, **FT2** (3.75 s), JS8 ×4, JT65, WSPR. The fill colour follows *slot parity*, so the TX/RX alternation is visible at a glance. It's also a check on your laptop: if WSJT‑X starts transmitting when the bar hasn't rolled over, your computer's clock is wrong.
-- **📱 A phone app, served by the radio.** Add it to your home screen and get a full-screen clock, live cycle bar and diagnostics — rendering local time from *the radio's* UTC, never the phone's.
-- **🗓 Net schedules.** ~15 HF nets with published times, so the screen answers *"is it on **now**"* rather than *"what frequency is it on"*. Pick one and it tunes there.
-- **🌍 8,142 shortwave stations, embedded.** The full EiBi schedule compiled into the image — because this radio's network has no route to the internet, by design. Tune around and stations name themselves.
-- **📟 CW copy & waterfall.** A Morse decoder with a tuning bar, and the SSB passband as live spectrum plus history.
+---
+
+## How it gets the time
+
+| Source | What it gives | How it's used |
+|---|---|---|
+| **FM RDS clock time** | date and time, to about ±0.4 s | The fast path. Two stations that agree turn the clock Green within minutes. |
+| **WWV minute tone** | the exact second, to about ±30 ms | Confirms and sharpens the FM time. Two tones that agree are needed for a big correction. |
+| **WWV timecode** | full date and time from HF alone | In the firmware; still being proven on the air. |
+| **Your phone** | ±1 s, anywhere | One button on the radio's web page. |
+| **Set Clock by hand** | ±5 s | Settings → Set Clock, press at :00. |
+
+**The one rule:** no single source is ever trusted on its own. A correction bigger than half a second needs two independent sources, or you. That's what stopped a local FM station that runs 3.3 seconds slow from setting this radio's clock, and it's the same defence against a spoofed signal.
+
+**Places.** The radio records each FM station's ID code. Carry it to another town and it notices the saved frequencies have strangers on them, scans the dial again, and keeps the new place separately. Bring it home and the home stations come straight back.
+
+**One tuner.** The radio can't listen to FM and WWV at the same time, and it can't run its Wi‑Fi while it listens to WWV (an ESP32 hardware limit). So it alternates: most of the time it sits on FM with Wi‑Fi up; a few times an hour it drops Wi‑Fi, listens for WWV for a few minutes, and comes back. The screen tells you which it's doing and when the next switch is.
+
+---
+
+## The screen
 
 <div align="center">
 
-![Three-panel view of the AirTime screens: the clock face with the FT8 cycle bar, the CW copy terminal showing decoded Morse with its tuning bar, and the waterfall showing the SSB passband as spectrum and history](docs/img/screens-triptych.png)
+![The AirTime clock face: 10:47:54 CDT in large yellow digits, 15:47:54 UTC in green, then a status line reading plus or minus 149 ms, RDS UNCONFIRMED, sync 2 minutes ago, the tuned station FM 92.3 RDS, NTP: 0 clients, and the JS8 Turbo cycle bar](docs/img/screen-clock-yellow.png)
 
-> **📸 Drop in:** three device screenshots side by side — clock, CW copy, waterfall.
-> ~1600 × 600 px. Photograph the panel straight-on in even light.
+</div>
 
+| Line | Meaning |
+|---|---|
+| **Big digits** | Local time. **Green** = confirmed by two sources. **Yellow** = one source, unconfirmed. **Red** = no live source; running on the last known time. |
+| **UTC** | Always shown, always green when the clock is valid. |
+| **±149 ms · RDS UNCONFIRMED · sync 2m ago** | How far off it could be, which sources set it, and how long since the last fix. |
+| **SEARCH FM 92.3 / SEARCH WWV 15000 AM** | What the radio is tuned to right now. |
+| **HF in 14:52 / HF 0:07 left** | Until the time is Green: when the next WWV listening window starts, or how long the current one has left. |
+| **JS8 Turbo 6s · T‑5.18s** | The cycle bar: the current FT8/JS8 slot filling, and a countdown to the next one. Turn the knob to change mode. |
+
+<div align="center">
+<img src="docs/img/searching-fm.jpg" width="49%" alt="Yellow clock on FM 94.1 with the countdown reading HF in 14:52">
+<img src="docs/img/searching-wwv.jpg" width="49%" alt="Yellow clock during a WWV window on 15000 kHz with HF 0:07 left">
+
+*Left: on FM, counting down to the next WWV window. Right: inside a WWV window on 15 MHz.*
+
+<br/><br/>
+
+![The clock after WWV corrected it: plus or minus 36 ms, sources RDS+WWV, still yellow because the two sources have not agreed yet](docs/img/clock-wwv.jpg)
+
+*WWV has spoken: ±36 ms. It stays Yellow until a second source agrees with WWV.*
+
+</div>
+
+### Menus
+
+<div align="center">
+<img src="docs/img/screen-menu.png" width="32%" alt="The root menu: Settings, About, Volume, Mode, Nets">
+<img src="docs/img/screen-mode.png" width="32%" alt="The Mode list: Clock, Radio, CW Copy">
+<img src="docs/img/screen-settings.png" width="32%" alt="The Settings list scrolled to Set Clock, with HF Listen, Sources and Reset Learn around it">
+</div>
+
+Press the knob for the menu. **Mode** switches between Clock, Radio, CW Copy and Waterfall. Under **Settings** you'll find **Sources** (every station and WWV band with its colour), **HF Listen** (start a WWV window now), **Set Clock**, **Time Zone** and **WWV Band**.
+
+<div align="center">
+<img src="docs/img/screen-radio.png" width="60%" alt="Radio mode: the stock ATS Mini dial on 80M LSB 3862 kHz with S-meter">
+
+*Radio mode. The dial is yours; AirTime keeps time quietly underneath and NTP keeps serving.*
 </div>
 
 ---
 
-## 📡 Hardware
+## The phone app
 
-**AMNVOLT ATS Mini V4** — unmodified, no soldering. Confirmed a **V4a**: the factory audio tap to IO11 is present and measured.
+Join the radio's Wi‑Fi and open **`http://192.168.4.1`**. Add it to your home screen and it opens full-screen like an app.
 
-| | |
-|---|---|
-| **MCU** | ESP32‑S3‑WROOM‑1‑N16R8 · dual core · 16 MB flash · 8 MB PSRAM |
-| **Receiver** | SI4732‑A10 DSP · 150 kHz–30 MHz AM/SSB · 64–108 MHz FM with hardware RDS |
-| **Panel** | 320 × 170 TFT · one push-encoder · LiPo · SMA · USB‑C |
+<div align="center">
 
-Two silicon facts shape the entire design:
+![Three phone screenshots side by side: the clock with a SYNCED badge and the JS8 cycle bar with mode buttons; the clock details with the Set radio clock from this phone button and receiver state; and the clock sources list with WWV bands and FM stations coloured G, Y and R](docs/img/phone-app.jpg)
 
-> **ADC2 cannot be read while Wi‑Fi is powered.** So every WWV listening window happens with the access point *down* — the radio goes off the network to hear the tone, and comes back by itself. That is the device working correctly, and it says so on screen.
+</div>
 
-> **There is one tuner.** FM (for RDS) and AM (for WWV) are mutually exclusive. Forgetting that has been the single most productive bug class in this project.
+- **Clock and cycle bar**, drawn from the *radio's* time, never the phone's.
+- **Set radio clock from this phone**: one tap sets the radio to your phone's time (±1 s) when you don't want to wait for the air.
+- **Clock sources**: the same Green/Yellow/Red list as on the radio, with how often each was heard and confirmed.
+- **`/status`**: a plain diagnostics page with everything, including the radio's own analysis of its last WWV listening windows.
+
+> **▶ [Try the app in your browser](https://cdburgess75.github.io/AirTime/demo/)** — the real interface, running on simulated data.
+
+> The app needs the radio's Wi‑Fi to load, and the radio drops its Wi‑Fi during each WWV window (a few minutes, a few times an hour). The app says so when it happens and comes back by itself.
 
 ---
 
-## 🚀 Quick start
+## Get it going
 
-> **Heads up:** this is **embedded firmware**, not a Node app — there's no `npm install`. The device build uses Arduino CLI; the platform-independent core builds and tests with plain `make`.
+### What you need
 
-### Prerequisites
+- An **ATS Mini V4** (also sold as AMNVOLT ATS Mini): ESP32‑S3 + SI4732, 320×170 screen, USB‑C. Around $60. **No modifications**: V4a/V4b boards already route the audio the WWV detector listens to. *(Original V4 boards need one jumper wire; see [`docs/PLAN.md`](docs/PLAN.md).)*
+- A **USB‑C data cable** and a computer with [esptool](https://docs.espressif.com/projects/esptool/) (`pip install esptool`).
+- An **HF antenna** helps a lot for WWV. FM works with the whip.
+
+### 1 · Flash it
+
+Download the latest **`airtime-…-airtime.bin`** from the [releases page](https://github.com/cdburgess75/AirTime/releases/latest). It's one file with everything in it.
+
+```bash
+esptool.py --chip esp32s3 --port /dev/ttyACM0 write_flash 0x0 airtime-v2026.09.14.001-airtime.bin
+```
+
+(Windows: the port is `COM…`. Newer esptool spells it `write-flash`. Or use Espressif's [browser flasher](https://espressif.github.io/esptool-js/) in Chrome: connect, and flash the file at address `0x0`.)
+
+**Updating later:** flash only the **`…-app.bin`** from the release, so your settings and everything the radio has learned are kept:
+
+```bash
+esptool.py --chip esp32s3 --port /dev/ttyACM0 write_flash 0x10000 airtime-v2026.09.14.001-airtime-app.bin
+```
+
+**Keep the cable still** while it writes (about 12 seconds). If a flash is interrupted the radio looks dead, with a dark screen, but it isn't: plug it in and flash again. The boot loader is in permanent memory and can't be damaged.
+
+> **Back up first** if you're coming from another firmware: `esptool.py --chip esp32s3 --port /dev/ttyACM0 read_flash 0x0 ALL backup.bin`. The full ATS Mini [recovery guide](firmware/ats-mini/docs/source/recovery.md) applies to this build too.
+
+### 2 · First power-on
+
+1. The screen asks **RADIO** or **AIRTIME**. Turn to choose, press to start; it picks AirTime by itself after 10 seconds.
+2. **Yellow first.** The radio scans the FM dial for stations that send the time (about 15 minutes the very first time, seconds after that). The first station sets the clock: Yellow.
+3. **Then it checks.** The other FM stations get a turn, and a WWV window opens within a few minutes. The countdown on the right of the screen says when.
+4. **Green** when a second source agrees. With a couple of good FM stations that's typically **5–15 minutes**. In an area with only one usable FM station, it waits for WWV, which depends on the band and the hour.
+
+In a hurry? Join the radio's Wi‑Fi, open `192.168.4.1`, and press **Set radio clock from this phone**.
+
+### 3 · Point your laptop at it
+
+Join the **`AirTime`** Wi‑Fi network (no password, no internet), then:
+
+```bash
+./tools/airtime-sync.sh                    # sync once
+sudo ./tools/airtime-sync.sh --install     # ...or keep it synced automatically
+```
+
+It refuses to sync while the radio says its time is unconfirmed, and does nothing when the radio isn't there, so the installed version is safe to forget. Per-OS instructions, including doing it by hand, are in [`docs/CLIENT_SETUP.md`](docs/CLIENT_SETUP.md).
+
+Then check in WSJT‑X or JS8Call: the **DT** column should sit near zero.
+
+### Things to know
+
+- **A laptop on USB makes noise.** With the radio plugged into a laptop, the laptop's USB radio interference can drown out WWV. Power it from a wall charger or power bank when it's working.
+- **WWV windows are audible.** During a WWV window the radio turns the audio up because the detector listens to the same audio you do. On FM it's silent. Whether windows can be silent too is being tested.
+- **It can't hear the longwave stations** (WWVB, DCF77, MSF, JJY). They're below the radio's 150 kHz limit.
+- **No GPS**, on purpose.
+
+---
+
+## What's proven on the air
 
 | | |
 |---|---|
-| [Arduino CLI](https://arduino.github.io/arduino-cli/) | device build |
-| `g++` (C++17) + `make` | host core & tests |
-| Python 3 | schedule, icon and release tooling |
-| An ATS Mini V4 | …optional. The core and its 189 tests run anywhere. |
+| Cold start to a Yellow clock from FM | ✅ about a minute |
+| Green from two FM stations | ✅ 5–15 minutes, repeatedly |
+| WWV minute tone confirming and sharpening the clock | ✅ ±36 ms, at the big antenna |
+| Catching a wrong FM station (3.3 s slow) and marking it Red | ✅ |
+| Laptop running FT8 on the radio's NTP, no internet | ✅ `sntp` → −0.005 s ± 0.071 |
+| Finding stations in a new place, bringing the old place back | ✅ simulated; field test pending |
+| WWV timecode: date and time from HF alone, no FM at all | 🟡 decodes in simulation; not yet on the air |
 
-### 1 · Clone
+Details and history in [`docs/STATUS.md`](docs/STATUS.md).
+
+---
+
+## Build it yourself
+
+You don't need the radio to work on the core. The timekeeping logic is plain C++17 with no Arduino in it, and it runs against a simulated radio with **one shared tuner**, because the real one has one and pretending otherwise hid real bugs.
 
 ```bash
 git clone https://github.com/cdburgess75/AirTime.git
 cd AirTime
+make test                      # 260 cases · 6,808 checks · no hardware needed
+
+tools/build_fw.sh airtime      # the firmware (needs arduino-cli + the ESP32 core)
+tools/release.sh               # -> dist/airtime-<version>-airtime.bin, one file, flash at 0x0
+tools/build_fw.sh stock        # unmodified upstream ats-mini, for comparison
 ```
 
-### 2 · Run the test suite (no hardware needed)
-
-```bash
-make test          # 189 cases · 6,412 checks
-```
-
-This exercises the arbiter, the RDS and WWV decoders, drift learning, the NTP
-server and a simulated ATS Mini — including a fake with **one shared tuner**,
-because the real device has one and pretending otherwise hid two live bugs.
-
-### 3 · Build the firmware
-
-```bash
-tools/build_fw.sh airtime     # the AirTime build
-tools/build_fw.sh stock       # unmodified upstream, for comparison
-```
-
-### 4 · Flash
-
-```bash
-tools/release.sh              # -> dist/airtime-<version>-airtime.bin
-esptool.py --chip esp32s3 write_flash 0x0 dist/airtime-<version>-airtime.bin
-```
-
-One merged image — bootloader, partition table and application at offset 0 — which is what a web flasher expects and removes the commonest way a first flash goes wrong.
-
-### 5 · Point your computer at the radio
-
-Join the radio's **`AirTime`** Wi‑Fi, then:
-
-```bash
-./tools/airtime-sync.sh                    # sync once
-sudo ./tools/airtime-sync.sh --install     # ...or track it forever
-```
-
-It refuses to sync from a radio reporting itself unsynchronised, and does nothing at all when the radio isn't there — which is what makes the installed version safe to forget about. Per-OS detail in [`docs/CLIENT_SETUP.md`](docs/CLIENT_SETUP.md).
-
-Confirm in WSJT‑X: the **DT** column should cluster near zero.
-
----
-
-## 📱 Save it to your phone
-
-The radio serves its own app. Add it to your home screen and it opens full-screen with its own icon — no browser chrome, no app store, no internet.
-
-<div align="center">
-
-![The AirTime phone app on an iPhone home screen next to other app icons, then opened full-screen showing the large clock, the SYNCED badge and the blue FT8 cycle bar](docs/img/phone-install.png)
-
-> **📸 Drop in:** two phone screenshots side by side — the icon on your home screen, and the app open.
-> Portrait, ~1200 px wide combined.
-
-</div>
-
-### First, join the radio
-
-1. On your phone, open **Wi‑Fi settings**
-2. Join the network named **`AirTime`**
-3. Ignore "no internet connection" — that's the point. This network doesn't go anywhere.
-4. Open your browser and visit **`http://192.168.4.1`**
-
-### 🍎 iPhone & iPad — Safari
-
-1. Tap the **Share** button (the square with an arrow, at the bottom)
-2. Scroll down and tap **Add to Home Screen**
-3. Name it **AirTime** and tap **Add**
-
-> Must be **Safari** — Chrome on iOS can't add to the home screen.
-
-### 🤖 Android — Chrome
-
-1. Tap the **⋮** menu (top right)
-2. Tap **Install app**, or **Add to Home screen**
-3. Confirm with **Install**
-
-### What you get
-
-| | |
-|---|---|
-| 🕐 **Big clock** | local and UTC, from *the radio's* time — your phone's clock is never consulted |
-| 📶 **Live cycle bar** | the FT8/JS8 slot, animated, with a millisecond countdown |
-| 🎛 **Mode picker** | change the cycle mode from your pocket |
-| 📊 **Diagnostics** | sources, signal, NTP clients, uptime |
-
-> **⚠️ One honest limitation.** The app needs the radio's access point up to load. There's no offline cache, because service workers require a secure context and this is plain HTTP on an IP address — no certificate is obtainable for an island network. The app detects this and tells you plainly: **the radio goes off the air during every WWV listening window**, and comes back by itself.
-
----
-
-## 🖥 What the radio serves
-
-| Path | |
-|---|---|
-| `udp/123` | **NTP**, with honest root dispersion — the real uncertainty, not a fiction |
-| `/` | the phone app |
-| `/status` | the full diagnostic table — first place to look when something is wrong |
-| `/api` | the same state as flat JSON |
-
-<div align="center">
-
-![The AirTime diagnostic status page in a desktop browser, showing confidence, per-source detail, receiver state and NTP client counts in a dark monospace table](docs/img/status-page.png)
-
-> **📸 Drop in:** a desktop browser screenshot of `192.168.4.1/status`.
-> ~1400 px wide.
-
-</div>
-
----
-
-## 🧭 Project status
-
-| Milestone | State |
-|---|---|
-| **0 — Safety net + hardware verify** | ✅ Backup, recovery drill, IO11 tap confirmed |
-| **1 — RDS clock** | ✅ On device — cold start to sync in ~30 s |
-| **2 — Serve** | ✅ Laptop running FT8 off the radio's AP, no internet |
-| **3 — WWV phase lock** | ✅ 15 MHz minute marker detected and applied · `sntp` → **−0.005 s ± 0.071** |
-| **4 — Arbiter + confidence** | ✅ Slew/step, corroboration, per-source drift, honest uncertainty |
-| **5 — Field acceptance** | 🟡 An evening of FT8 with median DT inside ±0.2 s — pending |
-
-Tracked in [`docs/STATUS.md`](docs/STATUS.md); the spec is [`docs/PLAN.md`](docs/PLAN.md).
-
----
-
-## 🐞 The bug class worth knowing about
-
-Nearly every field failure here has been one shape: **something held a cached claim about the radio, and the radio had moved.**
-
-- The test fakes modelled FM and AM as two independent radios. The device has **one**. Giving the fakes a single shared tuner surfaced two real bugs within minutes — including listen windows sampling FM programme audio while the log confidently printed a WWV frequency.
-- AirTime tuned the chip directly and never updated the firmware's `currentMode`, so the S-meter was drawn on the shortwave curve while the chip sat on FM — six bars from an ordinary station — and the AGC table applied belonged to a different band entirely. It presented as *"it just searches, but the signal is strong."* The strong signal was the artifact.
-- An attenuator set once in the AGC menu, months earlier, persisted in NVS and throttled the front end on every RDS harvest. **RSSI 14 dBµV wasn't the antenna. It was a listening preference applied to a measurement.**
-
-The design answer runs through the code: one function owns tuning, cached claims are voided when the dial moves, and the status page prints the chip's own story next to ours so a disagreement is *visible* rather than inferred.
-
----
-
-## 🗂 Repository layout
+Every AirTime change to the upstream files sits inside `#ifdef AIRTIME`, and the **stock build stays byte-identical** to upstream. Stock ats-mini is always recoverable from this tree.
 
 ```
 AirTime/
-├── lib/airtime_core/      Platform-independent core — no Arduino, no ESP-IDF
+├── lib/airtime_core/      the timekeeping core: no Arduino, no ESP-IDF
 │   └── src/airtime/
-│       ├── arbiter.*         the heart: multi-source arbitration
-│       ├── rds_ct.*          RDS group 4A clock-time
-│       ├── wwv_marker.*      WWV minute-marker gate
-│       ├── wwv_timecode.*    WWV 100 Hz BCD date/time
-│       ├── station_vote.*    multi-station voting
-│       ├── disciplined_clock.*  slew/rate-steered clock
-│       ├── drift.*           crystal learning
-│       ├── cycle.*           FT8/JS8 slot phase
-│       ├── sntp.*            NTP server
-│       └── app.*             wires it all to the hardware seam
-├── lib/airtime_esp32/     ESP32 adapters: RDS chip, ADC sampler, SoftAP, NVS
-├── test/                  20 suites · 189 cases · a simulated ATS Mini
-├── tools/                 build, release, schedule, survey, sync
-├── firmware/ats-mini/     upstream (git subtree) + AirTime glue
-└── docs/                  PLAN · ARCHITECTURE · STATUS · CLIENT_SETUP · demo/
+│       ├── arbiter.*         which source to believe, and how much
+│       ├── source_table.*    Green / Yellow / Red
+│       ├── rds_ct.*          FM RDS clock time
+│       ├── station_vote.*    FM stations voting
+│       ├── wwv_marker.*      the WWV minute tone
+│       ├── wwv_subcarrier.*  reading the WWV timecode by its timing
+│       ├── wwv_timecode.*    decoding it into a date and time
+│       ├── scheduler.*       FM / WWV / Wi-Fi turn-taking, band choice by hour
+│       ├── fm_survey.*       scanning the dial for stations that send time
+│       ├── drift.*           learning the crystal
+│       ├── cycle.*           FT8 / JS8 slot timing
+│       ├── sntp.*            the NTP server
+│       └── app.*             ties it together
+├── lib/airtime_esp32/     ESP32 adapters: RDS chip, audio sampler, Wi-Fi, flash storage
+├── test/                  the simulated radio and 260 test cases
+├── tools/                 build, release, flash, survey, sync
+├── firmware/ats-mini/     upstream ats-mini (git subtree) + the AirTime glue
+└── docs/                  plan, architecture, status, client setup, the browser demo
 ```
 
----
-
-## 🔒 The upstream contract
-
-Every change to upstream files sits inside `#ifdef AIRTIME`, and **`tools/build_fw.sh stock` must produce a byte-identical image to unmodified upstream.** That number is checked on every commit. When it moves, something leaked out of the guard and the change is wrong until it moves back.
-
-That's what keeps stock ats-mini recoverable from this tree, always.
-
-Versions are `vYYYY.MM.DD.NNN`. The running version is on the **About** screen, in the phone app's header, and in the serial banner.
+Versions are `vYYYY.MM.DD.NNN`, shown on the About screen, in the app header and in the serial log.
 
 ---
 
-## 📚 References
+## References
 
-- Fork base — [esp32-si4732/ats-mini](https://github.com/esp32-si4732/ats-mini) · [docs](https://esp32-si4732.github.io/ats-mini/)
-- [HJBerndt](http://www.hjberndt.de/dvb/pocketSI4735DualCoreDecoder.html) — IO11 tap & Goertzel documentation
-- [Peter Neufeld](https://peterneufeld.wordpress.com/2025/12/05/v4xxl-mini-radio-to-the-max/) — V4 reverse engineering
-- [NIST](https://www.nist.gov/pml/time-and-frequency-division/time-services/) — WWV/WWVH signal format
-- [EiBi](http://www.eibispace.de/) — shortwave schedule
+- [esp32-si4732/ats-mini](https://github.com/esp32-si4732/ats-mini): the radio firmware this is built on · [manual](https://esp32-si4732.github.io/ats-mini/)
+- [NIST WWV/WWVH](https://www.nist.gov/pml/time-and-frequency-division/time-services/): the broadcast format
+- [HJBerndt](http://www.hjberndt.de/dvb/pocketSI4735DualCoreDecoder.html): the audio tap and Goertzel detector on this hardware
+- [EiBi](http://www.eibispace.de/): the embedded shortwave schedule
 
 ---
 
