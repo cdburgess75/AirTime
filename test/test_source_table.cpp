@@ -64,6 +64,9 @@ AT_TEST(source_silent_dwells_turn_red_and_time_recovers) {
   t.noteDwellEnd(r, false);
   AT_CHECK(t.rating(*r) == Rating::Unknown);   // one dwell is not a verdict
   t.noteDwellEnd(r, false);
+  t.noteDwellEnd(r, false);
+  AT_CHECK(t.rating(*r) == Rating::Unknown);   // nor are three: clock time is once a minute
+  t.noteDwellEnd(r, false);
   AT_CHECK(t.rating(*r) == Rating::Red);
   t.noteTime(r, 0, false);
   AT_CHECK(t.rating(*r) == Rating::Yellow);
@@ -94,8 +97,7 @@ AT_TEST(source_table_round_trips) {
   a.noteTime(fm, 0, false);
   a.noteTime(fm, -120 * kMs, true);
   SourceRow* w = a.wwv(15000);
-  a.noteDwellEnd(w, false);
-  a.noteDwellEnd(w, false);
+  for (int i = 0; i < 4; ++i) a.noteDwellEnd(w, false);
 
   uint8_t blob[SourceTable::kBlobMax];
   const std::size_t n = a.encode(blob, sizeof(blob));

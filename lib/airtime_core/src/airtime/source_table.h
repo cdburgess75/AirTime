@@ -37,7 +37,10 @@ struct SourceRow {
 struct SourceTableConfig {
   int64_t agree_us = 400000;    // the voter's tolerance: within this, "agrees"
   int64_t wrong_us = 2000000;   // the station-bias cap: beyond this, wrong
-  uint8_t silent_for_red = 2;   // whole dwells with nothing at all
+  // Whole dwells with nothing at all. Four, not two: clock time comes about
+  // once a minute and a dwell is 75 s, so two misses happen to good stations
+  // (94.1 went Red on the owner's radio, then Green).
+  uint8_t silent_for_red = 4;
 };
 
 class SourceTable {

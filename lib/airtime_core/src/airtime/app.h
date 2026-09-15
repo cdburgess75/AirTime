@@ -78,6 +78,8 @@ struct AppConfig {
   // A Red station is passed over in the rotation, but tried again this often:
   // transmitters get fixed and propagation changes.
   int64_t red_recheck_us = 6LL * 60 * 60 * 1000000;
+  // A station Red only for silence is retried sooner than one proven wrong.
+  int64_t silent_red_recheck_us = 45LL * 60 * 1000000;
   // A hand-set clock is good to seconds: a station further out than this from
   // it is wrong, even though the hand-set clock cannot confirm anything.
   int64_t manual_wrong_us = 30LL * 1000000;
@@ -443,6 +445,9 @@ class AirTimeApp {
   int64_t acquire_began_ = 0;          // when this power-on's acquisition started
   int64_t quick_listen_at_ = 0;        // unconfirmed after acquisition: WWV at this time, 0 = none
   bool fmProven() const;               // any listed station has delivered here, not Red
+  uint32_t ratingSignature() const;    // changes whenever any source changes colour
+  uint32_t rating_sig_ = 0;
+  bool rating_sig_have_ = false;
   WwvTimecodeDecoder timecode_;
   ClientCounter clients_;
 

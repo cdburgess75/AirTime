@@ -101,6 +101,15 @@ struct ArbiterConfig {
   int64_t min_uncertainty_us = 5000;
   double drift_gain = 0.5;
   double drift_max_ppm = 100.0;
+  // A rate measured between two fixes is only as good as their uncertainty
+  // spread over the time between them. RDS fixes (±250 ms) a few minutes apart
+  // "measured" thousands of ppm, and the owner's radio railed its estimate
+  // between +100 and -100 all day. A source's reference fix is therefore held
+  // until that spread is at most this many ppm (WWV ±30 ms: ~17 min; RDS:
+  // ~2.3 h), and only then is the rate learned over it...
+  double drift_max_noise_ppm = 60.0;
+  // ...and abandoned if it grows older than this without qualifying.
+  int64_t drift_baseline_max_us = 24LL * 3600 * 1000000;
   int64_t max_slew_ppm = 500;
 };
 
@@ -166,6 +175,14 @@ class Arbiter {
   int64_t pendingCorrectionUs(int64_t mono_us) const;
   bool isSynced(int64_t mono_us) const;
   double ratePpm() const { return clock_.ratePpm(); }
+  // Forget a source's drift reference. The app calls this when what it feeds
+  // in as that source's time shifts for a reason that is not the crystal: a
+  // station's learned lateness being corrected is a step in its readings, and a
+  // reference held across it reads the step as drift (51 ppm in simulation).
+  void restartDriftReference(Source s) {
+    const int i = static_cast<int>(s);
+    if (i >= 0 && i < 4) track_[i].have = false;
+  }
 
   const DisciplinedClock& clock() const { return clock_; }
   const DriftEstimator& drift() const { return drift_; }
@@ -195,6 +212,7 @@ class Arbiter {
     int64_t mono = 0;
     int64_t offset = 0;
     int64_t injected = 0;
+    int64_t unc = 0;       // the fix's uncertainty: how far a rate over it can be trusted
   };
   SourceTrack track_[4];  // indexed by Source
 

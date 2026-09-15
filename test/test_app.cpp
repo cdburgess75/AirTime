@@ -1354,9 +1354,40 @@ AT_TEST(app_wrong_station_turns_red) {
   AT_CHECK(err < 1000000 && err > -1000000);
 }
 
-// A station that never sends clock time turns Red after two whole dwells and
-// is then passed over, instead of costing a dwell every pass.
+// A station that never sends clock time turns Red after four whole dwells and
+// is then passed over, instead of costing a dwell every pass. (The silent
+// recheck is held at six hours here; its own test is below.)
 AT_TEST(app_silent_station_turns_red_and_is_passed_over) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation mute{8930, 0x1001, false, 0};
+  FakeStation a{10470, 0x6E47, true, 0};
+  sim.rds.stations = {mute, a};
+
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  cfg.silent_red_recheck_us = cfg.red_recheck_us;
+  AirTimeApp app(sim.deps(), cfg);
+  const int32_t fm[] = {8930, 10470};
+  app.setFmStations(fm, 2);
+  app.begin();
+  sim.advance(30 * kMin, &app);
+
+  const SourceRow* rm = app.sources().find(SourceKind::Fm, 8930);
+  AT_CHECK(rm != nullptr);
+  AT_CHECK(app.sources().rating(*rm) == Rating::Red);
+
+  int on_mute = 0;
+  for (int i = 0; i < 60; ++i) {                 // the next half hour
+    sim.advance(30 * kS, &app);
+    if (sim.rds.tunedKhz() == 8930) ++on_mute;
+  }
+  AT_CHECK_EQ(on_mute, 0);
+}
+
+// A station Red only for silence gets another dwell within the hour: missing a
+// few minutes of clock time is not the same as sending a wrong one.
+AT_TEST(app_silent_red_station_is_retried_within_the_hour) {
   Sim sim;
   sim.true_utc_us = startUtcUs();
   FakeStation mute{8930, 0x1001, false, 0};
@@ -1369,18 +1400,16 @@ AT_TEST(app_silent_station_turns_red_and_is_passed_over) {
   const int32_t fm[] = {8930, 10470};
   app.setFmStations(fm, 2);
   app.begin();
-  sim.advance(15 * kMin, &app);
-
+  sim.advance(30 * kMin, &app);
   const SourceRow* rm = app.sources().find(SourceKind::Fm, 8930);
-  AT_CHECK(rm != nullptr);
-  AT_CHECK(app.sources().rating(*rm) == Rating::Red);
+  AT_CHECK(rm != nullptr && app.sources().rating(*rm) == Rating::Red);
 
   int on_mute = 0;
-  for (int i = 0; i < 60; ++i) {                 // the next half hour
+  for (int i = 0; i < 70 * 2; ++i) {             // the next seventy minutes
     sim.advance(30 * kS, &app);
     if (sim.rds.tunedKhz() == 8930) ++on_mute;
   }
-  AT_CHECK_EQ(on_mute, 0);
+  AT_CHECK(on_mute > 0);
 }
 
 // Ratings are remembered, and the next power-on tries Green stations first and
@@ -1834,6 +1863,33 @@ AT_TEST(app_remembers_a_place_and_restores_it_on_return) {
   const SourceRow* back = app.sources().find(SourceKind::Fm, 9230);
   AT_CHECK(back != nullptr && back->pi == 0x986D &&
            app.sources().rating(*back) == Rating::Red);
+}
+
+// Ratings are saved when they change colour, not at the hourly save. On the
+// owner's radio two stations turned Green and a restart a few minutes later
+// brought them back Red.
+AT_TEST(app_rating_changes_are_saved_within_minutes) {
+  Sim sim;
+  sim.true_utc_us = startUtcUs();
+  FakeStation a{10470, 0x6E47, true, 0};
+  FakeStation b{8990, 0xA920, true, 0};
+  sim.rds.stations = {a, b};
+  AppConfig cfg;
+  cfg.auto_survey = false;
+  const int32_t fm[] = {10470, 8990};
+  {
+    AirTimeApp app(sim.deps(), cfg);
+    app.setFmStations(fm, 2);
+    app.begin();
+    sim.advance(10 * kMin, &app);
+    const SourceRow* r = app.sources().find(SourceKind::Fm, 10470);
+    AT_CHECK(r != nullptr && app.sources().rating(*r) == Rating::Green);
+  }
+  AirTimeApp again(sim.deps(), cfg);     // restarted ten minutes in
+  again.setFmStations(fm, 2);
+  again.begin();
+  const SourceRow* r2 = again.sources().find(SourceKind::Fm, 10470);
+  AT_CHECK(r2 != nullptr && again.sources().rating(*r2) == Rating::Green);
 }
 
 // A laptop is never handed time that nothing has confirmed. One station, five

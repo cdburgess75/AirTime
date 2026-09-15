@@ -420,6 +420,17 @@ int64_t AirTimeApp::hfChangeInUs() const {
   return us;
 }
 
+uint32_t AirTimeApp::ratingSignature() const {
+  uint32_t h = 2166136261u;
+  for (std::size_t i = 0; i < sources_.count(); ++i) {
+    const SourceRow& r = sources_.at(i);
+    const uint32_t v = static_cast<uint32_t>(r.freq) * 4u +
+                       static_cast<uint32_t>(sources_.rating(r));
+    h = (h ^ v) * 16777619u;
+  }
+  return h;
+}
+
 // ── Places ─────────────────────────────────────────────────────────────────
 // A radio sold anywhere cannot ship a station list: it learns the stations
 // where it is, and notices when it has been carried somewhere else. A place is
@@ -626,7 +637,13 @@ void AirTimeApp::loop() {
     if (directive_.wwv_listening) pollWwv(now);
   }
 
-  persist(now, /*force=*/false);
+  // A source that changes colour is saved now, not at the hourly save: the
+  // owner restarted minutes after two stations turned Green and lost both.
+  const uint32_t sig = ratingSignature();
+  const bool rating_changed = rating_sig_have_ && sig != rating_sig_;
+  rating_sig_ = sig;
+  rating_sig_have_ = true;
+  persist(now, /*force=*/rating_changed);
 }
 
 void AirTimeApp::pollRds(int64_t now) {
@@ -654,6 +671,9 @@ void AirTimeApp::pollRds(int64_t now) {
         arbiter_.uncertaintyUs(g.mono_us) <= cfg_.station_bias_learn_below_us) {
       bias_.observe(g.a, reference - asserted, g.mono_us);
       learned_dirty_ = true;
+      // The correction RDS readings get just changed; no drift may be measured
+      // across that. See Arbiter::restartDriftReference.
+      arbiter_.restartDriftReference(Source::Rds);
     }
 
     // Rate the station that spoke. Its error is taken after its learned bias,
@@ -706,7 +726,10 @@ void AirTimeApp::pollRds(int64_t now) {
         next = (next + 1) % station_count_;
         const SourceRow* sr = sources_.find(SourceKind::Fm, stations_[next]);
         if (sr == nullptr || sources_.rating(*sr) != Rating::Red) break;
-        if ((now - red_tried_[next]) >= cfg_.red_recheck_us) {
+        // Silent is not wrong: a station that missed a few minutes of clock
+        // time is retried within the hour; one proven wrong waits six.
+        const int64_t recheck = sr->wrong ? cfg_.red_recheck_us : cfg_.silent_red_recheck_us;
+        if ((now - red_tried_[next]) >= recheck) {
           red_tried_[next] = now;
           break;
         }

@@ -261,6 +261,21 @@ class AtRawWwv : public airtime::IWwvSampler {
   int summaries() const { return nsum_; }
   const char *summary(int i) const { return sum_[(sum_next_ + kSums - nsum_ + i) % kSums]; }
 
+  // The records survive a restart: plugging the cable in restarted the radio
+  // on 2026-09-14 and took a whole evening's windows with it. One small NVS
+  // write per window.
+  void loadRecords()
+  {
+    uint8_t blob[3 + kSums * sizeof(sum_[0])];
+    size_t n = 0;
+    if(!atStore.loadBlob("win", blob, sizeof(blob), &n)) return;
+    if(n != sizeof(blob) || blob[0] != 1 || blob[1] > kSums || blob[2] >= kSums) return;
+    memcpy(sum_, blob + 3, kSums * sizeof(sum_[0]));
+    for(int i = 0; i < kSums; i++) sum_[i][sizeof(sum_[0]) - 1] = '\0';
+    nsum_ = blob[1];
+    sum_next_ = blob[2];
+  }
+
  private:
   static constexpr int kSums = 4;
   static bool logging() { return atApp != nullptr && atApp->directive().wwv_listening; }
@@ -424,6 +439,17 @@ class AtRawWwv : public airtime::IWwvSampler {
     sum_next_ = (sum_next_ + 1) % kSums;
     if(nsum_ < kSums) nsum_++;
     Serial.printf("  win[%s]\n", sum_[(sum_next_ + kSums - 1) % kSums]);
+    saveRecords();
+  }
+
+  void saveRecords()
+  {
+    uint8_t blob[3 + kSums * sizeof(sum_[0])];
+    blob[0] = 1;
+    blob[1] = (uint8_t)nsum_;
+    blob[2] = (uint8_t)sum_next_;
+    memcpy(blob + 3, sum_, kSums * sizeof(sum_[0]));
+    atStore.saveBlob("win", blob, sizeof(blob));
   }
 
   char m_[2 * 64 + 1] = {};
@@ -1334,6 +1360,7 @@ void airtimeSetup()
   WiFi.mode(WIFI_MODE_NULL);
 
   atStore.begin();
+  atRawWwv.loadRecords();   // the last WWV windows, from before the restart
   atLoadSettings();
 
   // The EiBi shortwave schedule ships inside this image, because the radio's

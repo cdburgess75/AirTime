@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -241,3 +242,26 @@ AT_TEST(arb_source_bias_is_not_a_drift) {
   // The crystal is perfect; anything large here is manufactured bias.
   AT_CHECK(std::fabs(a.ratePpm()) < 5.0);
 }
+
+// Noisy RDS fixes every two minutes on a perfect crystal. Differencing
+// neighbours "measured" thousands of ppm and railed the estimate to the
+// ±100 ppm clamp: the owner's radio showed +100 and then -100 in one evening.
+// Held reference fixes keep the estimate near the truth (0 ppm) throughout.
+AT_TEST(arb_noisy_frequent_fixes_do_not_rail_the_drift) {
+  Arbiter a;
+  const int64_t kS = 1000000, kMin = 60 * kS;
+  uint32_t lcg = 12345;
+  const auto jitter = [&lcg]() {
+    lcg = lcg * 1664525u + 1013904223u;
+    return static_cast<int64_t>((lcg >> 8) % 400001) - 200000;   // ±200 ms
+  };
+  a.update(fix(Source::Rds, 0, T0, 250000, 2));
+  double worst = 0.0;
+  for (int k = 1; k <= 180; ++k) {   // six hours, a fix every two minutes
+    const int64_t mono = static_cast<int64_t>(k) * 2 * kMin;
+    a.update(fix(Source::Rds, mono, T0 + mono + jitter(), 250000, 2));
+    worst = std::max(worst, std::fabs(a.ratePpm()));
+  }
+  AT_CHECK(worst < 60.0);
+}
+

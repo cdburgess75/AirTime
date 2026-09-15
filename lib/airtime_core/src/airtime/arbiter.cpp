@@ -74,7 +74,7 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
     const int64_t was_off = clock_.isSet() ? fix.utc_us - clock_.utcAt(mono) : 0;
     clock_.set(mono, fix.utc_us);
     source_synced_ = true;
-    track_[si] = SourceTrack{true, mono, 0, clock_.totalInjectedUs()};
+    track_[si] = SourceTrack{true, mono, 0, clock_.totalInjectedUs(), fix.uncertainty_us};
     last_sync_mono_ = mono;
     last_source_unc_ = fix.uncertainty_us;
     r.action = Action::Seeded;
@@ -118,7 +118,7 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
       // A step is a phase discontinuity, not evidence about frequency: the
       // interval that just ended was measured against a clock we have now
       // thrown away. Restart this source's rate measurement from here.
-      track_[si] = SourceTrack{true, mono, 0, clock_.totalInjectedUs()};
+      track_[si] = SourceTrack{true, mono, 0, clock_.totalInjectedUs(), fix.uncertainty_us};
       last_sync_mono_ = mono;
       last_source_unc_ = fix.uncertainty_us;
       operator_confirm_ = false;
@@ -130,16 +130,32 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
     // Rule 4: learn the crystal from the residual frequency error, adding back
     // the slew we deliberately injected so only genuine drift is measured.
     // Measured against THIS source's own previous fix — see SourceTrack.
+    // A reference fix too recent for the two fixes' uncertainty to be small
+    // against the interval is KEPT, so the interval can grow: see
+    // ArbiterConfig::drift_max_noise_ppm. But no rate is measured ACROSS a
+    // large correction: the clock's phase just jumped, and a reference held
+    // from before the jump would read the jump as drift. Every source starts
+    // a fresh reference from here.
+    if (mag >= cfg_.step_threshold_us) {
+      for (SourceTrack& t : track_) t.have = false;
+    }
     const SourceTrack& prev = track_[si];
     const int64_t dmono = mono - prev.mono;
+    bool rebaseline = true;
     if (prev.have && dmono > 0) {
-      const int64_t injected = clock_.totalInjectedUs() - prev.injected;
-      const double residual_ppm =
-          (static_cast<double>(offset - prev.offset) +
-           static_cast<double>(injected)) /
-          static_cast<double>(dmono) * 1e6;
-      const double ppm = drift_.integrate(residual_ppm);
-      clock_.setRatePpm(mono, ppm);
+      const double noise_ppm = static_cast<double>(prev.unc + fix.uncertainty_us) /
+                               static_cast<double>(dmono) * 1e6;
+      if (noise_ppm <= cfg_.drift_max_noise_ppm) {
+        const int64_t injected = clock_.totalInjectedUs() - prev.injected;
+        const double residual_ppm =
+            (static_cast<double>(offset - prev.offset) +
+             static_cast<double>(injected)) /
+            static_cast<double>(dmono) * 1e6;
+        const double ppm = drift_.integrate(residual_ppm);
+        clock_.setRatePpm(mono, ppm);
+      } else if (dmono < cfg_.drift_baseline_max_us) {
+        rebaseline = false;
+      }
     }
 
     // Rule 5, made load-bearing: blend rather than obey. `offset` remains the
@@ -165,7 +181,9 @@ ArbiterUpdate Arbiter::update(const TimeFix& fix) {
 
     clock_.steer(mono, applied);        // slew, never step (rule 1)
 
-    track_[si] = SourceTrack{true, mono, offset, clock_.totalInjectedUs()};
+    if (rebaseline) {
+      track_[si] = SourceTrack{true, mono, offset, clock_.totalInjectedUs(), fix.uncertainty_us};
+    }
     last_sync_mono_ = mono;
     last_source_unc_ = posterior;
     operator_confirm_ = false;          // confirmation is single-use
